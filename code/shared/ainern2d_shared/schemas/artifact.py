@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class ArtifactResponse(BaseModel):
@@ -12,7 +12,11 @@ class ArtifactResponse(BaseModel):
     run_id: str = Field(..., description="产生它的 Run ID")
     shot_id: Optional[str] = Field(None, description="如果是单镜头的产物，此项有值")
     type: str = Field(..., description="video, audio, image, plan, text")
-    path: str = Field(..., description="对象存储的 URI, 比如 s3://bucket/key.mp4")
+    uri: str = Field(
+        ...,
+        description="对象存储的 URI, 比如 s3://bucket/key.mp4",
+        validation_alias=AliasChoices("uri", "path"),
+    )
     
     # Metadata for file checks
     size_bytes: Optional[int] = None

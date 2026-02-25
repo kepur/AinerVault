@@ -20,11 +20,17 @@
 ### Gate-4 E2E Blocker 套件（Blocker）
 - `e2e-handoff-test-matrix` 中 Blocker 用例必须 100% 通过。
 
+### Gate-5 Schema 与 Contracts 一致性（Blocker）
+- 校验 shared DTO（`code/shared/ainern2d_shared/schemas/*`）与 `ainer_contracts.md` 的 MUST 字段一致。
+- 重点对象：`EventEnvelope`, `Task*`, `Artifact*`, `Timeline*`。
+- 若出现字段缺失/命名漂移（如 `uri` 与 `path` 语义冲突）则阻断。
+
 ## 3. 本地执行顺序
 1) 模型/文档静态检查
 2) Alembic upgrade 验证
 3) 术语扫描
 4) E2E Blocker 回放
+5) Schema/Contracts 一致性校验
 
 ## 4. 失败处理
 - Blocker 失败：禁止合并。

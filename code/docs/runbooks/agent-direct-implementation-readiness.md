@@ -9,8 +9,8 @@
   - `code/shared/ainern2d_shared/ainer_db_models/` 已定义 `57` 个共享模型，统一继承 `StandardColumnsMixin`。
   - `code/apps/alembic/versions/6f66885e0588_init_baseline.py` 可直接落库。
 - **服务实现层：未就绪（必须补骨架）**  
-  - 当前 `code/` 下 Python 文件共 `101` 个，其中空文件 `87` 个。
-  - 关键共享基础代码为空：`schemas/queue/utils/telemetry/config/storage`。
+  - 当前 `code/` 下 Python 文件共 `101` 个，其中空文件 `83` 个。
+  - 关键共享基础代码为空：`queue/utils/telemetry/config/storage`（核心 `schemas` 已补齐）。
   - 关键服务入口为空：`studio-api`、`worker-hub`、`composer`、`worker-runtime` 主干文件。
 - **结论**  
   - 现在达到“模型可落库 + 文档可指导”状态。  
