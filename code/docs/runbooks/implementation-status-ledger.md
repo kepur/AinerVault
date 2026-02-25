@@ -22,6 +22,8 @@
 | Stage 权威枚举与迁移 | DONE | `code/docs/architecture/stage-enum-authority.md` | 已补齐 |
 | 14~20 E2E 验收矩阵 | DONE | `code/docs/runbooks/e2e-handoff-test-matrix.md` | 已扩展到 E2E-020 |
 | CI 门禁执行规范 | DONE | `code/docs/runbooks/ci-gate-execution-spec.md` | 已补齐 |
+| shared 基础骨架（schemas/queue/utils/telemetry/config/storage） | IN_PROGRESS | `code/docs/runbooks/agent-direct-implementation-readiness.md` | 目录已建，关键文件待补齐 |
+| 服务入口骨架（studio-api/worker-hub/composer/runtime） | IN_PROGRESS | `code/docs/runbooks/agent-direct-implementation-readiness.md` | 多数主干文件仍为空 |
 
 ## 4. Agent 执行门禁
 - MUST：实现前读取本 Ledger 与 `ainer_contracts.md`。

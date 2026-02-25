@@ -2,7 +2,7 @@
 
 ## 1. 目标
 - 将决策A落地为“共享字段标准 -> shared模型 -> 服务私有表映射”的可执行基线。
-- 以 `code/shared/ainern2d_shared/ainer_db_models/base.py` 为现状来源。
+- 以 `code/shared/ainern2d_shared/ainer_db_models/base_model.py` 与各域模型文件为现状来源。
 
 ## 2. 共享字段标准（必须统一命名）
 - `tenant_id`
@@ -20,17 +20,19 @@
 
 ## 3. 核心表现状与目标映射（shared）
 
-| 表 | 模型 | 现状关键字段 | 缺失字段（按标准） | P级别 |
+当前 `57` 个共享模型均继承 `StandardColumnsMixin`，核心共享标准列已统一落地。
+
+| 表 | 模型 | 标准字段继承状态 | 当前差异/说明 | P级别 |
 |---|---|---|---|---|
-| `novels` | `Novel` | `id,title,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P0 |
-| `chapters` | `Chapter` | `id,novel_id,language_code,chapter_no,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P0 |
-| `execution_requests` | `ExecutionRequest` | `id,novel_id,chapter_id,status,created_at,updated_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,deleted_at,created_by,updated_by` | P0 |
-| `render_runs` | `RenderRun` | `id,chapter_id,status,stage,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P0 |
-| `jobs` | `Job` | `id,run_id,status,dedupe_key,created_at,updated_at,error_message` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,deleted_at,created_by,updated_by`（`idempotency_key` 可复用/兼容 `dedupe_key`） | P0 |
-| `artifacts` | `Artifact` | `id,run_id,shot_id,type,path,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P0 |
-| `entities` | `Entity` | `id,novel_id,type,label,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P1 |
-| `rag_documents` | `RagDocument` | `id,scope,source_type,novel_id,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P1 |
-| `rag_embeddings` | `RagEmbedding` | `id,doc_id,embedding_model_profile_id,embedding_dim,created_at` | `tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code,version,updated_at,deleted_at,created_by,updated_by` | P1 |
+| `novels` | `Novel` | 已通过 | 无 | DONE |
+| `chapters` | `Chapter` | 已通过 | 无 | DONE |
+| `execution_requests` | `ExecutionRequest` | 已通过 | 无 | DONE |
+| `render_runs` | `RenderRun` | 已通过 | `started_at/finished_at` 仍为字符串时间（见 4.4） | P1 |
+| `jobs` | `Job` | 已通过 | `locked_at/next_retry_at` 仍为字符串时间（见 4.4） | P1 |
+| `artifacts` | `Artifact` | 已通过 | 无 | DONE |
+| `entities` | `Entity` | 已通过 | 无 | DONE |
+| `rag_documents` | `RagDocument` | 已通过 | 无 | DONE |
+| `rag_embeddings` | `RagEmbedding` | 已通过 | 无 | DONE |
 
 ## 4. 标准约束与索引策略
 
@@ -43,7 +45,8 @@
 
 ### 4.1 统一唯一性
 - 业务去重键：`(tenant_id, project_id, idempotency_key)`。
-- 任务去重兼容：`jobs` 保留 `(job_type, dedupe_key)`，新增 `(tenant_id, project_id, idempotency_key)`。
+- 任务去重约束：`jobs` 以 `(tenant_id, project_id, job_type, idempotency_key)` 为权威约束。
+- 历史 `dedupe_key` 兼容仅允许在服务适配层实现，不回写共享模型字段。
 
 ### 4.2 统一查询索引
 - 生命周期索引：`(tenant_id, project_id, created_at)`。
@@ -52,6 +55,11 @@
 
 ### 4.3 软删除规范
 - 增加 `deleted_at`；所有业务查询默认 `deleted_at IS NULL`。
+
+### 4.4 当前模型偏差（实现前必须知晓）
+- 运行态时间字段仍有字符串列：`render_runs.started_at/finished_at`、`jobs.locked_at/next_retry_at`、`workflow_events.occurred_at`、`job_attempts.started_at/finished_at`。
+- 以上字段在新代码实现中必须统一输出 `ISO-8601 UTC`，并在后续迁移中收敛到 `TIMESTAMP WITH TIME ZONE`。
+- 如果历史系统仍依赖 `dedupe_key`，必须在服务适配层做兼容映射，不允许回退共享模型命名标准。
 
 ## 5. 服务私有表映射规则
 - Orchestrator 私有表必须继承：`tenant_id,project_id,trace_id,correlation_id,idempotency_key,error_code`。

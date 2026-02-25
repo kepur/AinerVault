@@ -15,6 +15,9 @@
 8) `code/docs/runbooks/agent-implementation-playbook.md`
 9) `code/docs/runbooks/ci-gate-execution-spec.md`
 10) `code/docs/runbooks/e2e-handoff-test-matrix.md`
+11) `code/docs/architecture/agent-data-model-guideline.md` (Agent数据模型直接落地必读基线)
+12) `code/docs/runbooks/agent-direct-implementation-readiness.md`（直落地可行性与补齐清单）
+13) `code/docs/architecture/agent-coding-framework-guideline.md` (Agent编码框架与代码生成模板指南)
 
 ## 2. 核心约束（必须遵守）
 - 主运行对象：`run/job/stage/event/artifact`。

@@ -8,6 +8,7 @@
 - 队列与重试：`code/docs/architecture/queue-topics-and-retry-policy.md`
 - Studio映射：`code/docs/architecture/studio-web-api-mapping.md`
 - 迁移拆解：`code/docs/runbooks/alembic-migration-plan-p0-p2.md`
+- 直落地就绪规范：`code/docs/runbooks/agent-direct-implementation-readiness.md`
 - 本清单：`code/docs/runbooks/round2-implementation-checklist.md`
 - 实施状态账本：`code/docs/runbooks/implementation-status-ledger.md`
 - E2E交接验收：`code/docs/runbooks/e2e-handoff-test-matrix.md`
@@ -22,6 +23,8 @@
 - [x] 完成 shared 核心表标准字段新增（novels/chapters/execution_requests/render_runs/jobs/artifacts）
 - [x] 完成索引新增与 `jobs` 幂等兼容
 - [ ] 完成回填脚本与回填报告（新项目可选）
+- [ ] 补齐 shared 基础骨架空文件（schemas/queue/utils/telemetry/config/storage）
+- [ ] 补齐工程基础文件（`code/apps/pyproject.toml`、`code/shared/pyproject.toml`、`code/scripts/*.sh`）
 - [ ] 完成网关写入路径：所有新请求带 `tenant_id/project_id/trace_id/idempotency_key`
 - [ ] 完成编排与 worker 回写路径：失败必带 `error_code`
 - [x] 完成 Alembic 单一 init baseline（含回滚/重升验证）
@@ -65,6 +68,12 @@
 - [x] 迁移闭环：已通过（`upgrade -> downgrade -> upgrade`）
 - [x] 术语闭环：已通过（SKILL_01~20 均有术语对齐声明）
 - [ ] 服务实现闭环：待业务服务代码按契约接线后复验
+
+## 4.2 直落地可行性结论（2026-02-26）
+- [x] “文档 + 模型”可支撑数据库与事件语义设计。
+- [ ] 尚未达到“其他 AI agent 可直接端到端编码”的完成态。
+- [ ] 阻塞项：`shared` 包关键基础模块与 `apps` 关键入口存在大量空文件。
+- [ ] 执行基线：先按 `agent-direct-implementation-readiness.md` 补齐 P0 骨架，再进入服务接线。
 
 ## 5. 风险与管控
 - 风险：历史数据缺失 `tenant_id/project_id`。
