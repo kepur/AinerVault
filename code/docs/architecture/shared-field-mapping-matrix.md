@@ -34,6 +34,13 @@
 
 ## 4. 标准约束与索引策略
 
+### 4.0 时间与类型权威（新增）
+- `created_at/updated_at/deleted_at/occurred_at`：统一使用 `TIMESTAMP WITH TIME ZONE`。
+- 事件与运行时间字段禁止使用业务自定义字符串时间。
+- API 层时间序列化统一为 `ISO-8601 UTC`（示例：`2026-02-26T12:00:00Z`）。
+- 重试与调度时间（如 `next_retry_at`）必须可转换为数据库 timestamp 并可索引。
+- 若历史字段为字符串，视为过渡字段，后续统一迁移到 timestamp 类型。
+
 ### 4.1 统一唯一性
 - 业务去重键：`(tenant_id, project_id, idempotency_key)`。
 - 任务去重兼容：`jobs` 保留 `(job_type, dedupe_key)`，新增 `(tenant_id, project_id, idempotency_key)`。

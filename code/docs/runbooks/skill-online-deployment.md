@@ -3,6 +3,14 @@
 ## 1. 目标
 - 明确每个 Skill 的执行模块、运行节点（CPU/GPU）、依赖中间件、上线检查与回滚动作。
 
+## 1.1 实施前强制阅读（防跑偏）
+1. `code/docs/runbooks/implementation-status-ledger.md`
+2. `code/docs/architecture/stage-enum-authority.md`
+3. `code/docs/architecture/service-api-contracts.md`
+4. `code/docs/architecture/queue-topics-and-retry-policy.md`
+5. `code/docs/runbooks/ci-gate-execution-spec.md`
+6. `code/docs/runbooks/agent-implementation-playbook.md`
+
 ## 2. 环境模式
 
 ### 2.1 DEV-MOCK
@@ -54,3 +62,8 @@
 - Prompt 相关链路必须记录：`kb_version_id`、`recipe_id`。
 - 增强链路必须记录：`persona_version`、`creative_policy_version`、`compute_budget_policy_version`、`compiler_template_version`、`critic_suite_version`。
 - 失败路径必须记录：`error_code`、`retryable`。
+
+## 6. 禁止项（上线前校验）
+- 禁止自定义与 `stage-enum-authority.md` 冲突的 stage。
+- 禁止以 `worker.*.completed` 代替 `job.succeeded/job.failed` 主状态判定。
+- 禁止绕过 orchestrator 直接改写 run 终态。

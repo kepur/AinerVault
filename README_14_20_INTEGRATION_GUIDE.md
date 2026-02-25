@@ -117,3 +117,18 @@
 - 可移植执行（20）
 
 从“强生成流水线”升级为“工业级 AI 导演工厂”。
+
+---
+
+## 八、落地不跑偏（强制）
+实现前必须按以下文档执行：
+- `code/docs/runbooks/implementation-status-ledger.md`
+- `code/docs/architecture/stage-enum-authority.md`
+- `code/docs/architecture/service-api-contracts.md`
+- `code/docs/architecture/queue-topics-and-retry-policy.md`
+- `code/docs/runbooks/ci-gate-execution-spec.md`
+
+禁止项：
+- 禁止自定义与 stage 权威冲突的新 stage。
+- 禁止用 `worker.*.completed` 替代 `job.succeeded/job.failed`。
+- 禁止绕过 Orchestrator 直接写 run 终态。

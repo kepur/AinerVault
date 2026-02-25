@@ -20,6 +20,14 @@
 | E2E-010 | 重复消费模拟 | 重放同 event | job.succeeded（幂等一次） | 状态不回退/不重复写 | 去重生效 | High |
 | E2E-011 | 告警系统在线 | 队列堆积注入 | alert.triggered | observer 告警记录 | 告警在阈值内触发 | Medium |
 | E2E-012 | RAG recipe 生效 | prompt planner 调用 | plan.prompt.generated | prompt 记录 kb_version/recipe_id | 检索注入内容符合过滤条件 | High |
+| E2E-013 | persona pack 已发布 | 提交带 persona 的任务 | persona.resolved -> run.stage.changed(plan) | run 绑定 persona_pack_version_id | 输出风格一致且可追溯 | High |
+| E2E-014 | creative policy 激活 | 提交策略约束任务 | policy.stack.built -> route.decision.made | run 绑定 policy_stack_id | 违规策略被拒绝并有 error_code | Blocker |
+| E2E-015 | critic suite 可用 | 渲染完成后触发评审 | critic.evaluation.completed | critic_evaluations 入库 | gate_decision 生效 | High |
+| E2E-016 | recovery policy 生效 | 注入执行失败 | recovery.degradation.applied -> job.retry.scheduled | recovery_executions 入库 | 降级链符合策略矩阵 | Blocker |
+| E2E-017 | A/B 实验在线 | 分流同类任务 | experiment.run.completed | experiment_observations 入库 | arm 分流比例符合配置 | High |
+| E2E-018 | compute budget 可用 | 高成本分镜任务 | shot.compute_budget.generated | shot_compute_budgets 入库 | 超预算任务触发降级 | High |
+| E2E-019 | DSL compiler 可用 | 下发视频任务 | shot.dsl.compiled -> job.created | shot_dsl_compilations 入库 | backend 编译结果可执行 | Blocker |
+| E2E-020 | RAG 反馈闭环在线 | 提交差评反馈并审核通过 | feedback.event.created -> proposal.approved -> kb.rollout.promoted | kb_version/rollout_records 更新 | 新版本对后续 run 生效 | Blocker |
 
 ## 3. 验收门禁
 - Blocker 用例全部通过才可上线。

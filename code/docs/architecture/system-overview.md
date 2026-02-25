@@ -25,3 +25,13 @@
 - 错误码：`ainer_error_code.md`
 - 模块边界：`module-boundaries.md`
 - 事件契约映射：`event-contracts.md`
+
+## 实施入口（给 AI Agent）
+- 状态账本：`../runbooks/implementation-status-ledger.md`
+- Stage 权威：`stage-enum-authority.md`
+- 服务 API 契约：`service-api-contracts.md`
+- 队列与重试：`queue-topics-and-retry-policy.md`
+- CI 门禁：`../runbooks/ci-gate-execution-spec.md`
+- 一页纸执行顺序：`../runbooks/agent-implementation-playbook.md`
+
+实施规则：先读状态账本，再按一页纸顺序执行；任何与上述权威文档冲突的实现均视为无效实现。
