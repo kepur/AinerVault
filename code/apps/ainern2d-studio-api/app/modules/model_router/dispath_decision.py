@@ -50,26 +50,26 @@ class DispatchDecisionAuditor:
 
             cost_ceiling = spec.get("cost_ceiling")
             if cost_ceiling is not None and decision.cost_estimate > float(cost_ceiling):
-                gate = GateDecision.reject
+                gate = GateDecision.fail
                 feedback["violations"].append(
                     f"cost_ceiling_exceeded: {decision.cost_estimate:.4f} > {cost_ceiling}"
                 )
 
             banned: list = spec.get("banned_providers", [])
             if decision.worker_type in banned or decision.model_profile_id in banned:
-                gate = GateDecision.reject
+                gate = GateDecision.fail
                 feedback["violations"].append(
                     f"banned_provider: {decision.worker_type}"
                 )
 
             required: list = spec.get("required_worker_types", [])
             if required and decision.worker_type not in required:
-                gate = GateDecision.reject
+                gate = GateDecision.fail
                 feedback["violations"].append(
                     f"worker_type_not_allowed: {decision.worker_type} not in {required}"
                 )
 
-            if gate == GateDecision.reject:
+            if gate == GateDecision.fail:
                 feedback["detail"] = f"rejected_by_policy_stack: {stack.name}"
                 break
 

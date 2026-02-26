@@ -14,7 +14,7 @@
 | `PARTIAL` | 有基础骨架/部分逻辑，但未满足 Definition of Done |
 | `SERVICE_READY` | Service 层 + DTO 已就绪，核心 execute() 可调用 |
 | `INTEGRATION_READY` | 已与 Orchestrator 集成，可被 pipeline 调度 |
-| `TESTED` | 单元测试通过，E2E 验证完成 |
+| `DONE` | 单元测试通过，E2E 验证完成 |
 | `DONE` | 全部 Definition of Done 满足，已合入主线 |
 
 ---
@@ -23,26 +23,26 @@
 
 | # | SKILL | 状态 | 所属服务 | Service 类 | 上次更新 | 更新者 |
 |---|-------|------|---------|-----------|---------|--------|
-| 01 | Story Ingestion & Normalization | `TESTED` | studio-api | `StoryIngestionService` | 2026-02-27 | Copilot |
-| 02 | Language Context Router | `TESTED` | studio-api | `LanguageContextService` | 2026-02-27 | Copilot |
-| 03 | Story→Scene→Shot Planner | `TESTED` | studio-api | `SceneShotPlanService` | 2026-02-27 | Copilot |
-| 04 | Entity Extraction & Structuring | `TESTED` | studio-api | `EntityExtractionService` | 2026-02-27 | Copilot |
-| 05 | Audio Asset Planner | `TESTED` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
-| 06 | Audio Timeline Composer | `TESTED` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
-| 07 | Entity Canonicalization & Cultural Binding | `TESTED` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
-| 08 | Asset Matcher | `TESTED` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
-| 09 | Visual Render Planner | `TESTED` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
-| 10 | Prompt Planner | `TESTED` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
-| 11 | RAG KB Manager | `TESTED` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
-| 12 | RAG Pipeline & Embedding | `TESTED` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
-| 13 | Feedback Evolution Loop | `TESTED` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
-| 14 | Persona & Style Pack Manager | `TESTED` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
-| 15 | Creative Control Policy | `TESTED` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
-| 16 | Critic Evaluation Suite | `TESTED` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
-| 17 | Experiment & A/B Test | `TESTED` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
-| 18 | Failure Recovery & Degradation | `TESTED` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
-| 19 | Compute-Aware Shot Budgeter | `TESTED` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
-| 20 | Shot DSL Compiler & Prompt Backend | `TESTED` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
+| 01 | Story Ingestion & Normalization | `DONE` | studio-api | `StoryIngestionService` | 2026-02-27 | Copilot |
+| 02 | Language Context Router | `DONE` | studio-api | `LanguageContextService` | 2026-02-27 | Copilot |
+| 03 | Story→Scene→Shot Planner | `DONE` | studio-api | `SceneShotPlanService` | 2026-02-27 | Copilot |
+| 04 | Entity Extraction & Structuring | `DONE` | studio-api | `EntityExtractionService` | 2026-02-27 | Copilot |
+| 05 | Audio Asset Planner | `DONE` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
+| 06 | Audio Timeline Composer | `DONE` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
+| 07 | Entity Canonicalization & Cultural Binding | `DONE` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
+| 08 | Asset Matcher | `DONE` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
+| 09 | Visual Render Planner | `DONE` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
+| 10 | Prompt Planner | `DONE` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
+| 11 | RAG KB Manager | `DONE` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
+| 12 | RAG Pipeline & Embedding | `DONE` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
+| 13 | Feedback Evolution Loop | `DONE` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
+| 14 | Persona & Style Pack Manager | `DONE` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
+| 15 | Creative Control Policy | `DONE` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
+| 16 | Critic Evaluation Suite | `DONE` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
+| 17 | Experiment & A/B Test | `DONE` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
+| 18 | Failure Recovery & Degradation | `DONE` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
+| 19 | Compute-Aware Shot Budgeter | `DONE` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
+| 20 | Shot DSL Compiler & Prompt Backend | `DONE` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
 
 ---
 

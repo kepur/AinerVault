@@ -138,3 +138,12 @@ class ExperimentObservation(Base, StandardColumnsMixin):
 	arm_id: Mapped[str] = mapped_column(ForeignKey("experiment_arms.id", ondelete="CASCADE"), nullable=False)
 	run_id: Mapped[str | None] = mapped_column(ForeignKey("render_runs.id", ondelete="SET NULL"))
 	metric_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class GateEvalResult(Base, StandardColumnsMixin):
+	"""Records the outcome of a dispatch-decision audit against policy stacks."""
+	__tablename__ = "gate_eval_results"
+	__table_args__ = (Index("ix_gate_eval_results_decision", "gate_decision"),)
+
+	gate_decision: Mapped[GateDecision] = mapped_column(nullable=False)
+	feedback_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
