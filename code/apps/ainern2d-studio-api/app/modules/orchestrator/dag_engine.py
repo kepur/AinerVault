@@ -22,32 +22,58 @@ logger = get_logger("orchestrator.dag_engine")
 
 # Maps each JobType to its pipeline stage.
 _JOB_STAGE: Dict[JobType, RenderStage] = {
-    JobType.extract_entities:       RenderStage.entity,
-    JobType.canonicalize_entities:  RenderStage.entity,
-    JobType.match_assets:           RenderStage.knowledge,
-    JobType.plan_storyboard:        RenderStage.plan,
-    JobType.plan_prompt:            RenderStage.plan,
-    JobType.compile_dsl:            RenderStage.route,
-    JobType.synth_audio:            RenderStage.audio,
-    JobType.render_video:           RenderStage.video,
-    JobType.render_lipsync:         RenderStage.lipsync,
-    JobType.evaluate_quality:       RenderStage.observe,
-    JobType.compose_final:          RenderStage.compose,
+    # Story entry pipeline
+    JobType.ingest_story:             RenderStage.route,
+    JobType.route_language:           RenderStage.route,
+    JobType.plan_scene_shots:         RenderStage.plan,
+    JobType.extract_entities:         RenderStage.entity,
+    # Audio pipeline
+    JobType.plan_audio_assets:        RenderStage.audio,
+    JobType.assemble_audio_timeline:  RenderStage.audio,
+    # Canonicalization + asset matching
+    JobType.canonicalize_entities:    RenderStage.entity,
+    JobType.match_assets:             RenderStage.knowledge,
+    # Visual + prompt
+    JobType.plan_visual_render:       RenderStage.plan,
+    JobType.plan_storyboard:          RenderStage.plan,
+    JobType.plan_prompt:              RenderStage.plan,
+    JobType.compile_dsl:              RenderStage.route,
+    # Execution workers
+    JobType.synth_audio:              RenderStage.audio,
+    JobType.render_video:             RenderStage.video,
+    JobType.render_lipsync:           RenderStage.lipsync,
+    # Quality + composition
+    JobType.evaluate_quality:         RenderStage.observe,
+    JobType.compose_final:            RenderStage.compose,
 }
 
-# Default linear dependency chain (each step depends on the previous one).
+# Full pipeline sequence (each inner list = parallel batch; outer list = ordered stages).
 _DEFAULT_SEQUENCE: List[List[JobType]] = [
-    [JobType.extract_entities],
-    [JobType.canonicalize_entities],
+    # Stage 1: story ingestion
+    [JobType.ingest_story],
+    # Stage 2: language routing
+    [JobType.route_language],
+    # Stage 3: scene/shot planning + entity extraction (parallel)
+    [JobType.plan_scene_shots, JobType.extract_entities],
+    # Stage 4: audio asset planning
+    [JobType.plan_audio_assets],
+    # Stage 5: canonicalization + audio synthesis (parallel)
+    [JobType.canonicalize_entities, JobType.synth_audio],
+    # Stage 6: audio timeline assembly
+    [JobType.assemble_audio_timeline],
+    # Stage 7: asset matching
     [JobType.match_assets],
-    [JobType.plan_storyboard],
+    # Stage 8: visual render planning
+    [JobType.plan_visual_render],
+    # Stage 9: prompt planning
     [JobType.plan_prompt],
+    # Stage 10: DSL compilation
     [JobType.compile_dsl],
-    [JobType.synth_audio],
-    [JobType.render_video],
-    [JobType.render_lipsync],
-    [JobType.compose_final],
+    # Stage 11: video render + lipsync
+    [JobType.render_video, JobType.render_lipsync],
+    # Stage 12: quality evaluation + compose (parallel start; compose depends on both workers)
     [JobType.evaluate_quality],
+    [JobType.compose_final],
 ]
 
 
@@ -191,8 +217,17 @@ class DagEngine:
 
     @staticmethod
     def _default_steps() -> List[Dict[str, Any]]:
+        """Build steps list with explicit depends_on for each parallel batch."""
         steps: List[Dict[str, Any]] = []
-        for layer in _DEFAULT_SEQUENCE:
-            for jt in layer:
-                steps.append({"job_type": jt.value, "payload": {}})
+        prev_layer: List[str] = []
+
+        for batch in _DEFAULT_SEQUENCE:
+            batch_names = [jt.value for jt in batch]
+            for jt in batch:
+                step: Dict[str, Any] = {"job_type": jt.value, "payload": {}}
+                if prev_layer:
+                    step["depends_on"] = list(prev_layer)
+                steps.append(step)
+            prev_layer = batch_names
+
         return steps

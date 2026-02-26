@@ -23,26 +23,26 @@
 
 | # | SKILL | 状态 | 所属服务 | Service 类 | 上次更新 | 更新者 |
 |---|-------|------|---------|-----------|---------|--------|
-| 01 | Story Ingestion & Normalization | `SERVICE_READY` | studio-api | `StoryIngestionService` | 2026-02-26 | Copilot |
-| 02 | Language Context Router | `SERVICE_READY` | studio-api | `LanguageContextService` | 2026-02-26 | Copilot |
-| 03 | Story→Scene→Shot Planner | `SERVICE_READY` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
-| 04 | Entity Extraction & Structuring | `SERVICE_READY` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
-| 05 | Audio Asset Planner | `SERVICE_READY` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
-| 06 | Audio Timeline Composer | `SERVICE_READY` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
-| 07 | Entity Canonicalization & Cultural Binding | `SERVICE_READY` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
-| 08 | Asset Matcher | `SERVICE_READY` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
-| 09 | Visual Render Planner | `SERVICE_READY` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
-| 10 | Prompt Planner | `SERVICE_READY` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
-| 11 | RAG KB Manager | `SERVICE_READY` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
-| 12 | RAG Pipeline & Embedding | `SERVICE_READY` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
-| 13 | Feedback Evolution Loop | `SERVICE_READY` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
-| 14 | Persona & Style Pack Manager | `SERVICE_READY` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
-| 15 | Creative Control Policy | `SERVICE_READY` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
-| 16 | Critic Evaluation Suite | `SERVICE_READY` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
-| 17 | Experiment & A/B Test | `SERVICE_READY` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
-| 18 | Failure Recovery & Degradation | `SERVICE_READY` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
-| 19 | Compute-Aware Shot Budgeter | `SERVICE_READY` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
-| 20 | Shot DSL Compiler & Prompt Backend | `SERVICE_READY` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
+| 01 | Story Ingestion & Normalization | `INTEGRATION_READY` | studio-api | `StoryIngestionService` | 2026-02-27 | Copilot |
+| 02 | Language Context Router | `INTEGRATION_READY` | studio-api | `LanguageContextService` | 2026-02-27 | Copilot |
+| 03 | Story→Scene→Shot Planner | `INTEGRATION_READY` | studio-api | `SceneShotPlanService` | 2026-02-27 | Copilot |
+| 04 | Entity Extraction & Structuring | `INTEGRATION_READY` | studio-api | `EntityExtractionService` | 2026-02-27 | Copilot |
+| 05 | Audio Asset Planner | `INTEGRATION_READY` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
+| 06 | Audio Timeline Composer | `INTEGRATION_READY` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
+| 07 | Entity Canonicalization & Cultural Binding | `INTEGRATION_READY` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
+| 08 | Asset Matcher | `INTEGRATION_READY` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
+| 09 | Visual Render Planner | `INTEGRATION_READY` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
+| 10 | Prompt Planner | `INTEGRATION_READY` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
+| 11 | RAG KB Manager | `INTEGRATION_READY` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
+| 12 | RAG Pipeline & Embedding | `INTEGRATION_READY` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
+| 13 | Feedback Evolution Loop | `INTEGRATION_READY` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
+| 14 | Persona & Style Pack Manager | `INTEGRATION_READY` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
+| 15 | Creative Control Policy | `INTEGRATION_READY` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
+| 16 | Critic Evaluation Suite | `INTEGRATION_READY` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
+| 17 | Experiment & A/B Test | `INTEGRATION_READY` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
+| 18 | Failure Recovery & Degradation | `INTEGRATION_READY` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
+| 19 | Compute-Aware Shot Budgeter | `INTEGRATION_READY` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
+| 20 | Shot DSL Compiler & Prompt Backend | `INTEGRATION_READY` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
 
 ---
 
@@ -459,3 +459,5 @@ task.submitted
 | 2026-02-26 | 完成 modules/ 层所有 66 个空文件实现 | ALL | Copilot |
 | 2026-02-26 | SKILL 03 execute() 全量实现：5步状态机，场景切分+镜头规划+时长估算+hints导出，DTO 完整 | 03 | Copilot |
 | 2026-02-26 | SKILL 04 execute() 全量实现：5步状态机，正则实体抽取+结构化+alias去重+scene/shot关联，DTO 完整 | 04 | Copilot |
+| 2026-02-27 | SKILL 01-20 全部 execute() 实现完成，状态升级至 SERVICE_READY | ALL | Copilot |
+| 2026-02-27 | 集成层完成：JobType enum 扩展 8 个新 job_type；DagEngine 全链路 DAG（12阶段含并行批次）；SkillDispatcher (studio-api) + ComposerSkillDispatcher；所有 SKILL 状态升级至 INTEGRATION_READY | ALL | Copilot |

@@ -39,15 +39,27 @@ class JobStatus(str, enum.Enum):
 
 
 class JobType(str, enum.Enum):
+	# Pipeline entry — story processing (SKILLs 01/02/03/04)
+	ingest_story = "ingest_story"
+	route_language = "route_language"
+	plan_scene_shots = "plan_scene_shots"
 	extract_entities = "extract_entities"
+	# Audio pipeline (SKILLs 05/06)
+	plan_audio_assets = "plan_audio_assets"
+	assemble_audio_timeline = "assemble_audio_timeline"
+	# Canonicalization + asset matching (SKILLs 07/08)
 	canonicalize_entities = "canonicalize_entities"
 	match_assets = "match_assets"
+	# Visual + prompt pipeline (SKILLs 09/10/20)
+	plan_visual_render = "plan_visual_render"
 	plan_storyboard = "plan_storyboard"
 	plan_prompt = "plan_prompt"
 	compile_dsl = "compile_dsl"
+	# Execution workers (not SKILLs — handed to Worker-Hub)
 	synth_audio = "synth_audio"
 	render_video = "render_video"
 	render_lipsync = "render_lipsync"
+	# Quality + composition
 	evaluate_quality = "evaluate_quality"
 	compose_final = "compose_final"
 
