@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,8 +48,8 @@ class RenderRun(Base, StandardColumnsMixin):
 	recipe_id: Mapped[str | None] = mapped_column(String(64))
 	embedding_model_profile_id: Mapped[str | None] = mapped_column(ForeignKey("model_profiles.id", ondelete="SET NULL"))
 	terminal_artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id", ondelete="SET NULL"))
-	started_at: Mapped[str | None] = mapped_column(String(64))
-	finished_at: Mapped[str | None] = mapped_column(String(64))
+	started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+	finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 	config_json: Mapped[dict | None] = mapped_column(JSONB)
 
 
@@ -73,8 +75,8 @@ class Job(Base, StandardColumnsMixin):
 	attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 	max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
 	locked_by: Mapped[str | None] = mapped_column(String(128))
-	locked_at: Mapped[str | None] = mapped_column(String(64))
-	next_retry_at: Mapped[str | None] = mapped_column(String(64))
+	locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+	next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WorkflowEvent(Base, StandardColumnsMixin):
@@ -92,7 +94,7 @@ class WorkflowEvent(Base, StandardColumnsMixin):
 	event_type: Mapped[str] = mapped_column(String(128), nullable=False)
 	event_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
 	producer: Mapped[str] = mapped_column(String(128), nullable=False)
-	occurred_at: Mapped[str] = mapped_column(String(64), nullable=False)
+	occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 	payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
 	error_json: Mapped[dict | None] = mapped_column(JSONB)
 
@@ -122,8 +124,8 @@ class JobAttempt(Base, StandardColumnsMixin):
 	attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
 	worker_node: Mapped[str | None] = mapped_column(String(128))
 	status: Mapped[JobStatus] = mapped_column(nullable=False, default=JobStatus.running)
-	started_at: Mapped[str | None] = mapped_column(String(64))
-	finished_at: Mapped[str | None] = mapped_column(String(64))
+	started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+	finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 	diagnostic_json: Mapped[dict | None] = mapped_column(JSONB)
 
 
@@ -169,12 +171,12 @@ class CompensationRecord(Base, StandardColumnsMixin):
 	__tablename__ = "compensation_records"
 	__table_args__ = (
 		Index("ix_comp_scope_run", "tenant_id", "project_id", "run_id"),
-		Index("ix_comp_scope_step", "tenant_id", "project_id", "step_name"),
+		Index("ix_comp_scope_phase", "tenant_id", "project_id", "compensation_phase"),
 	)
 
 	run_id: Mapped[str] = mapped_column(ForeignKey("render_runs.id", ondelete="CASCADE"), nullable=False)
 	job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
-	step_name: Mapped[str] = mapped_column(String(64), nullable=False)
+	compensation_phase: Mapped[str] = mapped_column(String(64), nullable=False)
 	action_name: Mapped[str] = mapped_column(String(128), nullable=False)
 	status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
 	detail: Mapped[str | None] = mapped_column(Text)

@@ -1,17 +1,8 @@
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 from datetime import datetime
 
-
-class BaseSchema(BaseModel):
-    """
-    通用基类模型，全局使用别名生成驼峰/小写标准或保证 Pydantic v2 设置。
-    """
-    model_config = ConfigDict(
-        populate_by_name=True,
-        from_attributes=True,
-        protected_namespaces=()
-    )
+from .base import BaseSchema
 
 
 class TaskCreateRequest(BaseSchema):

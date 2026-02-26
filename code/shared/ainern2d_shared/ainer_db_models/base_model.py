@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, Integer, String
@@ -8,7 +8,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def utcnow() -> datetime:
-	return datetime.utcnow()
+	return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):

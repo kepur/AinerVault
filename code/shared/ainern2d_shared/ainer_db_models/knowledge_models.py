@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,7 +67,7 @@ class Relationship(Base, StandardColumnsMixin):
 	subject_entity_id: Mapped[str] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
 	object_entity_id: Mapped[str] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
 	relation: Mapped[str] = mapped_column(String(128), nullable=False)
-	confidence: Mapped[str | None] = mapped_column(String(32))
+	confidence: Mapped[float | None] = mapped_column(Float)
 
 
 class StoryEvent(Base, StandardColumnsMixin):
@@ -102,6 +102,6 @@ class AssetCandidate(Base, StandardColumnsMixin):
 	entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"))
 	shot_id: Mapped[str | None] = mapped_column(ForeignKey("shots.id", ondelete="SET NULL"))
 	asset_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
-	score: Mapped[str] = mapped_column(String(32), nullable=False)
+	score: Mapped[float] = mapped_column(Float, nullable=False)
 	source: Mapped[str] = mapped_column(String(64), nullable=False)
 	meta_json: Mapped[dict | None] = mapped_column(JSONB)

@@ -1,3 +1,4 @@
+from .base import BaseSchema
 from .artifact import ArtifactResponse
 from .entity import EntityItem, EntityPack
 from .error import AinerErrorResponse, ErrorInfo
@@ -17,6 +18,7 @@ from .worker import WorkerResult
 __all__ = [
     "AinerErrorResponse",
     "ArtifactResponse",
+    "BaseSchema",
     "ComposeRequest",
     "DispatchDecision",
     "EntityItem",

@@ -1,25 +1,42 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Generator
+
+from fastapi import Depends
+from sqlalchemy.orm import Session
 
 from ainern2d_shared.config.setting import settings
+from ainern2d_shared.db.session import SessionLocal
+from ainern2d_shared.db.repositories.pipeline import (
+	JobRepository,
+	RenderRunRepository,
+	WorkflowEventRepository,
+)
 from ainern2d_shared.queue.rabbitmq import RabbitMQPublisher
 from ainern2d_shared.telemetry.logging import get_logger
 
 
-@dataclass
-class InMemoryStore:
-	runs: dict[str, dict[str, Any]] = field(default_factory=dict)
-	events: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-
-
 _logger = get_logger("studio-api")
-_store = InMemoryStore()
 
 
-def get_store() -> InMemoryStore:
-	return _store
+def get_db() -> Generator[Session, None, None]:
+	db = SessionLocal()
+	try:
+		yield db
+	finally:
+		db.close()
+
+
+def get_run_repo(db: Session = Depends(get_db)) -> RenderRunRepository:
+	return RenderRunRepository(db)
+
+
+def get_job_repo(db: Session = Depends(get_db)) -> JobRepository:
+	return JobRepository(db)
+
+
+def get_event_repo(db: Session = Depends(get_db)) -> WorkflowEventRepository:
+	return WorkflowEventRepository(db)
 
 
 def publish(topic: str, payload: dict[str, Any]) -> None:
@@ -29,4 +46,9 @@ def publish(topic: str, payload: dict[str, Any]) -> None:
 		publisher.close()
 	except Exception as exc:
 		_logger.warning("publish fallback topic={} reason={}", topic, str(exc))
+
+
+def get_db_session() -> Session:
+	"""Non-generator DB session for background consumers (not FastAPI Depends)."""
+	return SessionLocal()
 

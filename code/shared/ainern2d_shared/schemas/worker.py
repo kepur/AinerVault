@@ -1,9 +1,7 @@
 from typing import Any, Dict, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-
-class BaseSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+from .base import BaseSchema
 
 
 class WorkerResult(BaseSchema):

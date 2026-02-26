@@ -1,15 +1,16 @@
 from typing import Optional, Dict, Any, Literal
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, Field
 from datetime import datetime
 from uuid import uuid4
 
+from .base import BaseSchema
 
-class EventEnvelope(BaseModel):
+
+class EventEnvelope(BaseSchema):
     """
     贯穿微服务与 RabbitMQ 的标准事件信封。
     请勿更改必填项结构。所有业务消息体装入 payload。
     """
-    model_config = ConfigDict(populate_by_name=True)
 
     event_id: str = Field(default_factory=lambda: f"evt_{uuid4().hex}")
     event_type: str = Field(..., description="注册在 ainer_event_types.md 的标准类型, 如 job.succeeded")
@@ -30,7 +31,7 @@ class EventEnvelope(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict, description="真正的业务消息体")
 
 
-class JobStatusPayload(BaseModel):
+class JobStatusPayload(BaseSchema):
     """
     job.* 事件 (如 job.succeeded, job.failed, job.claimed) 的 Payload 定义
     """
@@ -48,7 +49,7 @@ class JobStatusPayload(BaseModel):
     result_data: Optional[Dict[str, Any]] = None
 
 
-class RunStageTransitionPayload(BaseModel):
+class RunStageTransitionPayload(BaseSchema):
     """
     run.stage.changed 事件 (仅 Orchestrator 能发) 的 Payload
     """

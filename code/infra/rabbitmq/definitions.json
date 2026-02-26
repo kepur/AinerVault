@@ -1,0 +1,47 @@
+{
+  "rabbit_version": "3.13.0",
+  "users": [],
+  "vhosts": [{"name": "/"}],
+  "permissions": [],
+  "topic_permissions": [],
+  "parameters": [],
+  "global_parameters": [],
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "ainer-ha",
+      "pattern": "^ainer\\.",
+      "definition": {
+        "ha-mode": "all",
+        "ha-sync-mode": "automatic",
+        "message-ttl": 86400000
+      },
+      "priority": 0,
+      "apply-to": "queues"
+    }
+  ],
+  "queues": [
+    {"name": "ainer.task.submitted",    "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.job.dispatch",      "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.job.status",        "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.worker.callback",   "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.compose.dispatch",  "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.compose.status",    "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-dead-letter-exchange": "ainer.dlx", "x-dead-letter-routing-key": "ainer.dlq"}},
+    {"name": "ainer.observe.telemetry", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {}},
+    {"name": "ainer.dlq",               "vhost": "/", "durable": true, "auto_delete": false, "arguments": {}}
+  ],
+  "exchanges": [
+    {"name": "ainer.events",  "vhost": "/", "type": "topic",  "durable": true, "auto_delete": false, "internal": false, "arguments": {}},
+    {"name": "ainer.dlx",     "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {}}
+  ],
+  "bindings": [
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.task.submitted",    "destination_type": "queue", "routing_key": "task.submitted",    "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.job.dispatch",      "destination_type": "queue", "routing_key": "job.dispatch",      "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.job.status",        "destination_type": "queue", "routing_key": "job.#",             "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.worker.callback",   "destination_type": "queue", "routing_key": "worker.#",          "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.compose.dispatch",  "destination_type": "queue", "routing_key": "compose.dispatch",  "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.compose.status",    "destination_type": "queue", "routing_key": "compose.#",         "arguments": {}},
+    {"source": "ainer.events", "vhost": "/", "destination": "ainer.observe.telemetry", "destination_type": "queue", "routing_key": "observe.#",         "arguments": {}},
+    {"source": "ainer.dlx",   "vhost": "/", "destination": "ainer.dlq",               "destination_type": "queue", "routing_key": "ainer.dlq",         "arguments": {}}
+  ]
+}

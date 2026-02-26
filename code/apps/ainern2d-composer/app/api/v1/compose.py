@@ -3,9 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.enum_models import JobStatus, JobType, RenderStage
+from ainern2d_shared.ainer_db_models.pipeline_models import Job
 from ainern2d_shared.config.setting import settings
+from ainern2d_shared.db.session import SessionLocal, get_db
+from ainern2d_shared.db.repositories.pipeline import JobRepository
 from ainern2d_shared.queue.rabbitmq import RabbitMQConsumer, RabbitMQPublisher
 from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.schemas.events import EventEnvelope
@@ -14,36 +19,32 @@ from ainern2d_shared.telemetry.logging import get_logger
 
 router = APIRouter(prefix="/internal", tags=["composer"])
 
-COMPOSE_JOBS: dict[str, dict[str, object]] = {}
 _logger = get_logger("composer")
 
 
 @router.post("/compose", status_code=202)
-def compose(request: ComposeRequest) -> dict[str, str]:
+def compose(request: ComposeRequest, db: Session = Depends(get_db)) -> dict[str, str]:
     compose_job_id = f"compose_{uuid4().hex}"
     now = datetime.now(timezone.utc)
 
-    started = EventEnvelope(
-        event_type="compose.started",
-        producer="composer",
-        occurred_at=now,
+    job = Job(
+        id=compose_job_id,
         tenant_id=request.tenant_id,
         project_id=request.project_id,
-        idempotency_key=request.idempotency_key,
-        run_id=request.run_id,
         trace_id=request.trace_id,
         correlation_id=request.correlation_id,
-        payload={"compose_job_id": compose_job_id},
+        idempotency_key=request.idempotency_key,
+        run_id=request.run_id,
+        job_type=JobType.compose_final,
+        stage=RenderStage.compose,
+        status=JobStatus.running,
+        priority=0,
+        payload_json={"timeline_final": request.timeline_final, "artifact_refs": request.artifact_refs},
     )
+    job_repo = JobRepository(db)
+    job_repo.create(job)
 
-    COMPOSE_JOBS[compose_job_id] = {
-        "compose_job_id": compose_job_id,
-        "run_id": request.run_id,
-        "status": "started",
-        "started_event": started.model_dump(mode="json"),
-        "created_at": now,
-    }
-
+    # Mock: auto-complete for dev
     completed = EventEnvelope(
         event_type="compose.completed",
         producer="composer",
@@ -66,8 +67,10 @@ def compose(request: ComposeRequest) -> dict[str, str]:
     except Exception as exc:
         _logger.warning("publish compose.status failed reason={}", str(exc))
 
-    COMPOSE_JOBS[compose_job_id]["status"] = "completed"
-    COMPOSE_JOBS[compose_job_id]["completed_event"] = completed.model_dump(mode="json")
+    job.status = JobStatus.success
+    job.result_json = completed.payload
+    db.commit()
+
     return {"compose_job_id": compose_job_id, "status": "started"}
 
 
@@ -86,7 +89,15 @@ def handle_compose_dispatch(payload: dict) -> None:
         correlation_id=event.correlation_id,
         idempotency_key=event.idempotency_key,
     )
-    compose(compose_request)
+
+    db = SessionLocal()
+    try:
+        compose(compose_request, db=db)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def consume_compose_dispatch() -> None:

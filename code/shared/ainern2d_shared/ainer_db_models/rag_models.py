@@ -4,6 +4,11 @@ from sqlalchemy import ARRAY, Float, ForeignKey, Index, String, Text, UniqueCons
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+try:
+	from pgvector.sqlalchemy import Vector
+except ImportError:
+	Vector = None
+
 from .base_model import Base, StandardColumnsMixin
 from .enum_models import ProposalStatus, RagScope, RagSourceType, RolloutStatus
 
@@ -67,7 +72,10 @@ class RagEmbedding(Base, StandardColumnsMixin):
 	doc_id: Mapped[str] = mapped_column(ForeignKey("rag_documents.id", ondelete="CASCADE"), nullable=False)
 	embedding_model_profile_id: Mapped[str | None] = mapped_column(ForeignKey("model_profiles.id", ondelete="SET NULL"))
 	embedding_dim: Mapped[int] = mapped_column(nullable=False, default=0)
-	embedding: Mapped[list[float]] = mapped_column(ARRAY(Float), nullable=False)
+	embedding: Mapped[list[float]] = mapped_column(
+		Vector(1536) if Vector is not None else ARRAY(Float),
+		nullable=False,
+	)
 	quality_score: Mapped[float | None] = mapped_column(Float)
 	is_primary: Mapped[bool] = mapped_column(default=False, nullable=False)
 

@@ -1,12 +1,13 @@
 from typing import Optional, Dict, Any
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, Field
+
+from .base import BaseSchema
 
 
-class ArtifactResponse(BaseModel):
+class ArtifactResponse(BaseSchema):
     """
     标准产物 DTO (对应 artifacts 库表)。
     """
-    model_config = ConfigDict(from_attributes=True)
     
     id: str = Field(..., description="产物全局一唯一 ID")
     run_id: str = Field(..., description="产生它的 Run ID")

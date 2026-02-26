@@ -1,15 +1,12 @@
 from typing import Any, Dict, Optional
-from pydantic import BaseModel, ConfigDict
 
-
-class BaseSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+from .base import BaseSchema
 
 
 class ErrorInfo(BaseSchema):
     code: str
     message: str
-    retriable: bool = False
+    retryable: bool = False
     details: Optional[Dict[str, Any]] = None
 
 

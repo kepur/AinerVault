@@ -1,8 +1,10 @@
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from .base import BaseSchema
 
 
-class TimelineAudioItemDto(BaseModel):
+class TimelineAudioItemDto(BaseSchema):
     """
     时间轴上的音频元素 (人声, BGM, SFX)
     """
@@ -15,7 +17,7 @@ class TimelineAudioItemDto(BaseModel):
     volume: float = Field(1.0, description="音量倍数")
 
 
-class TimelineVideoItemDto(BaseModel):
+class TimelineVideoItemDto(BaseSchema):
     """
     时间轴上的视频镜头 (Shot)
     """
@@ -27,7 +29,7 @@ class TimelineVideoItemDto(BaseModel):
     artifact_uri: Optional[str] = Field(None, description="对应的已渲染视频素材路径")
 
 
-class ShotPlanItem(BaseModel):
+class ShotPlanItem(BaseSchema):
     shot_id: str
     scene_id: str
     beat_id: Optional[str] = None
@@ -38,13 +40,13 @@ class ShotPlanItem(BaseModel):
     style_tags: List[str] = Field(default_factory=list)
 
 
-class ShotPlan(BaseModel):
+class ShotPlan(BaseSchema):
     run_id: str
     shots: List[ShotPlanItem] = Field(default_factory=list)
     schema_version: str = "1.0"
 
 
-class TimelinePlanDto(BaseModel):
+class TimelinePlanDto(BaseSchema):
     """
     给 Composer 或者 Studio 渲染与合成的完整时间轴定义 (Plan 产出物)
     """
