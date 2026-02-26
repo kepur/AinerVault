@@ -4,12 +4,17 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
+from ainern2d_shared.config.setting import settings
+from ainern2d_shared.queue.rabbitmq import RabbitMQPublisher
+from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.schemas.events import EventEnvelope
 from ainern2d_shared.schemas.worker import WorkerResult
+from ainern2d_shared.telemetry.logging import get_logger
 
 from app.api.v1.dispatch import DISPATCH_JOBS
 
 router = APIRouter(prefix="/internal", tags=["worker-hub"])
+_logger = get_logger("worker-hub-callback")
 
 
 @router.post("/callbacks/result", status_code=202)
@@ -57,5 +62,11 @@ def worker_result_callback(result: WorkerResult) -> dict[str, object]:
 		"updated_at": now,
 		"result_event": event.model_dump(mode="json"),
 	}
+	try:
+		publisher = RabbitMQPublisher(settings.rabbitmq_url)
+		publisher.publish(SYSTEM_TOPICS.JOB_STATUS, event.model_dump(mode="json"))
+		publisher.close()
+	except Exception as exc:
+		_logger.warning("publish callback job.status failed reason={}", str(exc))
 	return {"status": "accepted", "event_type": event_type}
 
