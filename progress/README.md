@@ -11,6 +11,10 @@
   - Agent 专用落地手册（阅读顺序、执行门禁、交付模板、提示词模板）。
 - `progress/NEXT_AGENT_PROMPT.md`
   - 可直接复制给其他 Agent 的接力提示词（含当前基线与边界）。
+- `progress/FOUNDATION_FRAMEWORK.md`
+  - 基础落地框架（先模型确认，再编码，防跑偏执行顺序）。
+- `progress/MODEL_CONFIRMATION_REPORT.md`
+  - 由 `code/scripts/validate_skill_framework.py` 自动生成的模型确认结果。
 - `progress/DOC_CLEANUP_BASELINE.md`
   - 文档保留与清理基线（哪些必须保留，哪些可归档/候选删除）。
 

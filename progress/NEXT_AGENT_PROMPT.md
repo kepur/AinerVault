@@ -16,6 +16,12 @@
 - 数据库增量迁移已新增：code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py
 - 迁移覆盖 jobtype 枚举补值 + 21/22 所需 8 张表
 
+2.1) 开发前强制校验（MUST）：
+- 先运行：
+  python3 code/scripts/validate_skill_framework.py --strict --report progress/MODEL_CONFIRMATION_REPORT.md
+- 若出现 FAIL，先修复 FAIL 再编码。
+- 每次提交前再运行一次同命令，确保无新增漂移。
+
 3) 本轮只做一个目标（二选一）：
 A. 完成 SKILL_21 service 持久化写库（entity continuity 全链）
 B. 完成 SKILL_22 service 持久化写库（persona dataset/index/lineage/manifest）
@@ -32,6 +38,7 @@ B. 完成 SKILL_22 service 持久化写库（persona dataset/index/lineage/manif
 - 通过目标相关 pytest
 - 输出字段符合 ainer_contracts.md
 - 错误码符合 ainer_error_code.md
+- `validate_skill_framework.py --strict` 通过
 - 更新 progress/skill_delivery_status.yaml 的 status/gate/next_action/evidence
 
 6) 最终输出格式：

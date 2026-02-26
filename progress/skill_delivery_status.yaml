@@ -22,6 +22,16 @@ meta:
     pending:
       - "执行 alembic upgrade head（需可用 PostgreSQL）"
       - "SKILL_21/22 service 持久化写库"
+  framework_validation:
+    script: "code/scripts/validate_skill_framework.py"
+    last_run_report: "progress/MODEL_CONFIRMATION_REPORT.md"
+    latest_result: "PASS_WITH_WARN"
+    latest_summary:
+      pass: 10
+      fail: 0
+      warn: 1
+    latest_warn:
+      - "Pending blockers remain: DB upgrade execution / SKILL_21-22 persistence wiring"
   status_enum:
     - "NOT_STARTED"
     - "PARTIAL"
