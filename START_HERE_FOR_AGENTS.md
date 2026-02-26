@@ -5,19 +5,20 @@
 - 目标：按统一边界与门禁实现，不跑偏，不越权。
 
 ## 1. 强制阅读顺序（MUST）
-1) `code/docs/runbooks/implementation-status-ledger.md`
-2) `ainer_contracts.md`
-3) `ainer_event_types.md`
-4) `ainer_error_code.md`
-5) `code/docs/architecture/stage-enum-authority.md`
-6) `code/docs/architecture/service-api-contracts.md`
-7) `code/docs/architecture/queue-topics-and-retry-policy.md`
-8) `code/docs/runbooks/agent-implementation-playbook.md`
-9) `code/docs/runbooks/ci-gate-execution-spec.md`
-10) `code/docs/runbooks/e2e-handoff-test-matrix.md`
-11) `code/docs/architecture/agent-data-model-guideline.md` (Agent数据模型直接落地必读基线)
-12) `code/docs/runbooks/agent-direct-implementation-readiness.md`（直落地可行性与补齐清单）
-13) `code/docs/architecture/agent-coding-framework-guideline.md` (Agent编码框架与代码生成模板指南)
+1) `SKILL_IMPLEMENTATION_PROGRESS.md`（SKILL 落地进度 — **首先阅读，了解全局状态**）
+2) `code/docs/runbooks/implementation-status-ledger.md`
+3) `ainer_contracts.md`
+4) `ainer_event_types.md`
+5) `ainer_error_code.md`
+6) `code/docs/architecture/stage-enum-authority.md`
+7) `code/docs/architecture/service-api-contracts.md`
+8) `code/docs/architecture/queue-topics-and-retry-policy.md`
+9) `code/docs/runbooks/agent-implementation-playbook.md`
+10) `code/docs/runbooks/ci-gate-execution-spec.md`
+11) `code/docs/runbooks/e2e-handoff-test-matrix.md`
+12) `code/docs/architecture/agent-data-model-guideline.md` (Agent数据模型直接落地必读基线)
+13) `code/docs/runbooks/agent-direct-implementation-readiness.md`（直落地可行性与补齐清单）
+14) `code/docs/architecture/agent-coding-framework-guideline.md` (Agent编码框架与代码生成模板指南)
 
 ## 2. 核心约束（必须遵守）
 - 主运行对象：`run/job/stage/event/artifact`。
@@ -39,6 +40,14 @@
 4) 合成发布（composer）
 5) 观测治理（observer）
 6) 增强层（14~20）
+
+## 4.5 SKILL 实现框架（AI 接力必读）
+- 每个 SKILL 有独立的 Service 类，位于 `code/apps/*/app/services/skills/skill_XX_*.py`
+- 每个 SKILL 有独立的 Input/Output DTO，位于 `code/shared/ainern2d_shared/schemas/skills/skill_XX.py`
+- 所有 Service 继承 `BaseSkillService`，统一 `execute(input, ctx)` 入口
+- Orchestrator 通过 `SkillRegistry.dispatch(skill_id, input, ctx)` 调度
+- **实现某个 SKILL 后必须更新 `SKILL_IMPLEMENTATION_PROGRESS.md` 中对应行的状态**
+- SKILL DAG 依赖关系见 `SKILL_IMPLEMENTATION_PROGRESS.md` 第 3 节
 
 ## 5. 验收门禁
 - `alembic upgrade -> downgrade -> upgrade` 必须通过。

@@ -9,7 +9,7 @@
 - `IN_PROGRESS`：文档完成但代码未完，或代码完成但验收未过。
 - `TODO`：尚未落地。
 
-## 3. 当前状态快照（2026-02-26）
+## 3. 当前状态快照（2026-02-26 更新）
 
 | 领域 | 状态 | 证据文件 | 说明 |
 |---|---|---|---|
@@ -22,8 +22,17 @@
 | Stage 权威枚举与迁移 | DONE | `code/docs/architecture/stage-enum-authority.md` | 已补齐 |
 | 14~20 E2E 验收矩阵 | DONE | `code/docs/runbooks/e2e-handoff-test-matrix.md` | 已扩展到 E2E-020 |
 | CI 门禁执行规范 | DONE | `code/docs/runbooks/ci-gate-execution-spec.md` | 已补齐 |
-| shared 基础骨架（schemas/queue/utils/telemetry/config/storage） | IN_PROGRESS | `code/docs/runbooks/agent-direct-implementation-readiness.md` | 目录已建，关键文件待补齐 |
-| 服务入口骨架（studio-api/worker-hub/composer/runtime） | IN_PROGRESS | `code/docs/runbooks/agent-direct-implementation-readiness.md` | 多数主干文件仍为空 |
+| shared 基础骨架 | DONE | `code/shared/ainern2d_shared/` | schemas(8) + queue(3) + utils(3) + telemetry(3) + config(2) + storage(2) + db(4) + services(2) — 全部有实现 |
+| 服务入口骨架 | DONE | `code/apps/*/app/main.py` | 4 服务 main.py + 所有路由注册 + 所有 __init__.py |
+| 业务模块实现 | DONE | `code/apps/*/app/modules/` | 66 个原空文件已全部实现，16 个 __init__.py |
+| SKILL DTO schemas | DONE | `code/shared/ainern2d_shared/schemas/skills/` | 20 个 SKILL Input/Output DTO |
+| SKILL Service 层 | DONE | `code/apps/*/app/services/skills/` | 20 个 SKILL Service（骨架+execute stub） |
+| SKILL 注册表 | DONE | `code/apps/ainern2d-studio-api/app/services/skill_registry.py` | SkillRegistry.dispatch() 可调度 |
+| BaseSkillService 基类 | DONE | `code/shared/ainern2d_shared/services/base_skill.py` | 幂等/日志/状态记录/错误包装 |
+| SKILL 进度跟踪 | DONE | `SKILL_IMPLEMENTATION_PROGRESS.md` | 20 个 SKILL 落地进度、DAG、接力规则 |
+| DevOps（docker/nginx/scripts） | DONE | `code/docker-compose.yml`, `code/infra/`, `code/scripts/` | 完整开发环境 |
+| SKILL 核心逻辑实现 | IN_PROGRESS | `SKILL_IMPLEMENTATION_PROGRESS.md` | 20 个 SKILL 均为 PARTIAL — execute() 待填充 |
+| E2E 集成测试 | TODO | — | 需编写端到端测试用例 |
 
 ## 4. Agent 执行门禁
 - MUST：实现前读取本 Ledger 与 `ainer_contracts.md`。

@@ -4,17 +4,24 @@
 - 给其他 AI agent 一个“看文档 + 看模型即可直接编码”的硬约束入口。
 - 明确当前可落地范围、必须先补的骨架、以及禁止跑偏边界。
 
-## 2. 当前就绪结论（必须先看）
-- **数据库模型层：已就绪**  
-  - `code/shared/ainern2d_shared/ainer_db_models/` 已定义 `57` 个共享模型，统一继承 `StandardColumnsMixin`。
+## 2. 当前就绪结论（2026-02-26 更新）
+- **数据库模型层：✅ 已就绪**  
+  - `code/shared/ainern2d_shared/ainer_db_models/` 已定义 `57` 个共享模型。
   - `code/apps/alembic/versions/6f66885e0588_init_baseline.py` 可直接落库。
-- **服务实现层：未就绪（必须补骨架）**  
-  - 当前 `code/` 下 Python 文件共 `101` 个，其中空文件 `83` 个。
-  - 关键共享基础代码为空：`queue/utils/telemetry/config/storage`（核心 `schemas` 已补齐）。
-  - 关键服务入口为空：`studio-api`、`worker-hub`、`composer`、`worker-runtime` 主干文件。
+- **共享基础设施：✅ 已就绪**  
+  - `schemas`(8) + `queue`(3) + `utils`(3) + `telemetry`(3) + `config`(2) + `storage`(2) + `db`(4) + `services`(2) 全部有实现。
+  - 新增: `schemas/skills/`（20 个 SKILL Input/Output DTO）。
+  - 新增: `services/base_skill.py`（BaseSkillService 基类 + SkillContext）。
+- **服务框架层：✅ 已就绪**  
+  - 4 个服务 main.py + 所有路由注册 + 所有 __init__.py 完成。
+  - 180 个 Python 文件全部有实现，零空壳文件。
+- **SKILL Service 层：✅ 框架已就绪**  
+  - 20 个 SKILL Service 类已创建（继承 BaseSkillService）。
+  - SkillRegistry 已实现（按 skill_id 调度）。
+  - `execute()` 方法均为 TODO stub — 等待 AI Agent 逐个实现核心逻辑。
 - **结论**  
-  - 现在达到“模型可落库 + 文档可指导”状态。  
-  - 尚未达到“其他 AI agent 无补充即可直接完成端到端编码”状态。
+  - ✅ 达到"其他 AI agent 查看文档 + SKILL_IMPLEMENTATION_PROGRESS.md 即可直接接手实现"状态。
+  - 每个 SKILL 的 Service/DTO/映射/验收标准均已定义，AI 只需填充 execute() 逻辑。
 
 ## 3. 强制边界（不可突破）
 - 运行主对象只能用：`run/job/stage/event/artifact`。
@@ -31,27 +38,20 @@
 - 消息：RabbitMQ Topic（主题以 `queue-topics-and-retry-policy.md` 为准）。
 - 存储：PostgreSQL + MinIO/S3（产物走对象存储，DB 存元数据）。
 
-## 5. P0 必补清单（补齐后才允许大规模实现）
-- `code/shared/ainern2d_shared/schemas/task.py`
-- `code/shared/ainern2d_shared/schemas/timeline.py`
-- `code/shared/ainern2d_shared/schemas/artifact.py`
-- `code/shared/ainern2d_shared/schemas/events.py`
-- `code/shared/ainern2d_shared/queue/topics.py`
-- `code/shared/ainern2d_shared/queue/message_contracts.py`
-- `code/shared/ainern2d_shared/queue/rabbitmq.py`
-- `code/shared/ainern2d_shared/utils/time.py`
-- `code/shared/ainern2d_shared/utils/idempotency.py`
-- `code/shared/ainern2d_shared/utils/retry.py`
-- `code/shared/ainern2d_shared/telemetry/logging.py`
-- `code/shared/ainern2d_shared/telemetry/metrics.py`
-- `code/shared/ainern2d_shared/telemetry/tracing.py`
-- `code/shared/ainern2d_shared/config/setting.py`
-- `code/shared/ainern2d_shared/config/enums.py`
-- `code/shared/ainern2d_shared/storage/s3.py`
-- `code/shared/ainern2d_shared/storage/minio.py`
-- `code/apps/pyproject.toml`
-- `code/shared/pyproject.toml`
-- `code/scripts/dev-up.sh`, `dev-down.sh`, `migrate.sh`, `seed_rag.sh`, `init_storage.sh`
+## 5. P0 必补清单（已全部完成 ✅）
+以下文件已全部实现（2026-02-26 Copilot 完成）：
+- ✅ `schemas/` (task, timeline, artifact, events, worker, entity, error, base) — 8 文件
+- ✅ `schemas/skills/` — 20 个 SKILL DTO (skill_01 ~ skill_20)
+- ✅ `queue/` (topics, message_contracts, rabbitmq) — 3 文件
+- ✅ `utils/` (time, idempotency, retry) — 3 文件
+- ✅ `telemetry/` (logging, metrics, tracing) — 3 文件
+- ✅ `config/` (setting, enums) — 2 文件
+- ✅ `storage/` (s3, minio) — 2 文件
+- ✅ `services/` (base_skill, __init__) — 2 文件
+- ✅ `pyproject.toml` (shared + apps) — 2 文件
+- ✅ `scripts/` (dev-up, dev-down, migrate, seed_rag, init_storage) — 5 文件
+
+**当前焦点：实现 20 个 SKILL 的 execute() 核心逻辑（见 SKILL_IMPLEMENTATION_PROGRESS.md）。**
 
 ## 6. 模型与契约对齐细则（防跑偏）
 - `schema_version` 是事件/DTO 权威字段；数据库中的结构版本使用 `version`，两者禁止混用语义。
