@@ -30,20 +30,59 @@ class DispatchDecisionAuditor:
     def audit(self, decision: DispatchDecision) -> GateEvalResult:
         """Evaluate *decision* against active policy stacks.
 
-        TODO: load active CreativePolicyStack and run real constraint
-        checks (cost ceiling, banned providers, etc.).
+        Checks applied (in order):
+        1. Cost ceiling — reject if decision.cost_estimate > stack_json["cost_ceiling"]
+        2. Banned providers — reject if decision.worker_type in stack_json["banned_providers"]
+        3. Required worker types — reject if stack_json["required_worker_types"] set and
+           decision.worker_type not in it
         """
-        # Stub: pass all decisions through.
+        active_stacks: list[CreativePolicyStack] = (
+            self.db.query(CreativePolicyStack)
+            .filter(CreativePolicyStack.status == "active")
+            .all()
+        )
+
+        gate = GateDecision.pass_
+        feedback: dict = {"detail": "all_policy_checks_passed", "violations": []}
+
+        for stack in active_stacks:
+            spec: dict = stack.stack_json or {}
+
+            cost_ceiling = spec.get("cost_ceiling")
+            if cost_ceiling is not None and decision.cost_estimate > float(cost_ceiling):
+                gate = GateDecision.reject
+                feedback["violations"].append(
+                    f"cost_ceiling_exceeded: {decision.cost_estimate:.4f} > {cost_ceiling}"
+                )
+
+            banned: list = spec.get("banned_providers", [])
+            if decision.worker_type in banned or decision.model_profile_id in banned:
+                gate = GateDecision.reject
+                feedback["violations"].append(
+                    f"banned_provider: {decision.worker_type}"
+                )
+
+            required: list = spec.get("required_worker_types", [])
+            if required and decision.worker_type not in required:
+                gate = GateDecision.reject
+                feedback["violations"].append(
+                    f"worker_type_not_allowed: {decision.worker_type} not in {required}"
+                )
+
+            if gate == GateDecision.reject:
+                feedback["detail"] = f"rejected_by_policy_stack: {stack.name}"
+                break
+
         result = GateEvalResult(
             id=f"ge_{uuid4().hex[:12]}",
-            gate_decision=GateDecision.pass_,
-            feedback_json={"detail": "stub_audit_passed"},
+            gate_decision=gate,
+            feedback_json=feedback,
         )
         self.db.add(result)
         self.db.flush()
         logger.info(
-            "audit_done | task_id={} decision={}",
-            decision.task_id, result.gate_decision.value,
+            "audit_done | task_id={} decision={} violations={}",
+            decision.task_id, result.gate_decision.value, len(feedback.get("violations", [])),
         )
         return result
 

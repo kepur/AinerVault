@@ -42,9 +42,24 @@ class ContinuityChecker:
                 report[item.entity_id] = {"consistent": True, "detail": "first_appearance"}
                 continue
 
-            # TODO: implement deeper semantic diff between state_json
-            # and current attributes once entity-state schema stabilises.
-            report[item.entity_id] = {"consistent": True, "detail": "stub_check_passed"}
+            prev: dict = prev_state.state_json or {}
+            curr: dict = item.attributes or {}
+
+            # Detect conflicting attribute values (same key, different non-None value)
+            conflicts: list[str] = []
+            for key in set(prev) & set(curr):
+                old_val = prev[key]
+                new_val = curr[key]
+                if old_val is not None and new_val is not None and old_val != new_val:
+                    conflicts.append(f"{key}: {old_val!r} → {new_val!r}")
+
+            if conflicts:
+                report[item.entity_id] = {
+                    "consistent": False,
+                    "detail": f"attribute_conflict: {'; '.join(conflicts)}",
+                }
+            else:
+                report[item.entity_id] = {"consistent": True, "detail": "no_conflicts"}
 
         logger.info(
             "continuity_check | run_id={} entities={}",

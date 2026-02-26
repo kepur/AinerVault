@@ -29,7 +29,6 @@ class ComfyUIClient:
         Returns:
             The prompt_id assigned by ComfyUI.
         """
-        # TODO: implement real ComfyUI prompt queuing
         payload: dict[str, Any] = {"prompt": workflow}
         resp = await self._client.post("/prompt", json=payload)
         resp.raise_for_status()
@@ -50,7 +49,6 @@ class ComfyUIClient:
         Returns:
             List of local file paths that were downloaded.
         """
-        # TODO: implement real output download from ComfyUI
         os.makedirs(output_dir, exist_ok=True)
 
         status = await self.get_status(prompt_id)

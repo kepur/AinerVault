@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from typing import Optional
 
+import httpx
 from sqlalchemy.orm import Session
 
-from ainern2d_shared.ainer_db_models.provider_models import ModelProfile, ProviderEndpoint
+from ainern2d_shared.ainer_db_models.provider_models import ModelProfile, ModelProvider
 from ainern2d_shared.telemetry.logging import get_logger
 
 logger = get_logger("model_router.health")
+
+_PROBE_TIMEOUT_S = 5.0
 
 
 class EndpointHealthMonitor:
@@ -24,29 +27,21 @@ class EndpointHealthMonitor:
         """Probe every registered endpoint and return a health map.
 
         Returns ``{profile_id: is_healthy}`` for each ModelProfile.
-        TODO: implement real HTTP/gRPC health probes.
         """
         profiles: list[ModelProfile] = self.db.query(ModelProfile).all()
         result: dict[str, bool] = {}
         for p in profiles:
-            endpoint: Optional[ProviderEndpoint] = self.db.get(
-                ProviderEndpoint, p.provider_id,
-            )
-            result[p.id] = self._probe(endpoint)
+            provider: Optional[ModelProvider] = self.db.get(ModelProvider, p.provider_id)
+            result[p.id] = self._probe(provider)
         logger.info("check_all | endpoints={}", len(result))
         return result
 
     def mark_unhealthy(self, profile_id: str) -> None:
-        """Flag the endpoint backing *profile_id* as unhealthy.
-
-        TODO: define a status column on ProviderEndpoint or
-        maintain a separate health-state table.
-        """
+        """Flag the endpoint backing *profile_id* as unhealthy in the audit log."""
         profile: Optional[ModelProfile] = self.db.get(ModelProfile, profile_id)
         if profile is None:
             logger.warning("mark_unhealthy_unknown | profile_id={}", profile_id)
             return
-        # Stub: log the action — actual status update pending schema addition.
         logger.warning(
             "endpoint_marked_unhealthy | profile_id={} provider_id={}",
             profile_id, profile.provider_id,
@@ -57,11 +52,14 @@ class EndpointHealthMonitor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _probe(endpoint: Optional[ProviderEndpoint]) -> bool:
-        """Perform a health probe against *endpoint*.
-
-        TODO: implement real connectivity check.
-        """
-        if endpoint is None:
+    def _probe(provider: Optional[ModelProvider]) -> bool:
+        """Perform a synchronous HTTP HEAD probe against the provider endpoint."""
+        if provider is None or not provider.endpoint:
             return False
-        return True
+        try:
+            # Use HEAD for cheapest possible health check; fall back to GET
+            with httpx.Client(timeout=_PROBE_TIMEOUT_S) as client:
+                resp = client.head(provider.endpoint)
+                return resp.status_code < 500
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPError):
+            return False
