@@ -29,6 +29,34 @@ class TaskCreateRequest(BaseSchema):
     payload: Optional[Dict[str, Any]] = Field(default_factory=dict, description="额外编排参数")
 
 
+class TaskSpec(BaseSchema):
+    task_id: str
+    tenant_id: str
+    project_id: str
+    chapter_id: str
+    requested_quality: str = "standard"
+    language_context: str = "zh-CN"
+    input_uri: str
+    budget_profile: Optional[str] = None
+    deadline_ms: Optional[int] = None
+    priority: Optional[int] = None
+    user_overrides: Dict[str, Any] = Field(default_factory=dict)
+    schema_version: str = "1.0"
+
+
+class DispatchDecision(BaseSchema):
+    task_id: str
+    route_id: str
+    worker_type: str
+    model_profile_id: str
+    fallback_chain: List[str] = Field(default_factory=list)
+    timeout_ms: int
+    cost_estimate: Optional[float] = None
+    gpu_tier: Optional[str] = None
+    degrade_policy: Optional[Dict[str, Any]] = None
+    schema_version: str = "1.0"
+
+
 class TaskResponse(BaseSchema):
     """
     标准创建响应
@@ -50,3 +78,25 @@ class TaskDetailResponse(BaseSchema):
     final_artifact_uri: Optional[str] = Field(None, description="成功后的产物 URI")
     created_at: datetime
     updated_at: datetime
+
+
+class RunDetailResponse(BaseSchema):
+    run_id: str
+    status: str
+    stage: str
+    progress: float = 0.0
+    latest_error: Optional[Dict[str, Any]] = None
+    final_artifact_uri: Optional[str] = None
+    schema_version: str = "1.0"
+
+
+class ComposeRequest(BaseSchema):
+    run_id: str
+    timeline_final: Dict[str, Any]
+    artifact_refs: List[str] = Field(default_factory=list)
+    tenant_id: str
+    project_id: str
+    trace_id: str
+    correlation_id: str
+    idempotency_key: str
+    schema_version: str = "1.0"
