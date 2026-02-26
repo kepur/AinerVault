@@ -32,6 +32,8 @@ from .skills.skill_16_critic_evaluation import CriticEvaluationService
 from .skills.skill_17_experiment import ExperimentService
 from .skills.skill_18_failure_recovery import FailureRecoveryService
 from .skills.skill_19_compute_budget import ComputeBudgetService
+from .skills.skill_21_entity_registry_continuity import EntityRegistryContinuityService
+from .skills.skill_22_persona_dataset_index import PersonaDatasetIndexService
 
 # skill_id → Service class 映射
 _SKILL_MAP: dict[str, type[BaseSkillService]] = {
@@ -55,6 +57,8 @@ _SKILL_MAP: dict[str, type[BaseSkillService]] = {
     "skill_18": FailureRecoveryService,
     "skill_19": ComputeBudgetService,
     # skill_20 在 composer 服务中
+    "skill_21": EntityRegistryContinuityService,
+    "skill_22": PersonaDatasetIndexService,
 }
 
 

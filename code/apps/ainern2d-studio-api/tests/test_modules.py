@@ -343,3 +343,30 @@ class TestEmbeddingGenerator:
         gen = mod.EmbeddingGenerator(db, api_key="")
         with pytest.raises(LookupError):
             gen.embed("nonexistent_doc")
+
+
+# ===========================================================================
+# orchestrator / dag_engine.py – default sequence wiring
+# ===========================================================================
+
+class TestDagEngineSequence:
+    def test_default_sequence_contains_skill_21_between_04_and_07(self):
+        from app.modules.orchestrator.dag_engine import DagEngine
+        from ainern2d_shared.ainer_db_models.enum_models import JobType
+
+        steps = DagEngine._default_steps()
+        step_names = [s["job_type"] for s in steps]
+        idx_extract = step_names.index(JobType.extract_entities.value)
+        idx_continuity = step_names.index(JobType.resolve_entity_continuity.value)
+        idx_canonical = step_names.index(JobType.canonicalize_entities.value)
+        assert idx_extract < idx_continuity < idx_canonical
+
+    def test_default_sequence_contains_skill_22_before_prompt(self):
+        from app.modules.orchestrator.dag_engine import DagEngine
+        from ainern2d_shared.ainer_db_models.enum_models import JobType
+
+        steps = DagEngine._default_steps()
+        step_names = [s["job_type"] for s in steps]
+        idx_persona_index = step_names.index(JobType.manage_persona_dataset_index.value)
+        idx_prompt = step_names.index(JobType.plan_prompt.value)
+        assert idx_persona_index < idx_prompt

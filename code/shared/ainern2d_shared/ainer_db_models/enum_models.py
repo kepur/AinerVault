@@ -48,8 +48,10 @@ class JobType(str, enum.Enum):
 	plan_audio_assets = "plan_audio_assets"
 	assemble_audio_timeline = "assemble_audio_timeline"
 	# Canonicalization + asset matching (SKILLs 07/08)
+	resolve_entity_continuity = "resolve_entity_continuity"  # SKILL 21
 	canonicalize_entities = "canonicalize_entities"
 	match_assets = "match_assets"
+	manage_persona_dataset_index = "manage_persona_dataset_index"  # SKILL 22
 	# Visual + prompt pipeline (SKILLs 09/10/20)
 	plan_visual_render = "plan_visual_render"
 	plan_storyboard = "plan_storyboard"

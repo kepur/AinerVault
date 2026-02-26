@@ -39,8 +39,10 @@ _JOB_TYPE_TO_SKILL: dict[str, str] = {
     JobType.extract_entities.value:        "skill_04",
     JobType.plan_audio_assets.value:       "skill_05",
     # skill_06 (assemble_audio_timeline) lives in ainern2d-composer
+    JobType.resolve_entity_continuity.value: "skill_21",
     JobType.canonicalize_entities.value:   "skill_07",
     JobType.match_assets.value:            "skill_08",
+    JobType.manage_persona_dataset_index.value: "skill_22",
     JobType.plan_visual_render.value:      "skill_09",
     JobType.plan_prompt.value:             "skill_10",
     # plan_storyboard is an alias for scene/shot planning (same as plan_scene_shots)

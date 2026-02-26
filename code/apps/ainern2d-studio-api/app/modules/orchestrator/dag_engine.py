@@ -31,8 +31,10 @@ _JOB_STAGE: Dict[JobType, RenderStage] = {
     JobType.plan_audio_assets:        RenderStage.audio,
     JobType.assemble_audio_timeline:  RenderStage.audio,
     # Canonicalization + asset matching
+    JobType.resolve_entity_continuity: RenderStage.entity,
     JobType.canonicalize_entities:    RenderStage.entity,
     JobType.match_assets:             RenderStage.knowledge,
+    JobType.manage_persona_dataset_index: RenderStage.knowledge,
     # Visual + prompt
     JobType.plan_visual_render:       RenderStage.plan,
     JobType.plan_storyboard:          RenderStage.plan,
@@ -55,6 +57,8 @@ _DEFAULT_SEQUENCE: List[List[JobType]] = [
     [JobType.route_language],
     # Stage 3: scene/shot planning + entity extraction (parallel)
     [JobType.plan_scene_shots, JobType.extract_entities],
+    # Stage 3.5: entity continuity resolution (SKILL 21)
+    [JobType.resolve_entity_continuity],
     # Stage 4: audio asset planning
     [JobType.plan_audio_assets],
     # Stage 5: canonicalization + audio synthesis (parallel)
@@ -63,6 +67,8 @@ _DEFAULT_SEQUENCE: List[List[JobType]] = [
     [JobType.assemble_audio_timeline],
     # Stage 7: asset matching
     [JobType.match_assets],
+    # Stage 7.5: persona dataset/index manifest (SKILL 22)
+    [JobType.manage_persona_dataset_index],
     # Stage 8: visual render planning
     [JobType.plan_visual_render],
     # Stage 9: prompt planning

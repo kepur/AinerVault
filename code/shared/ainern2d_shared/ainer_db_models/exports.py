@@ -55,6 +55,16 @@ from .governance_models import (
 	ShotComputeBudget,
 	ShotDslCompilation,
 )
+from .preview_models import (
+	CharacterVoiceBinding,
+	EntityContinuityProfile,
+	EntityInstanceLink,
+	EntityPreviewVariant,
+	PersonaDatasetBinding,
+	PersonaIndexBinding,
+	PersonaLineageEdge,
+	PersonaRuntimeManifest,
+)
 
 __all__ = [
 	"Base",
@@ -131,4 +141,12 @@ __all__ = [
 	"ExperimentRun",
 	"ExperimentArm",
 	"ExperimentObservation",
+	"EntityInstanceLink",
+	"EntityContinuityProfile",
+	"EntityPreviewVariant",
+	"CharacterVoiceBinding",
+	"PersonaDatasetBinding",
+	"PersonaIndexBinding",
+	"PersonaLineageEdge",
+	"PersonaRuntimeManifest",
 ]

@@ -78,6 +78,10 @@ class TestSkillDispatcher:
         assert mapping[JobType.ingest_story.value] == "skill_01"
         assert JobType.extract_entities.value in mapping
         assert mapping[JobType.extract_entities.value] == "skill_04"
+        assert JobType.resolve_entity_continuity.value in mapping
+        assert mapping[JobType.resolve_entity_continuity.value] == "skill_21"
+        assert JobType.manage_persona_dataset_index.value in mapping
+        assert mapping[JobType.manage_persona_dataset_index.value] == "skill_22"
         assert JobType.evaluate_quality.value in mapping
         assert mapping[JobType.evaluate_quality.value] == "skill_16"
 
@@ -130,6 +134,34 @@ class TestSkillDispatcher:
             )
             dispatcher.execute_job(job)
             assert mock_dispatch.call_args[0][0] == "skill_04"
+
+    def test_skill21_dispatches_from_new_job_type(self, mock_db):
+        from app.services.skill_dispatcher import SkillDispatcher
+        dispatcher = SkillDispatcher(mock_db)
+        job = self._make_job(
+            JobType.resolve_entity_continuity.value,
+            {"extracted_entities": [{"source_entity_uid": "E1", "label": "Hero"}]},
+        )
+        with patch.object(dispatcher._registry, "dispatch") as mock_dispatch:
+            mock_dispatch.return_value = MagicMock(
+                model_dump=lambda mode: {"status": "continuity_ready"}
+            )
+            dispatcher.execute_job(job)
+            assert mock_dispatch.call_args[0][0] == "skill_21"
+
+    def test_skill22_dispatches_from_new_job_type(self, mock_db):
+        from app.services.skill_dispatcher import SkillDispatcher
+        dispatcher = SkillDispatcher(mock_db)
+        job = self._make_job(
+            JobType.manage_persona_dataset_index.value,
+            {"personas": [{"persona_id": "director_A", "persona_version": "1.0"}]},
+        )
+        with patch.object(dispatcher._registry, "dispatch") as mock_dispatch:
+            mock_dispatch.return_value = MagicMock(
+                model_dump=lambda mode: {"status": "persona_index_ready"}
+            )
+            dispatcher.execute_job(job)
+            assert mock_dispatch.call_args[0][0] == "skill_22"
 
     def test_execute_job_marks_success(self, mock_db):
         from app.services.skill_dispatcher import SkillDispatcher

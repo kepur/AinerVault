@@ -16,6 +16,8 @@ from .skill_16_critic_evaluation import CriticEvaluationService
 from .skill_17_experiment import ExperimentService
 from .skill_18_failure_recovery import FailureRecoveryService
 from .skill_19_compute_budget import ComputeBudgetService
+from .skill_21_entity_registry_continuity import EntityRegistryContinuityService
+from .skill_22_persona_dataset_index import PersonaDatasetIndexService
 
 __all__ = [
     "StoryIngestionService",
@@ -36,4 +38,6 @@ __all__ = [
     "ExperimentService",
     "FailureRecoveryService",
     "ComputeBudgetService",
+    "EntityRegistryContinuityService",
+    "PersonaDatasetIndexService",
 ]

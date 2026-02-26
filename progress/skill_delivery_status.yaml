@@ -1,0 +1,333 @@
+meta:
+  version: "1.0"
+  snapshot_at: "2026-02-27"
+  source_of_truth:
+    - "README_21_22_INTEGRATION_GUIDE.md"
+    - "START_HERE_FOR_AGENTS.md"
+    - "code/docs/runbooks/implementation-status-ledger.md"
+  db_alignment:
+    status: "PARTIAL_DONE"
+    migration:
+      - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
+    covered:
+      - "jobtype enum values: resolve_entity_continuity / manage_persona_dataset_index"
+      - "tables: entity_instance_links / entity_continuity_profiles / entity_preview_variants / character_voice_bindings"
+      - "tables: persona_dataset_bindings / persona_index_bindings / persona_lineage_edges / persona_runtime_manifests"
+    verification:
+      - "python3 -m py_compile code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
+      - "python3 -m alembic heads -> 0f2b6c9b0c7f (head)"
+      - "pytest: tests/skills/test_skill_registry_dispatcher.py"
+      - "pytest: tests/test_modules.py"
+      - "pytest: tests/skills/test_skills_21_22.py"
+    pending:
+      - "执行 alembic upgrade head（需可用 PostgreSQL）"
+      - "SKILL_21/22 service 持久化写库"
+  status_enum:
+    - "NOT_STARTED"
+    - "PARTIAL"
+    - "SERVICE_READY"
+    - "INTEGRATION_READY"
+    - "DONE"
+  gate_enum:
+    - "PASS"
+    - "REVIEW_REQUIRED"
+    - "BLOCKING"
+
+skills:
+  - skill_id: "SKILL_01"
+    name: "Story Ingestion & Normalization"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_01_STORY_INGESTION_NORMALIZATION.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_01.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_01_story_ingestion.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "按 e2e-handoff-test-matrix.md 补齐 E2E 用例"
+      - "按 ainer_contracts.md 复核事件与输出契约字段"
+
+  - skill_id: "SKILL_02"
+    name: "Language Context Router"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_02_LANGUAGE_CONTEXT_ROUTER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_02.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_02_language_context.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "复核错误码域与 ainer_error_code.md 一致性"
+
+  - skill_id: "SKILL_03"
+    name: "Story Scene Shot Planner"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_03_STORY_SCENE_SHOT_PLANNER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_03.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_03_scene_shot_plan.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补齐与 SKILL_21 插入位的依赖测试（04 -> 21 -> 07）"
+
+  - skill_id: "SKILL_04"
+    name: "Entity Extraction & Structuring"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_04_ENTITY_EXTRACTION_STRUCTURING.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_04.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_04_entity_extraction.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "对齐 continuity 相关输出字段，供 SKILL_21 消费"
+
+  - skill_id: "SKILL_05"
+    name: "Audio Asset Planner"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_05_AUDIO_ASSET_PLANNER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_05.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_05_audio_asset_plan.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补充 REVIEW_REQUIRED 分支的触发覆盖测试"
+
+  - skill_id: "SKILL_06"
+    name: "Audio Timeline Composer"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_06_AUDIO_TIMELINE_COMPOSER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_06.py"
+    service: "code/apps/ainern2d-composer/app/services/skills/skill_06_audio_timeline.py"
+    dispatch_binding:
+      type: "composer_dispatcher"
+      path: "code/apps/ainern2d-composer/app/services/skill_dispatcher.py"
+    next_action:
+      - "复核 DTO 输出结构与规范 tracks/timing 字段一致性"
+
+  - skill_id: "SKILL_07"
+    name: "Entity Canonicalization & Cultural Binding"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_07_ENTITY_CANONICALIZATION_CULTURAL_BINDING.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_07.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_07_canonicalization.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "接入 SKILL_21 固定 entity_id 输入并补联调"
+
+  - skill_id: "SKILL_08"
+    name: "Asset Matcher"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_08_ASSET_MATCHER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_08.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_08_asset_matcher.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "复核 asset_library_index 输入来源与真实索引检索链"
+
+  - skill_id: "SKILL_09"
+    name: "Visual Render Planner"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_09_VISUAL_RENDER_PLANNER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_09.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_09_visual_render_plan.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "复核状态机命名与 stage-enum-authority 一致性"
+
+  - skill_id: "SKILL_10"
+    name: "Prompt Planner"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_10_PROMPT_PLANNER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_10.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_10_prompt_planner.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "接入 SKILL_21 continuity anchors 与 SKILL_22 runtime manifest"
+
+  - skill_id: "SKILL_11"
+    name: "RAG KB Manager"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_11_RAG_KB_MANAGER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_11.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_11_rag_kb_manager.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "对齐事件发布要求并补 E2E 验证"
+
+  - skill_id: "SKILL_12"
+    name: "RAG Pipeline Embedding"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_12_RAG_PIPELINE_EMBEDDING.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_12.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_12_rag_embedding.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补充 promote gate 与统计字段契约测试"
+
+  - skill_id: "SKILL_13"
+    name: "Feedback Evolution Loop"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_13_FEEDBACK_EVOLUTION_LOOP.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_13.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_13_feedback_loop.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补齐反馈事件发布链路与回流闭环测试"
+
+  - skill_id: "SKILL_14"
+    name: "Persona Style Pack Manager"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_14_PERSONA_STYLE_PACK_MANAGER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_14.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_14_persona_style.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "与 SKILL_22 dataset/index 绑定字段联调"
+
+  - skill_id: "SKILL_15"
+    name: "Creative Control Policy"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_15_CREATIVE_CONTROL_POLICY.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_15.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_15_creative_control.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "接入 SKILL_22 runtime manifest 决策输入"
+
+  - skill_id: "SKILL_16"
+    name: "Critic Evaluation Suite"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_16_CRITIC_EVALUATION_SUITE.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_16.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_16_critic_evaluation.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "统一分数尺度与契约门槛（0-1 or 0-100）"
+
+  - skill_id: "SKILL_17"
+    name: "Experiment A/B Test Orchestrator"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_17_EXPERIMENT_AB_TEST_ORCHESTRATOR.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_17.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_17_experiment.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补齐真实执行路径（去除纯模拟分支）与胜者晋升门禁"
+
+  - skill_id: "SKILL_18"
+    name: "Failure Recovery & Degradation"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_18_FAILURE_RECOVERY_DEGRADATION_POLICY.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_18.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_18_failure_recovery.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "复核降级阶梯顺序与规格一致性"
+
+  - skill_id: "SKILL_19"
+    name: "Compute-Aware Shot Budgeter"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_19_COMPUTE_AWARE_SHOT_BUDGETER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_19.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_19_compute_budget.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    next_action:
+      - "补历史渲染统计依赖，完善预算回路"
+
+  - skill_id: "SKILL_20"
+    name: "Shot DSL Compiler & Prompt Backend"
+    status: "SERVICE_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_20_SHOT_DSL_COMPILER_PROMPT_BACKEND.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_20.py"
+    service: "code/apps/ainern2d-composer/app/services/skills/skill_20_dsl_compiler.py"
+    dispatch_binding:
+      type: "composer_dispatcher"
+      path: "code/apps/ainern2d-composer/app/services/skill_dispatcher.py"
+    next_action:
+      - "复核 backend 字段命名与错误码域一致性"
+
+  - skill_id: "SKILL_21"
+    name: "Entity Registry & Continuity Manager"
+    status: "INTEGRATION_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_21_ENTITY_REGISTRY_CONTINUITY_MANAGER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_21.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_21_entity_registry_continuity.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    existing_assets:
+      - "code/shared/ainern2d_shared/ainer_db_models/preview_models.py"
+      - "code/apps/ainern2d-studio-api/app/api/v1/preview.py"
+      - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
+    next_action:
+      - "将 service 输出写入 entity_instance_links/entity_continuity_profiles/entity_preview_variants/character_voice_bindings"
+      - "将 continuity exports 接入 08/10/16 输入"
+      - "补 E2E：entity continuity 锁定与重生成闭环"
+
+  - skill_id: "SKILL_22"
+    name: "Persona Dataset & Index Manager"
+    status: "INTEGRATION_READY"
+    gate: "REVIEW_REQUIRED"
+    spec: "SKILL_22_PERSONA_DATASET_INDEX_MANAGER.md"
+    dto: "code/shared/ainern2d_shared/schemas/skills/skill_22.py"
+    service: "code/apps/ainern2d-studio-api/app/services/skills/skill_22_persona_dataset_index.py"
+    dispatch_binding:
+      type: "studio_registry"
+      path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
+    existing_assets:
+      - "code/shared/ainern2d_shared/ainer_db_models/preview_models.py"
+      - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
+    next_action:
+      - "将 service 输出写入 persona_dataset_bindings/persona_index_bindings/persona_lineage_edges/persona_runtime_manifests"
+      - "将 runtime manifests 接入 10/15/17 输入"
+      - "补 E2E：dataset/index/persona lineage 与 preview query"
