@@ -63,13 +63,66 @@ _AUDIO_PATTERNS_EN = re.compile(
     r"\b(?:clang|clash|crowd|shout|thunder|wind|rain|explosion|rumble|splashing)\b", re.I
 )
 
+# Vehicles
+_VEHICLE_ZH = re.compile(
+    r"([\u4e00-\u9fff]{1,6}(?:马车|牛车|轿子|船|舟|筏|飞艇|战车|花轿))"
+)
+_VEHICLE_EN = re.compile(
+    r"\b([A-Za-z]+ (?:carriage|cart|boat|ship|raft|chariot|wagon|sedan))\b", re.I
+)
+
+# Creatures
+_CREATURE_ZH = re.compile(
+    r"([\u4e00-\u9fff]{1,6}(?:龙|凤|虎|鹰|蛇|狼|豹|妖兽|灵兽|坐骑|神兽|鬼怪|魔兽))"
+)
+_CREATURE_EN = re.compile(
+    r"\b([A-Za-z]+ (?:dragon|phoenix|tiger|eagle|serpent|wolf|beast|demon|spirit|mount))\b",
+    re.I,
+)
+
+# Symbols / signage
+_SYMBOL_ZH = re.compile(
+    r"([\u4e00-\u9fff]{1,8}(?:牌匾|招牌|旗帜|阵法|符文|封印|匾额|告示|碑文|旗号))"
+)
+_SYMBOL_EN = re.compile(
+    r"\b([A-Za-z]+ (?:banner|sign|flag|sigil|rune|seal|inscription|plaque|emblem))\b",
+    re.I,
+)
+
 _TYPE_DISPLAY: dict[str, str] = {
     "character": "characters",
     "scene_place": "scene_places",
     "prop": "props",
     "costume": "costumes",
+    "vehicle": "vehicles",
+    "creature": "creatures",
+    "symbol_signage": "symbol_signages",
     "audio_event_candidate": "audio_event_candidates",
 }
+
+# ── Cross-language alias map ───────────────────────────────────────────────────
+# Each tuple is a group of equivalent names across languages.
+_CROSS_LANG_ALIAS_GROUPS: list[tuple[str, ...]] = [
+    ("孙悟空", "Sun Wukong", "Monkey King", "齐天大圣"),
+    ("猪八戒", "Zhu Bajie", "Pigsy"),
+    ("唐三藏", "Tang Sanzang", "Tripitaka", "唐僧"),
+    ("沙悟净", "Sha Wujing", "Sandy"),
+    ("哪吒", "Nezha", "Na Zha"),
+    ("关羽", "Guan Yu", "Lord Guan"),
+    ("诸葛亮", "Zhuge Liang", "孔明", "Kongming"),
+    ("曹操", "Cao Cao"),
+    ("林冲", "Lin Chong"),
+    ("武松", "Wu Song"),
+    ("鲁智深", "Lu Zhishen"),
+    ("白素贞", "Bai Suzhen", "White Snake"),
+    ("许仙", "Xu Xian"),
+    ("花木兰", "Hua Mulan", "Mulan"),
+]
+# Build a lookup: surface_form (lower) → group index for fast matching
+_CROSS_LANG_INDEX: dict[str, int] = {}
+for _idx, _grp in enumerate(_CROSS_LANG_ALIAS_GROUPS):
+    for _name in _grp:
+        _CROSS_LANG_INDEX[_name.lower()] = _idx
 
 
 class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
@@ -94,6 +147,12 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
         review_items: list[str] = []
         lang = input_dto.primary_language or "zh-CN"
 
+        # ── Feature flags ─────────────────────────────────────────────────────
+        ff = input_dto.feature_flags
+        enable_alias = ff.get("enable_entity_alias_resolution", True)
+        enable_confidence = ff.get("enable_confidence_scores", True)
+        confidence_threshold = input_dto.confidence_threshold if enable_confidence else 0.0
+
         # ── [E1] Precheck ─────────────────────────────────────────────────────
         self._record_state(ctx, "INIT", "PRECHECKING")
         if not input_dto.segments:
@@ -110,11 +169,15 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
 
         # ── [E3] Structuring & Typing ─────────────────────────────────────────
         self._record_state(ctx, "EXTRACTING_CANDIDATES", "STRUCTURING_ENTITIES")
-        entities, audio_candidates = self._structure_entities(raw_candidates)
+        entities, audio_candidates = self._structure_entities(
+            raw_candidates, confidence_threshold
+        )
 
         # ── [E4] Alias & Duplicate Handling ───────────────────────────────────
         self._record_state(ctx, "STRUCTURING_ENTITIES", "MERGING_ALIASES")
-        entities, alias_groups, dedup_count = self._merge_aliases(entities)
+        entities, alias_groups, dedup_count = self._merge_aliases(
+            entities, enable_alias
+        )
         if dedup_count:
             warnings.append(f"deduped_{dedup_count}_duplicate_entities")
 
@@ -133,6 +196,9 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
             scene_places=type_counts["scene_place"],
             props=type_counts["prop"],
             costumes=type_counts["costume"],
+            vehicles=type_counts["vehicle"],
+            creatures=type_counts["creature"],
+            symbol_signages=type_counts["symbol_signage"],
             audio_event_candidates=len(audio_candidates),
         )
 
@@ -167,6 +233,9 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
     ) -> list[dict]:
         """Extract raw surface-form candidates from segments + shot entity_hints."""
         is_zh = lang.startswith("zh")
+        enable_audio = input_dto.feature_flags.get(
+            "enable_audio_event_candidate_extraction", True
+        )
         candidates: list[dict] = []
 
         def add(surface: str, etype: str, seg_id: str, confidence: float = 0.75) -> None:
@@ -193,6 +262,22 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
                     add(m.group(1), "prop", seg_id, 0.78)
                 for m in _COSTUME_ZH.finditer(text):
                     add(m.group(1), "costume", seg_id, 0.72)
+                for m in _VEHICLE_ZH.finditer(text):
+                    add(m.group(1), "vehicle", seg_id, 0.76)
+                for m in _CREATURE_ZH.finditer(text):
+                    add(m.group(1), "creature", seg_id, 0.74)
+                for m in _SYMBOL_ZH.finditer(text):
+                    add(m.group(1), "symbol_signage", seg_id, 0.70)
+                # Audio event candidates (ZH)
+                if enable_audio:
+                    for pat, evt_type in (
+                        (_AUDIO_METAL_ZH, "metal_hit"),
+                        (_AUDIO_CROWD_ZH, "crowd"),
+                        (_AUDIO_NATURE_ZH, "nature"),
+                        (_AUDIO_EXPLOSION_ZH, "explosion"),
+                    ):
+                        if pat.search(text):
+                            add(evt_type, "audio_event_candidate", seg_id, 0.60)
             else:
                 for m in _CHAR_ATTRIBUTION_EN.finditer(text):
                     add(m.group(1), "character", seg_id, 0.80)
@@ -202,6 +287,16 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
                     add(m.group(1), "prop", seg_id, 0.75)
                 for m in _COSTUME_EN.finditer(text):
                     add(m.group(1), "costume", seg_id, 0.70)
+                for m in _VEHICLE_EN.finditer(text):
+                    add(m.group(1), "vehicle", seg_id, 0.74)
+                for m in _CREATURE_EN.finditer(text):
+                    add(m.group(1), "creature", seg_id, 0.72)
+                for m in _SYMBOL_EN.finditer(text):
+                    add(m.group(1), "symbol_signage", seg_id, 0.68)
+                # Audio event candidates (EN)
+                if enable_audio:
+                    for m in _AUDIO_PATTERNS_EN.finditer(text):
+                        add(m.group(0).lower(), "audio_event_candidate", seg_id, 0.58)
 
         # Supplement from shot entity_hints
         for shot in input_dto.shot_plan:
@@ -215,6 +310,7 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
     @staticmethod
     def _structure_entities(
         candidates: list[dict],
+        confidence_threshold: float = 0.0,
     ) -> tuple[list[RawEntity], list[AudioEventCandidate]]:
         """Deduplicate surface forms per type and build RawEntity objects."""
         # Group by (surface, type)
@@ -226,17 +322,22 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
         audio_candidates: list[AudioEventCandidate] = []
 
         for (surface, etype), occurrences in grouped.items():
+            confidence = max(c["conf"] for c in occurrences)
+
+            # Drop candidates below confidence threshold
+            if confidence < confidence_threshold:
+                continue
+
             if etype == "audio_event_candidate":
                 audio_candidates.append(
                     AudioEventCandidate(
                         event_type=surface,
                         source_shot_id=occurrences[0].get("seg_id", ""),
-                        confidence=max(c["conf"] for c in occurrences),
+                        confidence=round(confidence, 4),
                     )
                 )
                 continue
 
-            confidence = max(c["conf"] for c in occurrences)
             source_refs = [
                 {"segment_id": c["seg_id"]}
                 for c in occurrences
@@ -261,10 +362,11 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
     @staticmethod
     def _merge_aliases(
         entities: list[RawEntity],
+        enable_alias_resolution: bool = True,
     ) -> tuple[list[RawEntity], list[AliasGroup], int]:
         """
         Merge entities with the same entity_type whose surface_forms are
-        substrings of each other (likely aliases).
+        substrings of each other OR belong to the same cross-language alias group.
         """
         by_type: dict[str, list[RawEntity]] = defaultdict(list)
         for e in entities:
@@ -280,23 +382,53 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
                 if primary.entity_uid in merged_ids:
                     continue
                 cluster = [primary]
+                cross_lang_members: list[str] = []
+
+                # Determine cross-language group index for primary
+                primary_grp_idx = _CROSS_LANG_INDEX.get(
+                    primary.surface_form.lower()
+                ) if enable_alias_resolution else None
+
                 for secondary in group[i + 1:]:
                     if secondary.entity_uid in merged_ids:
                         continue
-                    # Substring match as alias signal
+
+                    matched = False
                     a, b = primary.surface_form, secondary.surface_form
+
+                    # 1. Substring match (original logic)
                     if a in b or b in a:
+                        matched = True
+
+                    # 2. Cross-language alias match
+                    if not matched and enable_alias_resolution:
+                        sec_grp_idx = _CROSS_LANG_INDEX.get(b.lower())
+                        if (
+                            primary_grp_idx is not None
+                            and sec_grp_idx is not None
+                            and primary_grp_idx == sec_grp_idx
+                        ):
+                            matched = True
+
+                    if matched:
                         cluster.append(secondary)
                         merged_ids.add(secondary.entity_uid)
                         dedup_count += 1
 
                 kept.append(primary)
                 if len(cluster) > 1:
+                    # Collect cross-language aliases from the known map
+                    if enable_alias_resolution and primary_grp_idx is not None:
+                        cross_lang_members = list(
+                            _CROSS_LANG_ALIAS_GROUPS[primary_grp_idx]
+                        )
+
                     alias_groups.append(
                         AliasGroup(
                             alias_group_id=f"AG_{uuid4().hex[:6].upper()}",
                             canonical_hint=primary.surface_form,
                             members=[e.surface_form for e in cluster],
+                            cross_language_aliases=cross_lang_members,
                         )
                     )
 

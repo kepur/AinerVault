@@ -12,6 +12,9 @@ class EntitySummary(BaseSchema):
     scene_places: int = 0
     props: int = 0
     costumes: int = 0
+    vehicles: int = 0
+    creatures: int = 0
+    symbol_signages: int = 0
     audio_event_candidates: int = 0
 
 
@@ -28,6 +31,7 @@ class AliasGroup(BaseSchema):
     alias_group_id: str
     canonical_hint: str
     members: list[str] = []
+    cross_language_aliases: list[str] = []
 
 
 class EntitySceneShotLink(BaseSchema):
@@ -58,6 +62,7 @@ class Skill04Input(BaseSchema):
     # Options
     existing_entities: list[dict] = []
     feature_flags: dict = {}
+    confidence_threshold: float = 0.0
 
 
 class Skill04Output(BaseSchema):
