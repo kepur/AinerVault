@@ -1,32 +1,71 @@
 """SKILL 04: Entity Extraction & Structuring — Input/Output DTOs."""
 from __future__ import annotations
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
-class ExtractedEntity(BaseSchema):
-    entity_id: str
-    canonical_name: str
-    entity_type: str  # character | location | prop | clothing | creature
-    aliases: list[str] = []
-    first_appearance_segment: int = 0
-    description: str = ""
+# ── Sub-objects ───────────────────────────────────────────────────────────────
+
+class EntitySummary(BaseSchema):
+    total_entities: int = 0
+    characters: int = 0
+    scene_places: int = 0
+    props: int = 0
+    costumes: int = 0
+    audio_event_candidates: int = 0
+
+
+class RawEntity(BaseSchema):
+    entity_uid: str
+    surface_form: str
+    entity_type: str  # character | scene_place | prop | costume | vehicle | creature | symbol_signage | audio_event_candidate
     attributes: dict = {}
+    source_refs: list[dict] = []  # [{"segment_id": str}]
+    confidence: float = 0.8
 
 
-class EntityRelationship(BaseSchema):
-    source_entity_id: str
-    target_entity_id: str
-    relation_type: str  # knows | owns | located_in | wears
+class AliasGroup(BaseSchema):
+    alias_group_id: str
+    canonical_hint: str
+    members: list[str] = []
 
+
+class EntitySceneShotLink(BaseSchema):
+    entity_uid: str
+    scene_ids: list[str] = []
+    shot_ids: list[str] = []
+    first_appearance_shot_id: str = ""
+    criticality: str = "normal"  # critical | important | normal | background
+
+
+class AudioEventCandidate(BaseSchema):
+    event_type: str  # metal_hit | wind_rain | crowd | explosion | footsteps | nature
+    source_shot_id: str = ""
+    confidence: float = 0.5
+
+
+# ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill04Input(BaseSchema):
+    # From SKILL 01
     segments: list[dict] = []
-    language_code: str = "zh-CN"
+    primary_language: str = "zh-CN"
+    # From SKILL 03
+    scene_plan: list[dict] = []
+    shot_plan: list[dict] = []
+    # From SKILL 02
+    culture_hint: str = ""
+    # Options
     existing_entities: list[dict] = []
+    feature_flags: dict = {}
 
 
 class Skill04Output(BaseSchema):
-    entities: list[ExtractedEntity] = []
-    relationships: list[EntityRelationship] = []
-    dedup_count: int = 0
+    entity_summary: EntitySummary = EntitySummary()
+    entities: list[RawEntity] = []
+    entity_aliases: list[AliasGroup] = []
+    entity_scene_shot_links: list[EntitySceneShotLink] = []
+    audio_event_candidates: list[AudioEventCandidate] = []
+    warnings: list[str] = []
+    review_required_items: list[str] = []
     status: str = "ready_for_canonicalization"

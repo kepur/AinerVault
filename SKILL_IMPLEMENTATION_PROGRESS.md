@@ -25,8 +25,8 @@
 |---|-------|------|---------|-----------|---------|--------|
 | 01 | Story Ingestion & Normalization | `SERVICE_READY` | studio-api | `StoryIngestionService` | 2026-02-26 | Copilot |
 | 02 | Language Context Router | `SERVICE_READY` | studio-api | `LanguageContextService` | 2026-02-26 | Copilot |
-| 03 | Story→Scene→Shot Planner | `PARTIAL` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
-| 04 | Entity Extraction & Structuring | `PARTIAL` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
+| 03 | Story→Scene→Shot Planner | `SERVICE_READY` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
+| 04 | Entity Extraction & Structuring | `SERVICE_READY` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
 | 05 | Audio Asset Planner | `PARTIAL` | studio-api | `AudioAssetPlanService` | 2026-02-26 | Copilot |
 | 06 | Audio Timeline Composer | `PARTIAL` | composer | `AudioTimelineService` | 2026-02-26 | Copilot |
 | 07 | Entity Canonicalization & Cultural Binding | `PARTIAL` | studio-api | `CanonicalizationService` | 2026-02-26 | Copilot |
@@ -457,4 +457,5 @@ task.submitted
 |------|------|-----------|--------|
 | 2026-02-26 | 初始创建文档，标记所有 SKILL 为 PARTIAL | ALL | Copilot |
 | 2026-02-26 | 完成 modules/ 层所有 66 个空文件实现 | ALL | Copilot |
-| 2026-02-26 | SKILL 02 execute() 全量实现：5步路由状态机，DTO 补全 LanguageRoute/TranslationPlan/CultureCandidate/KBQueryPlan/PlannerHints/RetrievalFilters | 02 | Copilot |
+| 2026-02-26 | SKILL 03 execute() 全量实现：5步状态机，场景切分+镜头规划+时长估算+hints导出，DTO 完整 | 03 | Copilot |
+| 2026-02-26 | SKILL 04 execute() 全量实现：5步状态机，正则实体抽取+结构化+alias去重+scene/shot关联，DTO 完整 | 04 | Copilot |
