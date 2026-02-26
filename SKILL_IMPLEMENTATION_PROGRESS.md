@@ -31,17 +31,17 @@
 | 06 | Audio Timeline Composer | `PARTIAL` | composer | `AudioTimelineService` | 2026-02-26 | Copilot |
 | 07 | Entity Canonicalization & Cultural Binding | `SERVICE_READY` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
 | 08 | Asset Matcher | `SERVICE_READY` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
-| 09 | Visual Render Planner | `PARTIAL` | studio-api | `VisualRenderPlanService` | 2026-02-26 | Copilot |
-| 10 | Prompt Planner | `PARTIAL` | studio-api | `PromptPlannerService` | 2026-02-26 | Copilot |
-| 11 | RAG KB Manager | `PARTIAL` | studio-api | `RagKBManagerService` | 2026-02-26 | Copilot |
-| 12 | RAG Pipeline & Embedding | `PARTIAL` | studio-api | `RagEmbeddingService` | 2026-02-26 | Copilot |
-| 13 | Feedback Evolution Loop | `PARTIAL` | studio-api | `FeedbackLoopService` | 2026-02-26 | Copilot |
-| 14 | Persona & Style Pack Manager | `PARTIAL` | studio-api | `PersonaStyleService` | 2026-02-26 | Copilot |
-| 15 | Creative Control Policy | `PARTIAL` | studio-api | `CreativeControlService` | 2026-02-26 | Copilot |
-| 16 | Critic Evaluation Suite | `PARTIAL` | studio-api | `CriticEvaluationService` | 2026-02-26 | Copilot |
-| 17 | Experiment & A/B Test | `PARTIAL` | studio-api | `ExperimentService` | 2026-02-26 | Copilot |
-| 18 | Failure Recovery & Degradation | `PARTIAL` | studio-api | `FailureRecoveryService` | 2026-02-26 | Copilot |
-| 19 | Compute-Aware Shot Budgeter | `PARTIAL` | studio-api | `ComputeBudgetService` | 2026-02-26 | Copilot |
+| 09 | Visual Render Planner | `SERVICE_READY` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
+| 10 | Prompt Planner | `SERVICE_READY` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
+| 11 | RAG KB Manager | `SERVICE_READY` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
+| 12 | RAG Pipeline & Embedding | `SERVICE_READY` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
+| 13 | Feedback Evolution Loop | `SERVICE_READY` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
+| 14 | Persona & Style Pack Manager | `SERVICE_READY` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
+| 15 | Creative Control Policy | `SERVICE_READY` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
+| 16 | Critic Evaluation Suite | `SERVICE_READY` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
+| 17 | Experiment & A/B Test | `SERVICE_READY` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
+| 18 | Failure Recovery & Degradation | `SERVICE_READY` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
+| 19 | Compute-Aware Shot Budgeter | `SERVICE_READY` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
 | 20 | Shot DSL Compiler & Prompt Backend | `PARTIAL` | composer | `DslCompilerService` | 2026-02-26 | Copilot |
 
 ---
