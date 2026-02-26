@@ -1,6 +1,8 @@
 """SKILL 02: Language Context Router — Input/Output DTOs."""
 from __future__ import annotations
 
+from typing import Optional
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
@@ -45,6 +47,13 @@ class RetrievalFilters(BaseSchema):
     filter_strength: str = "soft_preference"  # hard_constraint | soft_preference
 
 
+class RecipeContextSeed(BaseSchema):
+    """Seed context for RAG Recipe assembly (§9 of spec)."""
+    recipe_id: Optional[str] = None
+    kb_version_id: Optional[str] = None
+    culture_recipe_hint: str = ""
+
+
 # ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill02Input(BaseSchema):
@@ -64,12 +73,15 @@ class Skill02Input(BaseSchema):
 
 
 class Skill02Output(BaseSchema):
+    version: str = "1.0"
     language_route: LanguageRoute = LanguageRoute()
     translation_plan: TranslationPlan = TranslationPlan()
     culture_candidates: list[CultureCandidate] = []
     kb_query_plan: KBQueryPlan = KBQueryPlan()
     planner_hints: PlannerHints = PlannerHints()
     retrieval_filters: RetrievalFilters = RetrievalFilters()
+    recipe_context_seed: RecipeContextSeed = RecipeContextSeed()
+    kb_version_id: Optional[str] = None
     warnings: list[str] = []
     review_required_items: list[str] = []
     status: str = "ready_for_planning"

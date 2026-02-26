@@ -113,7 +113,7 @@ class TestSkill02:
         from ainern2d_shared.schemas.skills.skill_02 import Skill02Input
         svc = self._make_service(mock_db)
         inp = Skill02Input(primary_language="", normalized_text="some text")
-        with pytest.raises(ValueError, match="REQ-VALIDATION"):
+        with pytest.raises(ValueError, match="LANG-VALIDATION"):
             svc.execute(inp, ctx)
 
 

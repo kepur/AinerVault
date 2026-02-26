@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from typing import ClassVar
+
 from loguru import logger
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,7 @@ from ainern2d_shared.schemas.skills.skill_02 import (
     KBQueryPlan,
     LanguageRoute,
     PlannerHints,
+    RecipeContextSeed,
     RetrievalFilters,
     Skill02Input,
     Skill02Output,
@@ -21,7 +24,9 @@ from ainern2d_shared.services.base_skill import BaseSkillService, SkillContext
 
 # ── Culture routing rule table ─────────────────────────────────────────────────
 # Each rule: (lang_prefix, genre_keywords, world_keywords, pack_id, base_confidence, tags)
-_CULTURE_RULES: list[tuple[str, list[str], list[str], str, float, list[str]]] = [
+CultureRule = tuple[str, list[str], list[str], str, float, list[str]]
+
+_CULTURE_RULES: list[CultureRule] = [
     ("zh", ["wuxia", "武侠", "martial", "jianghu", "江湖"],
      ["historical", "ancient", "传统"],
      "cn_wuxia", 0.91, ["genre_wuxia", "historical_style", "zh_primary"]),
@@ -78,21 +83,47 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
     skill_id = "skill_02"
     skill_name = "LanguageContextService"
 
+    # Extensible culture rules — append via register_culture_rule()
+    _extra_culture_rules: ClassVar[list[CultureRule]] = []
+
     def __init__(self, db: Session) -> None:
         super().__init__(db)
+
+    # ── Extension point for culture rules ──────────────────────────────────────
+
+    @classmethod
+    def register_culture_rule(
+        cls,
+        lang_prefix: str,
+        genre_keywords: list[str],
+        world_keywords: list[str],
+        pack_id: str,
+        base_confidence: float,
+        tags: list[str],
+    ) -> None:
+        """Register an additional culture routing rule at runtime."""
+        cls._extra_culture_rules.append(
+            (lang_prefix, genre_keywords, world_keywords, pack_id, base_confidence, tags)
+        )
+
+    @classmethod
+    def get_all_culture_rules(cls) -> list[CultureRule]:
+        """Return built-in rules merged with dynamically registered rules."""
+        return _CULTURE_RULES + cls._extra_culture_rules
 
     # ── Public entry ───────────────────────────────────────────────────────────
 
     def execute(self, input_dto: Skill02Input, ctx: SkillContext) -> Skill02Output:
         warnings: list[str] = []
         review_items: list[str] = []
+        flags = input_dto.feature_flags or {}
 
         # ── [R1] Precheck ─────────────────────────────────────────────────────
         self._record_state(ctx, "INIT", "PRECHECKING")
         issues = self._precheck(input_dto)
         if issues:
             self._record_state(ctx, "PRECHECKING", "FAILED")
-            raise ValueError(f"REQ-VALIDATION-001: {'; '.join(issues)}")
+            raise ValueError(f"LANG-VALIDATION-001: {'; '.join(issues)}")
 
         src_lang = input_dto.primary_language or "unknown"
         tgt_lang = (
@@ -114,13 +145,34 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
 
         # ── [R2] Language Route Decision ──────────────────────────────────────
         self._record_state(ctx, "PRECHECKING", "DECIDING_LANGUAGE_ROUTE")
+
+        # feature_flag: enable_translation_route (default True)
+        translation_enabled = flags.get("enable_translation_route", True)
         language_route, translation_plan = self._decide_language_route(
-            src_lang, tgt_lang, input_dto
+            src_lang, tgt_lang, input_dto, translation_enabled=translation_enabled,
         )
+
+        # feature_flag: enable_multilingual_output_plan
+        if flags.get("enable_multilingual_output_plan") and input_dto.secondary_languages:
+            language_route.bilingual_output = True
+            if translation_plan.mode == "none":
+                translation_plan.mode = "bilingual"
+            warnings.append(
+                "multilingual_output_plan_enabled: secondary languages included"
+            )
 
         # ── [R3] Culture Candidate Routing ────────────────────────────────────
         self._record_state(ctx, "DECIDING_LANGUAGE_ROUTE", "ROUTING_CULTURE_CANDIDATES")
-        culture_candidates = self._route_culture_candidates(src_lang, genre, world, input_dto)
+
+        # feature_flag: enable_culture_candidate_export (default True)
+        culture_export_enabled = flags.get("enable_culture_candidate_export", True)
+        culture_candidates = self._route_culture_candidates(
+            src_lang, genre, world, input_dto,
+        )
+
+        if not culture_export_enabled:
+            culture_candidates = []
+            warnings.append("culture_candidate_export_disabled_by_feature_flag")
 
         if not culture_candidates:
             warnings.append("no_culture_candidates_matched: generic fallback used")
@@ -137,6 +189,12 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
             culture_candidates, genre, world, language_route
         )
 
+        # ── §9 Recipe Context Seed & KB version tracking ─────────────────────
+        kb_version_id = input_dto.project_defaults.get("kb_version_id")
+        recipe_context_seed = self._build_recipe_context_seed(
+            culture_candidates, kb_version_id, ctx,
+        )
+
         # ── Final status ──────────────────────────────────────────────────────
         needs_review = bool(review_items) or len(warnings) > 3
         status = "review_required" if needs_review else "ready_for_planning"
@@ -149,12 +207,15 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
         )
 
         return Skill02Output(
+            version=ctx.schema_version,
             language_route=language_route,
             translation_plan=translation_plan,
             culture_candidates=culture_candidates,
             kb_query_plan=kb_query_plan,
             planner_hints=planner_hints,
             retrieval_filters=retrieval_filters,
+            recipe_context_seed=recipe_context_seed,
+            kb_version_id=kb_version_id,
             warnings=warnings,
             review_required_items=review_items,
             status=status,
@@ -180,8 +241,12 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
         src_lang: str,
         tgt_lang: str,
         input_dto: Skill02Input,
+        *,
+        translation_enabled: bool = True,
     ) -> tuple[LanguageRoute, TranslationPlan]:
-        translation_required = _lang_prefix(src_lang) != _lang_prefix(tgt_lang)
+        translation_required = (
+            _lang_prefix(src_lang) != _lang_prefix(tgt_lang) and translation_enabled
+        )
         bilingual = bool(
             input_dto.user_overrides.get("bilingual_output")
             or input_dto.project_defaults.get("bilingual_output")
@@ -214,8 +279,9 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
 
     # ── [R3] Culture Candidate Routing ─────────────────────────────────────────
 
-    @staticmethod
+    @classmethod
     def _route_culture_candidates(
+        cls,
         src_lang: str,
         genre: str,
         world: str,
@@ -237,8 +303,8 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
             )
             seen_packs.add(override_pack)
 
-        # Rule-based matching
-        for rule_lang, genre_keys, world_keys, pack_id, base_conf, tags in _CULTURE_RULES:
+        # Rule-based matching (built-in + extensions)
+        for rule_lang, genre_keys, world_keys, pack_id, base_conf, tags in cls.get_all_culture_rules():
             if pack_id in seen_packs:
                 continue
             if not src_lang.startswith(rule_lang) and lang_prefix != rule_lang:
@@ -352,6 +418,25 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
             era=world,
             style_mode=genre or "generic",
             filter_strength=strength,
+        )
+
+    # ── §9 Recipe Context Seed ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_recipe_context_seed(
+        candidates: list[CultureCandidate],
+        kb_version_id: str | None,
+        ctx: SkillContext,
+    ) -> RecipeContextSeed:
+        """Build recipe context seed for downstream RAG Recipe assembly (§9)."""
+        top_pack = candidates[0].culture_pack_id if candidates else "generic"
+        # recipe_id derived from run context; consumers may override later
+        recipe_id = f"recipe_{ctx.run_id}" if ctx.run_id else None
+
+        return RecipeContextSeed(
+            recipe_id=recipe_id,
+            kb_version_id=kb_version_id,
+            culture_recipe_hint=top_pack,
         )
 
 
