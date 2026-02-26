@@ -156,6 +156,30 @@ class TestSkill15:
         out = svc.execute(inp, ctx)
         assert "candidate_generation" in out.exploration_policy
 
+    def test_runtime_manifest_is_consumed(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_15 import Skill15Input
+        svc = self._make_service(mock_db)
+        inp = Skill15Input(
+            persona_dataset_index_result={
+                "runtime_manifests": [
+                    {
+                        "persona_ref": "director_A@2.0",
+                        "style_pack_ref": "style_A@2.0",
+                        "policy_override_ref": "policy_A@2.0",
+                        "critic_profile_ref": "critic_A@2.0",
+                        "resolved_dataset_ids": ["DS_001", "DS_002"],
+                        "resolved_index_ids": ["IDX_001"],
+                    }
+                ]
+            },
+            active_persona_ref="director_A@2.0",
+        )
+        out = svc.execute(inp, ctx)
+        rules = [c.rule for c in (out.hard_constraints + out.soft_constraints + out.guidelines)]
+        assert "use_persona_style_pack" in rules
+        assert "apply_persona_policy_override" in rules
+        assert "critic_profile_alignment" in rules
+
 
 # ── SKILL 16: CriticEvaluationService ────────────────────────────────────────
 
@@ -193,6 +217,35 @@ class TestSkill16:
         inp = Skill16Input(run_id="")
         with pytest.raises(ValueError, match="CRITIC-VALIDATION"):
             svc.execute(inp, ctx)
+
+    def test_continuity_exports_are_consumed(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_16 import Skill16Input, ShotPlanEntry
+        svc = self._make_service(mock_db)
+        inp = Skill16Input(
+            run_id="run_continuity",
+            composed_artifact_uri="s3://bucket/run/final.mp4",
+            shot_plan=[
+                ShotPlanEntry(
+                    shot_id="S1",
+                    scene_id="SC1",
+                    description="hero closeup",
+                    characters=["CHAR_0001"],
+                )
+            ],
+            continuity_exports={
+                "prompt_consistency_anchors": [
+                    {"entity_id": "CHAR_0001", "continuity_status": "active"}
+                ],
+                "critic_rules_baseline": [
+                    {"entity_id": "CHAR_0001", "identity_lock": True}
+                ],
+            },
+        )
+        out = svc.execute(inp, ctx)
+        character_score = next(ds for ds in out.dimension_scores if ds.dimension == "character_consistency")
+        checks = {ev.check_name for ev in character_score.evidence}
+        assert "continuity_critic_rules_present" in checks
+        assert "identity_lock_alignment" in checks
 
 
 # ── SKILL 17: ExperimentService ──────────────────────────────────────────────
@@ -238,6 +291,33 @@ class TestSkill17:
         w1 = svc.execute(inp, ctx).winner_variant_id
         w2 = svc.execute(inp, ctx).winner_variant_id
         assert w1 == w2
+
+    def test_runtime_manifest_injected_to_variants(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_17 import VariantConfig, Skill17Input
+        svc = self._make_service(mock_db)
+        inp = Skill17Input(
+            control_variant=VariantConfig(variant_id="v_ctrl"),
+            test_variants=[VariantConfig(variant_id="v_test")],
+            persona_dataset_index_result={
+                "runtime_manifests": [
+                    {
+                        "persona_ref": "director_A@2.0",
+                        "style_pack_ref": "style_A@2.0",
+                        "policy_override_ref": "policy_A@2.0",
+                        "critic_profile_ref": "critic_A@2.0",
+                        "resolved_dataset_ids": ["DS_001"],
+                        "resolved_index_ids": ["KB_V1"],
+                    }
+                ]
+            },
+            active_persona_ref="director_A@2.0",
+        )
+        out = svc.execute(inp, ctx)
+        for variant in out.variants:
+            assert variant.persona_version == "director_A@2.0"
+            assert variant.kb_version == "KB_V1"
+            assert variant.prompt_policy_version == "policy_A@2.0"
+            assert variant.param_overrides.get("persona_style_pack_ref") == "style_A@2.0"
 
 
 # ── SKILL 18: FailureRecoveryService ─────────────────────────────────────────

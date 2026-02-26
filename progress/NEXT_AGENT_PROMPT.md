@@ -19,6 +19,8 @@
 - SKILL_10 已接入：
   - SKILL_21 `continuity_exports`
   - SKILL_22 `runtime_manifests`（支持 `active_persona_ref`）
+- SKILL_08 / SKILL_16 已接入 SKILL_21 continuity exports
+- SKILL_15 / SKILL_17 已接入 SKILL_22 runtime manifests
 
 2.1) 开发前强制校验（MUST）：
 - 先运行：
@@ -28,11 +30,11 @@
 
 3) 本轮只做一个目标（二选一）：
 A. 做 E2E：`04 -> 21 -> 07 -> 08 -> 10 -> 20`，验证 continuity anchors 在 prompt/DSL 中可追溯
-B. 完成 SKILL_15 或 SKILL_17 对 SKILL_22 runtime manifest 的消费接线（只选一个）
+B. 做 E2E：`11/12/14 -> 22 -> 15/17`，验证 runtime manifest 对策略与实验配置生效
 
 4) 执行边界：
 - 允许修改：
-  - 目标 SKILL 对应的 DTO/Service/Test 文件
+  - 目标 SKILL 对应的 DTO/Service/Test 文件与必要 API
   - 必要时：skill_registry.py / skill_dispatcher.py / orchestrator_dag.py
   - progress/skill_delivery_status.yaml（必须更新）
 - 不允许大范围重构其他 skill。

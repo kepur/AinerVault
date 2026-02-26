@@ -150,6 +150,10 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
         # ── Generate variant configs ─────────────────────────────────────────
         self._record_state(ctx, "DESIGNING", "GENERATING_VARIANTS")
         all_variants = self._generate_variant_configs(control, test_variants)
+        all_variants, runtime_warnings = self._inject_runtime_manifest_context(
+            all_variants, input_dto,
+        )
+        warnings.extend(runtime_warnings)
         history.append(_history(
             "GENERATING_VARIANTS", "variants_generated", f"count={len(all_variants)}",
         ))
@@ -302,6 +306,97 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
         control_copy = control.model_copy(update={"is_control": True})
         tests = [v.model_copy(update={"is_control": False}) for v in test_variants]
         return [control_copy] + tests
+
+    @staticmethod
+    def _inject_runtime_manifest_context(
+        variants: list[VariantConfig],
+        input_dto: Skill17Input,
+    ) -> tuple[list[VariantConfig], list[str]]:
+        runtime_result = input_dto.persona_dataset_index_result or {}
+        manifests = runtime_result.get("runtime_manifests", [])
+        if not isinstance(manifests, list) or not manifests:
+            return variants, []
+
+        warnings: list[str] = []
+        manifest_map: dict[str, dict] = {}
+        for item in manifests:
+            if not isinstance(item, dict):
+                continue
+            runtime_manifest = dict(item.get("runtime_manifest") or {})
+            persona_ref = str(
+                item.get("persona_ref")
+                or runtime_manifest.get("persona_ref")
+                or ""
+            )
+            if persona_ref:
+                manifest_map[persona_ref] = item
+
+        default_persona_ref = input_dto.active_persona_ref or (
+            next(iter(manifest_map.keys())) if manifest_map else ""
+        )
+        enriched: list[VariantConfig] = []
+        for variant in variants:
+            variant_ref = variant.persona_version or str(
+                (variant.param_overrides or {}).get("persona_ref") or ""
+            )
+            if not variant_ref and default_persona_ref:
+                variant_ref = default_persona_ref
+
+            manifest = manifest_map.get(variant_ref, {})
+            runtime_manifest = dict(manifest.get("runtime_manifest") or {})
+            dataset_ids = list(
+                manifest.get("resolved_dataset_ids")
+                or runtime_manifest.get("dataset_ids")
+                or []
+            )
+            index_ids = list(
+                manifest.get("resolved_index_ids")
+                or runtime_manifest.get("index_ids")
+                or []
+            )
+            style_ref = str(
+                manifest.get("style_pack_ref")
+                or runtime_manifest.get("style_pack_ref")
+                or ""
+            )
+            policy_ref = str(
+                manifest.get("policy_override_ref")
+                or runtime_manifest.get("policy_override_ref")
+                or ""
+            )
+            critic_ref = str(
+                manifest.get("critic_profile_ref")
+                or runtime_manifest.get("critic_profile_ref")
+                or ""
+            )
+
+            if variant_ref and not manifest:
+                warnings.append(f"persona_runtime_not_found:{variant.variant_id}:{variant_ref}")
+
+            updated_overrides = dict(variant.param_overrides or {})
+            if variant_ref:
+                updated_overrides.setdefault("persona_ref", variant_ref)
+            if dataset_ids:
+                updated_overrides.setdefault("persona_dataset_ids", dataset_ids)
+            if index_ids:
+                updated_overrides.setdefault("persona_index_ids", index_ids)
+            if style_ref:
+                updated_overrides.setdefault("persona_style_pack_ref", style_ref)
+            if critic_ref:
+                updated_overrides.setdefault("persona_critic_profile_ref", critic_ref)
+
+            enriched.append(
+                variant.model_copy(
+                    update={
+                        "persona_version": variant_ref or variant.persona_version,
+                        "kb_version": variant.kb_version or (index_ids[0] if index_ids else ""),
+                        "prompt_policy_version": variant.prompt_policy_version or policy_ref,
+                        "param_overrides": updated_overrides,
+                    }
+                )
+            )
+
+        return enriched, warnings
 
     # ── Traffic allocation ─────────────────────────────────────────────────────
 

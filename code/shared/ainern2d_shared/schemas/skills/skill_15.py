@@ -141,6 +141,8 @@ class Skill15Input(BaseSchema):
     audio_event_manifest: dict = {}         # from SKILL 06
     culture_constraints: list[dict] = []    # from SKILL 07
     persona_profile: dict = {}              # from SKILL 14
+    persona_dataset_index_result: dict = {}  # from SKILL 22
+    active_persona_ref: str = ""
     project_constraints: dict = {}          # project-level budget / SLA
 
     # Optional inputs

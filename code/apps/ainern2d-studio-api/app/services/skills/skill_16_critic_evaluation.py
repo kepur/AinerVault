@@ -632,6 +632,14 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
 # Dimension evaluators — one per critic dimension
 # ═══════════════════════════════════════════════════════════════
 
+
+def _resolve_continuity_exports(input_dto: Skill16Input) -> dict[str, Any]:
+    continuity_exports = input_dto.continuity_exports or {}
+    continuity_result = input_dto.entity_registry_continuity_result or {}
+    if not continuity_exports and isinstance(continuity_result, dict):
+        continuity_exports = dict(continuity_result.get("continuity_exports", {}))
+    return continuity_exports if isinstance(continuity_exports, dict) else {}
+
 def _evaluate_visual_quality(
     shot: ShotPlanEntry, input_dto: Skill16Input, num_checks: int, dim: str,
 ) -> DimensionScore:
@@ -803,6 +811,44 @@ def _evaluate_character_consistency(
         ))
         scores.append(82.0)
 
+    continuity_exports = _resolve_continuity_exports(input_dto)
+    critic_rules = continuity_exports.get("critic_rules_baseline", [])
+    if num_checks >= 2 and isinstance(critic_rules, list):
+        has_rules = bool(critic_rules)
+        evidence.append(EvidenceItem(
+            check_name="continuity_critic_rules_present",
+            passed=has_rules,
+            confidence=0.85 if has_rules else 0.55,
+            detail=(
+                "Continuity critic rules loaded from SKILL 21"
+                if has_rules
+                else "No continuity critic rules"
+            ),
+            ref_shot_id=shot.shot_id,
+        ))
+        scores.append(88.0 if has_rules else 72.0)
+
+        locked_ids = {
+            str(rule.get("entity_id") or "")
+            for rule in critic_rules
+            if isinstance(rule, dict) and rule.get("identity_lock")
+        }
+        if locked_ids and shot.characters:
+            shot_ids = set(shot.characters)
+            matched = bool(shot_ids & locked_ids)
+            evidence.append(EvidenceItem(
+                check_name="identity_lock_alignment",
+                passed=matched,
+                confidence=0.8,
+                detail=(
+                    f"identity_lock_ids={sorted(locked_ids)} shot_characters={shot.characters}"
+                    if matched
+                    else f"identity_lock_miss shot_characters={shot.characters}"
+                ),
+                ref_shot_id=shot.shot_id,
+            ))
+            scores.append(90.0 if matched else 65.0)
+
     avg = round(sum(scores) / len(scores), 2) if scores else 0.0
     return DimensionScore(
         dimension=dim, score=avg, max_score=100.0,
@@ -835,6 +881,28 @@ def _evaluate_cultural_accuracy(
             ref_shot_id=shot.shot_id,
         ))
         scores.append(88.0)
+
+    continuity_exports = _resolve_continuity_exports(input_dto)
+    prompt_anchors = continuity_exports.get("prompt_consistency_anchors", [])
+    if num_checks >= 2 and isinstance(prompt_anchors, list):
+        has_anchors = bool(prompt_anchors)
+        needs_review = any(
+            isinstance(anchor, dict)
+            and str(anchor.get("continuity_status") or "") == "needs_review"
+            for anchor in prompt_anchors
+        )
+        evidence.append(EvidenceItem(
+            check_name="continuity_status_gate",
+            passed=has_anchors and not needs_review,
+            confidence=0.75 if has_anchors else 0.55,
+            detail=(
+                "continuity statuses all active"
+                if has_anchors and not needs_review
+                else "continuity status needs_review found or anchors missing"
+            ),
+            ref_shot_id=shot.shot_id,
+        ))
+        scores.append(85.0 if has_anchors and not needs_review else 65.0)
 
     avg = round(sum(scores) / len(scores), 2) if scores else 0.0
     return DimensionScore(

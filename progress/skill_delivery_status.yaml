@@ -238,7 +238,7 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "接入 SKILL_22 runtime manifest 决策输入"
+      - "补 E2E：验证 22 runtime manifest -> 15 policy stack 决策影响"
 
   - skill_id: "SKILL_16"
     name: "Critic Evaluation Suite"
@@ -264,6 +264,7 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
+      - "补 E2E：验证 22 runtime manifest -> 17 variant version lock 注入"
       - "补齐真实执行路径（去除纯模拟分支）与胜者晋升门禁"
 
   - skill_id: "SKILL_18"
@@ -321,7 +322,6 @@ skills:
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
     next_action:
-      - "将 continuity exports 接入 08/10/16 输入"
       - "补 E2E：entity continuity 锁定与重生成闭环"
 
   - skill_id: "SKILL_22"
@@ -339,5 +339,4 @@ skills:
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
     next_action:
-      - "将 runtime manifests 接入 10/15/17 输入"
       - "补 E2E：dataset/index/persona lineage 与 preview query"

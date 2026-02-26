@@ -104,10 +104,13 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
     def execute(self, input_dto: Skill15Input, ctx: SkillContext) -> Skill15Output:
         audit: list[AuditEntry] = []
         flags = self._parse_flags(input_dto.feature_flags)
+        effective_input, runtime_review_items = self._inject_persona_runtime_profile(
+            input_dto, audit,
+        )
 
         # ── INIT → LOADING_CONSTRAINTS ───────────────────────────
         self._record_state(ctx, "INIT", "LOADING_CONSTRAINTS")
-        all_constraints = self._load_all_constraints(input_dto, flags, audit)
+        all_constraints = self._load_all_constraints(effective_input, flags, audit)
         self._audit(
             audit, "LOADING_CONSTRAINTS", "loaded_constraints",
             decision=f"total={len(all_constraints)}",
@@ -156,7 +159,7 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
         bands: list[ExplorationBand] = []
         if flags.enable_exploration_band:
             bands = self._calculate_exploration_bands(hard, soft, audit)
-        exploration_policy = self._build_exploration_policy(input_dto, bands, flags)
+        exploration_policy = self._build_exploration_policy(effective_input, bands, flags)
 
         # ── CALCULATING_BANDS → EXPORTING ────────────────────────
         self._record_state(ctx, "CALCULATING_BANDS", "EXPORTING")
@@ -170,13 +173,13 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
         # ── EXPORTING → EVALUATING ───────────────────────────────
         self._record_state(ctx, "EXPORTING", "EVALUATING")
         eval_results: list[EvaluationResult] = []
-        if input_dto.proposed_output:
+        if effective_input.proposed_output:
             eval_results = self._evaluate_policy(
-                input_dto.proposed_output, hard + soft + guidelines, audit,
+                effective_input.proposed_output, hard + soft + guidelines, audit,
             )
 
         # ── Determine final state ────────────────────────────────
-        review_items: list[str] = []
+        review_items: list[str] = list(runtime_review_items)
         unresolved_hard = [
             c for c in conflicts if not c.resolution and c.severity == "error"
         ]
@@ -238,6 +241,145 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
                 "enable_persona_soft_constraints", True,
             ),
         )
+
+    def _inject_persona_runtime_profile(
+        self,
+        inp: Skill15Input,
+        audit: list[AuditEntry],
+    ) -> tuple[Skill15Input, list[str]]:
+        """If SKILL 14 persona_profile is absent, derive it from SKILL 22 runtime manifests."""
+        if inp.persona_profile:
+            return inp, []
+
+        runtime_result = inp.persona_dataset_index_result or {}
+        manifests = runtime_result.get("runtime_manifests", [])
+        if not isinstance(manifests, list) or not manifests:
+            return inp, []
+
+        review_items: list[str] = []
+        selected_manifest: dict[str, Any] | None = None
+        if inp.active_persona_ref:
+            selected_manifest = next(
+                (
+                    item for item in manifests
+                    if isinstance(item, dict)
+                    and str(item.get("persona_ref") or "") == inp.active_persona_ref
+                ),
+                None,
+            )
+            if selected_manifest is None:
+                review_items.append(
+                    f"persona_runtime_not_found:{inp.active_persona_ref}"
+                )
+
+        if selected_manifest is None:
+            selected_manifest = next(
+                (item for item in manifests if isinstance(item, dict)),
+                None,
+            )
+        if not selected_manifest:
+            return inp, review_items
+
+        runtime_manifest = dict(selected_manifest.get("runtime_manifest") or {})
+        persona_ref = str(
+            selected_manifest.get("persona_ref")
+            or runtime_manifest.get("persona_ref")
+            or ""
+        )
+        style_pack_ref = str(
+            selected_manifest.get("style_pack_ref")
+            or runtime_manifest.get("style_pack_ref")
+            or ""
+        )
+        policy_override_ref = str(
+            selected_manifest.get("policy_override_ref")
+            or runtime_manifest.get("policy_override_ref")
+            or ""
+        )
+        critic_profile_ref = str(
+            selected_manifest.get("critic_profile_ref")
+            or runtime_manifest.get("critic_profile_ref")
+            or ""
+        )
+        dataset_ids = list(
+            selected_manifest.get("resolved_dataset_ids")
+            or runtime_manifest.get("dataset_ids")
+            or []
+        )
+        index_ids = list(
+            selected_manifest.get("resolved_index_ids")
+            or runtime_manifest.get("index_ids")
+            or []
+        )
+
+        derived_constraints: list[dict[str, Any]] = []
+        if style_pack_ref:
+            derived_constraints.append(
+                {
+                    "type": "soft_constraint",
+                    "category": "visual",
+                    "dimension": "style",
+                    "parameter": "persona_style_pack_ref",
+                    "rule": "use_persona_style_pack",
+                    "value": style_pack_ref,
+                    "priority": 65,
+                }
+            )
+        if policy_override_ref:
+            derived_constraints.append(
+                {
+                    "type": "soft_constraint",
+                    "category": "narrative",
+                    "dimension": "tone",
+                    "parameter": "persona_policy_override_ref",
+                    "rule": "apply_persona_policy_override",
+                    "value": policy_override_ref,
+                    "priority": 68,
+                }
+            )
+        if critic_profile_ref:
+            derived_constraints.append(
+                {
+                    "type": "guideline",
+                    "category": "visual",
+                    "dimension": "style",
+                    "parameter": "persona_critic_profile_ref",
+                    "rule": "critic_profile_alignment",
+                    "value": critic_profile_ref,
+                    "priority": 55,
+                }
+            )
+        if dataset_ids:
+            derived_constraints.append(
+                {
+                    "type": "guideline",
+                    "category": "technical",
+                    "dimension": "duration",
+                    "parameter": "persona_dataset_count",
+                    "rule": "persona_dataset_context",
+                    "value": len(dataset_ids),
+                    "priority": 45,
+                }
+            )
+
+        derived_profile = {
+            "persona_id": persona_ref or "runtime_persona",
+            "style_dna": {},
+            "constraints": derived_constraints,
+            "runtime_manifest_refs": {
+                "persona_ref": persona_ref,
+                "dataset_ids": dataset_ids,
+                "index_ids": index_ids,
+            },
+        }
+        self._audit(
+            audit,
+            "LOADING_CONSTRAINTS",
+            "injected_persona_profile_from_skill22",
+            decision=persona_ref or "runtime_persona",
+            rationale=f"dataset_ids={len(dataset_ids)} index_ids={len(index_ids)}",
+        )
+        return inp.model_copy(update={"persona_profile": derived_profile}), review_items
 
     # ── Constraint Loading ───────────────────────────────────────
 

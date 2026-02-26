@@ -205,6 +205,8 @@ class Skill17Input(BaseSchema):
     user_ratings: dict[str, list[float]] = {}   # variant_id → ratings
     cost_data: dict[str, dict] = {}             # variant_id → {gpu_minutes, …}
     critic_reports: dict[str, list[dict]] = {}  # variant_id → SKILL 16 outputs
+    persona_dataset_index_result: dict = {}     # from SKILL 22
+    active_persona_ref: str = ""
 
 
 class Skill17Output(BaseSchema):

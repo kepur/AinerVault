@@ -222,6 +222,8 @@ class Skill16Input(BaseSchema):
     cultural_constraints: Optional[dict] = None
     prompt_plan: Optional[dict] = None
     shot_dsl: Optional[dict] = None
+    entity_registry_continuity_result: Optional[dict] = None
+    continuity_exports: Optional[dict] = None
     # Feature flags
     feature_flags: Skill16FeatureFlags = Skill16FeatureFlags()
     # Baselines for benchmark comparison

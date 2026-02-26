@@ -207,3 +207,51 @@ class TestSkill08:
                            selected_culture_pack={"id": "cn_wuxia"})
         out = svc.execute(inp, ctx)
         assert out.entity_asset_matches[0].entity_uid == "e_crit"
+
+    def test_continuity_identity_lock_is_consumed(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_08 import Skill08Input
+        svc = self._make_service(mock_db)
+        inp = Skill08Input(
+            canonical_entities=[
+                {
+                    "entity_uid": "CHAR_0001",
+                    "entity_type": "character",
+                    "criticality": "critical",
+                    "canonical_entity_specific": "character.human",
+                    "visual_tags": ["hero_face", "black robe", "same hero face and costume"],
+                }
+            ],
+            entity_variant_mapping=[
+                {
+                    "entity_uid": "CHAR_0001",
+                    "selected_variant_id": "character.human.cn_wuxia",
+                    "entity_id": "CHAR_0001",
+                }
+            ],
+            selected_culture_pack={"id": "cn_wuxia"},
+            backend_capability=["comfyui", "sdxl", "prompt_only"],
+            continuity_exports={
+                "asset_matcher_anchors": [
+                    {
+                        "entity_id": "CHAR_0001",
+                        "anchor_prompt": "same hero face and costume",
+                    }
+                ],
+                "prompt_consistency_anchors": [
+                    {
+                        "entity_id": "CHAR_0001",
+                        "continuity_status": "active",
+                        "consistency_tokens": ["hero_face", "black robe"],
+                    }
+                ],
+                "critic_rules_baseline": [
+                    {"entity_id": "CHAR_0001", "identity_lock": True}
+                ],
+            },
+        )
+        out = svc.execute(inp, ctx)
+        assert out.status == "review_required"
+        assert any(
+            "high_severity_conflict" in item.reason
+            for item in out.review_required_items
+        )

@@ -254,6 +254,7 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
         quality_profile = input_dto.quality_profile or "standard"
         style_mode = input_dto.style_mode or ""
         project_asset_ids = self._extract_project_asset_ids(input_dto.project_asset_pack)
+        continuity_ctx = self._resolve_continuity_context(input_dto)
 
         # ── [M1] Precheck ────────────────────────────────────────────────────
         self._record_state(ctx, MatchState.INIT.value, MatchState.PRECHECKING.value)
@@ -314,8 +315,25 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
             etype = ent.get("entity_type", "character")
             crit = ent.get("criticality", "normal")
             specific = ent.get("canonical_entity_specific", "")
-            variant_id = variant_map.get(uid, {}).get("selected_variant_id", "")
+            variant_info = variant_map.get(uid, {})
+            variant_id = variant_info.get("selected_variant_id", "")
             entity_tags = ent.get("visual_tags", []) or ent.get("tags", []) or []
+            continuity_ref = self._match_continuity_ref(uid, variant_info, continuity_ctx)
+            continuity_prompt_anchor = continuity_ctx["asset_anchor_map"].get(continuity_ref, {})
+            continuity_consistency_anchor = continuity_ctx["prompt_anchor_map"].get(continuity_ref, {})
+            continuity_critic_rule = continuity_ctx["critic_rule_map"].get(continuity_ref, {})
+            identity_lock = bool(continuity_critic_rule.get("identity_lock", False))
+
+            if continuity_consistency_anchor:
+                entity_tags = list(entity_tags) + list(
+                    continuity_consistency_anchor.get("consistency_tokens", [])
+                )
+            if continuity_prompt_anchor.get("anchor_prompt"):
+                entity_tags.append(str(continuity_prompt_anchor["anchor_prompt"]))
+            entity_tags = list(dict.fromkeys([t for t in entity_tags if t]))
+
+            if continuity_ctx["has_data"] and not continuity_ref and crit in ("critical", "important"):
+                warnings.append(f"continuity_anchor_missing:{uid}")
 
             # Score each candidate
             scored = self._score_candidates(
@@ -329,6 +347,12 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 backend_capability=input_dto.backend_capability,
                 cc=cc,
                 project_asset_ids=project_asset_ids,
+            )
+            scored = self._apply_continuity_boost(
+                scored=scored,
+                continuity_ref=continuity_ref,
+                continuity_prompt_anchor=continuity_prompt_anchor,
+                identity_lock=identity_lock,
             )
 
             # Apply user preferences
@@ -347,6 +371,7 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 entity=ent, candidate=best, pack_id=pack_id,
                 target_era=target_era, style_mode=style_mode,
                 backend_capability=input_dto.backend_capability,
+                identity_lock=identity_lock,
             )
             all_conflicts.extend(ent_conflicts)
 
@@ -534,6 +559,59 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
             return set()
         assets = project_pack.get("assets", [])
         return {a.get("asset_id", "") for a in assets if isinstance(a, dict)}
+
+    @staticmethod
+    def _resolve_continuity_context(input_dto: Skill08Input) -> dict[str, Any]:
+        continuity_exports = input_dto.continuity_exports or {}
+        continuity_result = input_dto.entity_registry_continuity_result or {}
+        if not continuity_exports and isinstance(continuity_result, dict):
+            continuity_exports = dict(continuity_result.get("continuity_exports", {}))
+
+        prompt_anchor_map: dict[str, dict[str, Any]] = {}
+        asset_anchor_map: dict[str, dict[str, Any]] = {}
+        critic_rule_map: dict[str, dict[str, Any]] = {}
+        for item in continuity_exports.get("prompt_consistency_anchors", []):
+            if isinstance(item, dict) and item.get("entity_id"):
+                prompt_anchor_map[str(item["entity_id"])] = item
+        for item in continuity_exports.get("asset_matcher_anchors", []):
+            if isinstance(item, dict) and item.get("entity_id"):
+                asset_anchor_map[str(item["entity_id"])] = item
+        for item in continuity_exports.get("critic_rules_baseline", []):
+            if isinstance(item, dict) and item.get("entity_id"):
+                critic_rule_map[str(item["entity_id"])] = item
+
+        return {
+            "prompt_anchor_map": prompt_anchor_map,
+            "asset_anchor_map": asset_anchor_map,
+            "critic_rule_map": critic_rule_map,
+            "has_data": bool(prompt_anchor_map or asset_anchor_map or critic_rule_map),
+        }
+
+    @staticmethod
+    def _match_continuity_ref(
+        entity_uid: str,
+        variant_info: dict[str, Any],
+        continuity_ctx: dict[str, Any],
+    ) -> str:
+        if not continuity_ctx["has_data"]:
+            return ""
+        candidates = [
+            entity_uid,
+            str(variant_info.get("entity_id") or ""),
+            str(variant_info.get("canonical_entity_id") or ""),
+            str(variant_info.get("matched_entity_id") or ""),
+            str(variant_info.get("source_entity_uid") or ""),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if (
+                candidate in continuity_ctx["asset_anchor_map"]
+                or candidate in continuity_ctx["prompt_anchor_map"]
+                or candidate in continuity_ctx["critic_rule_map"]
+            ):
+                return candidate
+        return ""
 
     # ── [M3] Candidate Retrieval (6-level fallback cascade) ───────────────────
 
@@ -799,6 +877,44 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
         scored.sort(key=lambda c: c.score, reverse=True)
         return scored
 
+    @staticmethod
+    def _apply_continuity_boost(
+        scored: list[CandidateAsset],
+        continuity_ref: str,
+        continuity_prompt_anchor: dict[str, Any],
+        identity_lock: bool,
+    ) -> list[CandidateAsset]:
+        if not scored or not continuity_ref:
+            return scored
+
+        boosted: list[CandidateAsset] = []
+        anchor_text = str(continuity_prompt_anchor.get("anchor_prompt") or "").lower()
+        for cand in scored:
+            extra_semantic = 0.0
+            extra_reuse = 0.0
+            if anchor_text and any(anchor_text in str(t).lower() for t in cand.visual_tags):
+                extra_semantic = 1.5
+            if identity_lock and cand.source == "project_pack":
+                extra_reuse = 2.0
+            if extra_semantic or extra_reuse:
+                new_sb = cand.score_breakdown.model_copy(
+                    update={
+                        "semantic": round(
+                            min(SCORE_WEIGHTS["semantic"], cand.score_breakdown.semantic + extra_semantic),
+                            2,
+                        ),
+                        "reuse": round(
+                            min(SCORE_WEIGHTS["reuse"], cand.score_breakdown.reuse + extra_reuse),
+                            2,
+                        ),
+                    }
+                )
+                cand = cand.model_copy(update={"score": new_sb.total, "score_breakdown": new_sb})
+            boosted.append(cand)
+
+        boosted.sort(key=lambda c: c.score, reverse=True)
+        return boosted
+
     # ── User Preferences ──────────────────────────────────────────────────────
 
     @staticmethod
@@ -885,6 +1001,7 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
         target_era: str,
         style_mode: str,
         backend_capability: list[str],
+        identity_lock: bool = False,
     ) -> list[AssetConflict]:
         """Detect conflicts between selected candidate and entity requirements."""
         if candidate is None:
@@ -979,11 +1096,17 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
 
         # Character consistency risk
         if etype == "character" and candidate.source != "project_pack":
+            severity = "high" if identity_lock else "low"
+            description = (
+                "identity lock enabled but character asset not from project_pack"
+                if identity_lock
+                else "character not from project_pack; cross-shot consistency may vary"
+            )
             conflicts.append(AssetConflict(
                 conflict_type=ConflictType.CHARACTER_CONSISTENCY_RISK.value,
                 entity_uid=uid,
-                severity="low",
-                description="character not from project_pack; cross-shot consistency may vary",
+                severity=severity,
+                description=description,
                 asset_id=candidate.asset_id,
             ))
 
