@@ -78,6 +78,22 @@ class CultureBindingTrace(BaseSchema):
     kb_version_id: str = ""
 
 
+class KBSuggestion(BaseSchema):
+    """Knowledge-base recommendation hint for downstream skills."""
+    entity_uid: str = ""
+    suggestion_type: str = ""   # asset_search | prompt_hint | style_reference | lora_hint
+    value: str = ""
+    source: str = ""            # culture_trait | variant_mapping | conflict_resolution
+    confidence: float = 0.0
+
+
+class FeedbackAnchorTags(BaseSchema):
+    """Tags for SKILL 13 feedback evolution loop."""
+    culture_mismatch: list[str] = []
+    naming_inconsistency: list[str] = []
+    signage_style_conflict: list[str] = []
+
+
 # ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill07Input(BaseSchema):
@@ -99,6 +115,11 @@ class Skill07Input(BaseSchema):
     style_mode: str = ""
     user_override: dict = {}
     feature_flags: dict = {}
+    # Scene & character context (influences variant generation)
+    scene_context: str = ""         # e.g. 宫廷, 江湖, 校园, 办公室, 贫民区
+    character_role: str = ""        # e.g. 侠客, 皇帝, 学生, 丫鬟, 掌柜
+    asset_library_capability: dict = {}
+    language_background_kb_output: dict = {}
 
 
 class Skill07Output(BaseSchema):
@@ -111,5 +132,7 @@ class Skill07Output(BaseSchema):
     unresolved_entities: list[UnresolvedEntity] = []
     fallback_actions: list[FallbackAction07] = []
     culture_binding_trace: CultureBindingTrace = CultureBindingTrace()
+    kb_suggestions: list[KBSuggestion] = []
+    feedback_anchor_tags: FeedbackAnchorTags = FeedbackAnchorTags()
     warnings: list[str] = []
     status: str = "ready_for_asset_match"

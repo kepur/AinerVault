@@ -38,42 +38,54 @@ class TestSkill13:
         from app.services.skills.skill_13_feedback_loop import FeedbackLoopService
         return FeedbackLoopService(db)
 
-    def test_execute_low_visual_score(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_13 import FeedbackEntry, Skill13Input
+    def test_execute_low_rating_with_issues_creates_proposal(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_13 import (
+            RunContext, ShotResultContext, UserFeedback, Skill13Input,
+        )
         svc = self._make_service(mock_db)
-        entries = [
-            FeedbackEntry(feedback_id="f1", run_id="r1", shot_id="sh_001",
-                          dimension="visual", rating=2),
-            FeedbackEntry(feedback_id="f2", run_id="r1", shot_id="sh_001",
-                          dimension="visual", rating=1),
-        ]
-        inp = Skill13Input(feedback_entries=entries)
+        inp = Skill13Input(
+            run_context=RunContext(run_id="r1", kb_version_id="KB_V1"),
+            shot_result_context=ShotResultContext(shot_id="sh_001"),
+            user_feedback=UserFeedback(
+                rating=2,
+                issues=["cinematography_camera_move", "motion_readability"],
+                free_text="Camera moves too slow during action.",
+            ),
+        )
         out = svc.execute(inp, ctx)
         assert out.status == "completed"
-        assert len(out.proposals) > 0
-        assert any(p.target_skill == "skill_09" for p in out.proposals)
+        assert out.action_taken == "proposal_created"
+        assert out.proposal is not None
+        assert out.proposal.suggested_role == "cinematographer"
+        assert len(out.evolution_recommendations) > 0
 
-    def test_execute_good_scores_no_proposals(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_13 import FeedbackEntry, Skill13Input
+    def test_execute_good_rating_ignored(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_13 import (
+            UserFeedback, Skill13Input,
+        )
         svc = self._make_service(mock_db)
-        entries = [
-            FeedbackEntry(feedback_id="f3", dimension="visual", rating=5),
-            FeedbackEntry(feedback_id="f4", dimension="audio", rating=4),
-        ]
-        inp = Skill13Input(feedback_entries=entries)
+        inp = Skill13Input(
+            user_feedback=UserFeedback(rating=5, issues=[], free_text="Great!"),
+        )
         out = svc.execute(inp, ctx)
-        assert out.proposals == []
+        assert out.action_taken == "ignored"
+        assert out.proposal is None
         assert out.kb_evolution_triggered is False
 
-    def test_narrative_low_triggers_kb_evolution(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_13 import FeedbackEntry, Skill13Input
+    def test_free_text_only_creates_run_patch(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_13 import (
+            UserFeedback, Skill13Input,
+        )
         svc = self._make_service(mock_db)
-        entries = [
-            FeedbackEntry(feedback_id="f5", dimension="narrative", rating=1),
-        ]
-        inp = Skill13Input(feedback_entries=entries)
+        inp = Skill13Input(
+            user_feedback=UserFeedback(
+                rating=2, issues=[], free_text="Please make the face sharper.",
+            ),
+        )
         out = svc.execute(inp, ctx)
-        assert out.kb_evolution_triggered is True
+        assert out.action_taken == "run_patch"
+        assert out.run_patch is not None
+        assert out.kb_evolution_triggered is False
 
 
 # ── SKILL 14: PersonaStyleService ────────────────────────────────────────────
@@ -84,27 +96,28 @@ class TestSkill14:
         return PersonaStyleService(db)
 
     def test_create_persona(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_14 import PersonaDefinition, Skill14Input
+        from ainern2d_shared.schemas.skills.skill_14 import PersonaPack, Skill14Input
         svc = self._make_service(mock_db)
-        persona = PersonaDefinition(persona_id="p001", name="武侠导演",
-                                     narrative_tone="cinematic")
-        inp = Skill14Input(action="create", persona=persona, rag_bindings=[])
+        pack = PersonaPack(persona_pack_id="p001", display_name="武侠导演")
+        inp = Skill14Input(action="create", persona_pack=pack)
         out = svc.execute(inp, ctx)
-        assert out.persona_id == "p001"
+        assert out.persona_pack_id == "p001"
         assert out.status == "draft"
 
     def test_publish_status(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_14 import PersonaDefinition, Skill14Input
+        from ainern2d_shared.schemas.skills.skill_14 import PersonaPack, Skill14Input
         svc = self._make_service(mock_db)
-        inp = Skill14Input(action="publish",
-                           persona=PersonaDefinition(persona_id="p002"), rag_bindings=[])
+        # Create first, then publish
+        pack = PersonaPack(persona_pack_id="p002", display_name="测试导演")
+        svc.execute(Skill14Input(action="create", persona_pack=pack), ctx)
+        inp = Skill14Input(action="publish", persona_pack=PersonaPack(persona_pack_id="p002"))
         out = svc.execute(inp, ctx)
-        assert out.status == "ready_to_publish"
+        assert out.status == "active"
 
     def test_invalid_action_raises(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_14 import PersonaDefinition, Skill14Input
+        from ainern2d_shared.schemas.skills.skill_14 import Skill14Input
         svc = self._make_service(mock_db)
-        inp = Skill14Input(action="delete", persona=PersonaDefinition(), rag_bindings=[])
+        inp = Skill14Input(action="bogus_action")
         with pytest.raises(ValueError, match="REQ-VALIDATION"):
             svc.execute(inp, ctx)
 
@@ -119,7 +132,7 @@ class TestSkill15:
     def test_default_constraints_loaded(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_15 import Skill15Input
         svc = self._make_service(mock_db)
-        inp = Skill15Input(persona_style={}, project_settings={}, user_overrides=[])
+        inp = Skill15Input()
         out = svc.execute(inp, ctx)
         assert out.status == "policy_ready"
         assert len(out.hard_constraints) >= 2
@@ -128,19 +141,20 @@ class TestSkill15:
     def test_user_override_hard_added(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_15 import Skill15Input
         svc = self._make_service(mock_db)
-        overrides = [{"type": "hard", "dimension": "visual",
+        overrides = [{"type": "hard_constraint", "category": "visual",
+                       "dimension": "style", "parameter": "blood_splatter",
                        "rule": "no_blood_splatter", "priority": 90}]
         inp = Skill15Input(user_overrides=overrides)
         out = svc.execute(inp, ctx)
         rules = [c.rule for c in out.hard_constraints]
         assert "no_blood_splatter" in rules
 
-    def test_exploration_range_present(self, mock_db, ctx):
+    def test_exploration_policy_present(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_15 import Skill15Input
         svc = self._make_service(mock_db)
         inp = Skill15Input()
         out = svc.execute(inp, ctx)
-        assert "style_variance" in out.exploration_range
+        assert "candidate_generation" in out.exploration_policy
 
 
 # ── SKILL 16: CriticEvaluationService ────────────────────────────────────────
@@ -151,35 +165,33 @@ class TestSkill16:
         return CriticEvaluationService(db)
 
     def test_execute_with_artifact(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_16 import Skill16Input
+        from ainern2d_shared.schemas.skills.skill_16 import Skill16Input, ShotPlanEntry
         svc = self._make_service(mock_db)
         inp = Skill16Input(
             run_id="run01",
             composed_artifact_uri="s3://bucket/run01/final.mp4",
-            evaluation_dimensions=["visual_consistency", "audio_sync"],
+            shot_plan=[ShotPlanEntry(shot_id="S1", scene_id="SC1", description="Test shot")],
         )
         out = svc.execute(inp, ctx)
-        assert out.status == "completed"
-        assert len(out.dimension_scores) == 2
-        assert 0 <= out.overall_score <= 10
+        assert out.status in ("ready", "review_required", "evaluation_complete")
+        assert len(out.dimension_scores) == 8
+        assert 0 <= out.composite_score <= 100
 
     def test_no_artifact_lower_scores(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_16 import Skill16Input
         svc = self._make_service(mock_db)
-        inp_no = Skill16Input(run_id="r1", composed_artifact_uri="",
-                               evaluation_dimensions=["visual_consistency"])
+        inp_no = Skill16Input(run_id="r1", composed_artifact_uri="")
         inp_yes = Skill16Input(run_id="r1",
-                                composed_artifact_uri="s3://x/y.mp4",
-                                evaluation_dimensions=["visual_consistency"])
+                                composed_artifact_uri="s3://x/y.mp4")
         out_no = svc.execute(inp_no, ctx)
         out_yes = svc.execute(inp_yes, ctx)
-        assert out_yes.overall_score >= out_no.overall_score
+        assert out_yes.composite_score >= out_no.composite_score
 
     def test_missing_run_id_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_16 import Skill16Input
         svc = self._make_service(mock_db)
         inp = Skill16Input(run_id="")
-        with pytest.raises(ValueError, match="REQ-VALIDATION"):
+        with pytest.raises(ValueError, match="CRITIC-VALIDATION"):
             svc.execute(inp, ctx)
 
 
@@ -191,34 +203,38 @@ class TestSkill17:
         return ExperimentService(db)
 
     def test_execute_selects_winner(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_17 import ExperimentVariant, Skill17Input
+        from ainern2d_shared.schemas.skills.skill_17 import VariantConfig, Skill17Input
         svc = self._make_service(mock_db)
-        variants = [
-            ExperimentVariant(variant_id="v_a", description="variant A"),
-            ExperimentVariant(variant_id="v_b", description="variant B"),
-        ]
-        inp = Skill17Input(experiment_name="style_test",
-                           variants=variants,
-                           evaluation_dimensions=["overall"])
+        inp = Skill17Input(
+            experiment_name="style_test",
+            control_variant=VariantConfig(variant_id="v_a", description="variant A"),
+            test_variants=[VariantConfig(variant_id="v_b", description="variant B")],
+        )
         out = svc.execute(inp, ctx)
-        assert out.status == "completed"
+        assert out.status in ("concluded", "analyzing")
         assert out.winner_variant_id in ("v_a", "v_b")
-        assert len(out.results) == 2
-        assert out.results[0].promoted is True
+        assert len(out.variant_metrics) == 2
+        assert len(out.recommendations) >= 1
 
     def test_empty_variants_raises(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_17 import Skill17Input
+        from ainern2d_shared.schemas.skills.skill_17 import Skill17Input, VariantConfig
         svc = self._make_service(mock_db)
-        inp = Skill17Input(experiment_name="test", variants=[])
-        with pytest.raises(ValueError, match="REQ-VALIDATION"):
+        inp = Skill17Input(
+            experiment_name="test",
+            control_variant=VariantConfig(variant_id="ctrl"),
+            test_variants=[],
+        )
+        with pytest.raises(ValueError, match="EXP-VALIDATION"):
             svc.execute(inp, ctx)
 
     def test_deterministic_winner(self, mock_db, ctx):
-        """Same input → same winner."""
-        from ainern2d_shared.schemas.skills.skill_17 import ExperimentVariant, Skill17Input
+        """Same input -> same winner."""
+        from ainern2d_shared.schemas.skills.skill_17 import VariantConfig, Skill17Input
         svc = self._make_service(mock_db)
-        variants = [ExperimentVariant(variant_id="v_x"), ExperimentVariant(variant_id="v_y")]
-        inp = Skill17Input(variants=variants, evaluation_dimensions=["overall"])
+        inp = Skill17Input(
+            control_variant=VariantConfig(variant_id="v_x"),
+            test_variants=[VariantConfig(variant_id="v_y")],
+        )
         w1 = svc.execute(inp, ctx).winner_variant_id
         w2 = svc.execute(inp, ctx).winner_variant_id
         assert w1 == w2
@@ -237,25 +253,34 @@ class TestSkill18:
         inp = Skill18Input(error_code="WORKER-GPU-001",
                            failed_skill="skill_09", retry_count=0)
         out = svc.execute(inp, ctx)
-        assert out.decision.action_type == "retry"
-        assert out.circuit_breaker_triggered is False
+        # First plan step should be a retry strategy
+        assert len(out.recovery_plan) > 0
+        first_strategy = out.recovery_plan[0].action.strategy.value
+        assert "retry" in first_strategy
+        assert out.failure_classification.failure_type.value == "resource_exhaustion"
 
     def test_degrade_on_repeated_gpu_failure(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_18 import Skill18Input
+        from ainern2d_shared.schemas.skills.skill_18 import Skill18Input, FeatureFlags
         svc = self._make_service(mock_db)
         inp = Skill18Input(error_code="WORKER-GPU-001",
-                           failed_skill="skill_09", retry_count=2)
+                           failed_skill="skill_09", retry_count=4,
+                           feature_flags=FeatureFlags(max_retries=3))
         out = svc.execute(inp, ctx)
-        assert out.decision.action_type == "degrade"
-        assert out.degradation_applied is True
+        # Retry budget exhausted → degradation should be in the plan
+        assert out.degradation_applied is True or any(
+            s.action.strategy.value == "degrade_one_level" for s in out.recovery_plan
+        )
 
     def test_circuit_breaker_at_threshold(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_18 import Skill18Input
         svc = self._make_service(mock_db)
-        inp = Skill18Input(error_code="INFRA-001", failed_skill="skill_01", retry_count=5)
-        out = svc.execute(inp, ctx)
+        # Fire multiple failures to trip circuit breaker
+        for _ in range(4):
+            inp = Skill18Input(error_code="SYS-DEPENDENCY-001",
+                               failed_skill="skill_01", retry_count=5)
+            out = svc.execute(inp, ctx)
         assert out.circuit_breaker_triggered is True
-        assert out.decision.action_type == "abort"
+        assert len(out.circuit_breaker_states) > 0
 
 
 # ── SKILL 19: ComputeBudgetService ───────────────────────────────────────────

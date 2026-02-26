@@ -1,27 +1,26 @@
-# Agent 直落地实现就绪规范（2026-02-26）
+# Agent 直落地实现就绪规范（2026-02-27）
 
 ## 1. 目标
 - 给其他 AI agent 一个“看文档 + 看模型即可直接编码”的硬约束入口。
 - 明确当前可落地范围、必须先补的骨架、以及禁止跑偏边界。
 
-## 2. 当前就绪结论（2026-02-26 更新）
+## 2. 当前就绪结论（2026-02-27 更新）
 - **数据库模型层：✅ 已就绪**  
-  - `code/shared/ainern2d_shared/ainer_db_models/` 已定义 `57` 个共享模型。
+  - `code/shared/ainern2d_shared/ainer_db_models/` 已定义核心共享模型（含 21/22 预览与绑定骨架）。
   - `code/apps/alembic/versions/6f66885e0588_init_baseline.py` 可直接落库。
 - **共享基础设施：✅ 已就绪**  
   - `schemas`(8) + `queue`(3) + `utils`(3) + `telemetry`(3) + `config`(2) + `storage`(2) + `db`(4) + `services`(2) 全部有实现。
-  - 新增: `schemas/skills/`（20 个 SKILL Input/Output DTO）。
+  - 新增: `schemas/skills/`（20 个基础技能 DTO 已存在，21/22 仍待补）。
   - 新增: `services/base_skill.py`（BaseSkillService 基类 + SkillContext）。
 - **服务框架层：✅ 已就绪**  
   - 4 个服务 main.py + 所有路由注册 + 所有 __init__.py 完成。
   - 180 个 Python 文件全部有实现，零空壳文件。
-- **SKILL Service 层：✅ 框架已就绪**  
-  - 20 个 SKILL Service 类已创建（继承 BaseSkillService）。
-  - SkillRegistry 已实现（按 skill_id 调度）。
-  - `execute()` 方法均为 TODO stub — 等待 AI Agent 逐个实现核心逻辑。
+- **SKILL Service 层：⚠️ 部分就绪**  
+  - 当前代码以 20 个基础技能实现为主，21/22 仍未完成 Service/DAG/Registry 接入。
+  - SkillRegistry 已实现，但仅覆盖既有技能集合。
 - **结论**  
-  - ✅ 达到"其他 AI agent 查看文档 + SKILL_IMPLEMENTATION_PROGRESS.md 即可直接接手实现"状态。
-  - 每个 SKILL 的 Service/DTO/映射/验收标准均已定义，AI 只需填充 execute() 逻辑。
+  - ⚠️ 可用于“增量实现”，但尚未达到“看文档即可无歧义直落地”。
+  - 在 21/22 接入与契约一致性修复前，必须先做对齐改造。
 
 ## 3. 强制边界（不可突破）
 - 运行主对象只能用：`run/job/stage/event/artifact`。
@@ -38,10 +37,10 @@
 - 消息：RabbitMQ Topic（主题以 `queue-topics-and-retry-policy.md` 为准）。
 - 存储：PostgreSQL + MinIO/S3（产物走对象存储，DB 存元数据）。
 
-## 5. P0 必补清单（已全部完成 ✅）
-以下文件已全部实现（2026-02-26 Copilot 完成）：
+## 5. P0 必补清单（更新）
+以下基础层已实现（截至 2026-02-27）：
 - ✅ `schemas/` (task, timeline, artifact, events, worker, entity, error, base) — 8 文件
-- ✅ `schemas/skills/` — 20 个 SKILL DTO (skill_01 ~ skill_20)
+- ⚠️ `schemas/skills/` — 已有 20 个基础技能 DTO；`skill_21.py`/`skill_22.py` 待补
 - ✅ `queue/` (topics, message_contracts, rabbitmq) — 3 文件
 - ✅ `utils/` (time, idempotency, retry) — 3 文件
 - ✅ `telemetry/` (logging, metrics, tracing) — 3 文件
@@ -51,7 +50,7 @@
 - ✅ `pyproject.toml` (shared + apps) — 2 文件
 - ✅ `scripts/` (dev-up, dev-down, migrate, seed_rag, init_storage) — 5 文件
 
-**当前焦点：实现 20 个 SKILL 的 execute() 核心逻辑（见 SKILL_IMPLEMENTATION_PROGRESS.md）。**
+**当前焦点：补齐 21/22 接入（DTO/Service/JobType/DAG/Dispatcher/Registry）并修复契约冲突。**
 
 ## 6. 模型与契约对齐细则（防跑偏）
 - `schema_version` 是事件/DTO 权威字段；数据库中的结构版本使用 `version`，两者禁止混用语义。
@@ -62,7 +61,7 @@
 ## 7. AI Agent 固定实施顺序
 1. 先补 `shared` 空骨架（DTO、队列、时间/幂等/重试、遥测、配置、存储）。
 2. 再补服务入口（studio-api -> orchestrator -> worker-hub -> composer -> observer）。
-3. 最后接增强链路（14~20）与治理闭环。
+3. 最后接增强链路（14~22）与治理闭环。
 
 ## 8. 最小验收门禁（提交前必须通过）
 - Alembic：`upgrade -> downgrade -> upgrade` 全通过。

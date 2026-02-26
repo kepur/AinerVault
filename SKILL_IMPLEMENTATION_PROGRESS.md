@@ -1,8 +1,12 @@
-# SKILL 落地实现进度跟踪
+# SKILL 落地实现进度跟踪（历史明细）
 
-> **本文档是所有 AI Agent 接力实现 SKILL 的唯一进度基线。**
-> 每次 AI 实现/修改任意 SKILL 后，**必须**更新本文档对应行的状态和备注。
-> 任何 AI 接手前，**必须**先读本文档了解全局进度，再选取 `NOT_STARTED` 或 `PARTIAL` 状态的 SKILL 开始。
+> **本文档保留“详细历史记录”，不再作为唯一进度入口。**
+> 当前接力实现的进度权威文件是：`progress/skill_delivery_status.yaml`。
+> 每次 AI 实现/修改任意 SKILL 后，应优先更新 `progress/skill_delivery_status.yaml`，再同步本文件明细。
+>
+> **重要说明（2026-02-27）**：
+> - 本文件中部分 `skill.xx.completed` 事件描述为历史写法；运行态事件权威以 `ainer_event_types.md` 与 `ainer_contracts.md` 的 `run.* / job.*` 为准。
+> - 当前目标链路已升级为 `SKILL_01 ~ SKILL_22`，21/22 参见 `README_21_22_INTEGRATION_GUIDE.md`。
 
 ---
 
@@ -14,8 +18,7 @@
 | `PARTIAL` | 有基础骨架/部分逻辑，但未满足 Definition of Done |
 | `SERVICE_READY` | Service 层 + DTO 已就绪，核心 execute() 可调用 |
 | `INTEGRATION_READY` | 已与 Orchestrator 集成，可被 pipeline 调度 |
-| `DONE` | 单元测试通过，E2E 验证完成 |
-| `DONE` | 全部 Definition of Done 满足，已合入主线 |
+| `DONE` | 单元测试通过，E2E 验证完成，Definition of Done 满足 |
 
 ---
 
@@ -23,26 +26,28 @@
 
 | # | SKILL | 状态 | 所属服务 | Service 类 | 上次更新 | 更新者 |
 |---|-------|------|---------|-----------|---------|--------|
-| 01 | Story Ingestion & Normalization | `DONE` | studio-api | `StoryIngestionService` | 2026-02-27 | Copilot |
-| 02 | Language Context Router | `DONE` | studio-api | `LanguageContextService` | 2026-02-27 | Copilot |
-| 03 | Story→Scene→Shot Planner | `DONE` | studio-api | `SceneShotPlanService` | 2026-02-27 | Copilot |
-| 04 | Entity Extraction & Structuring | `DONE` | studio-api | `EntityExtractionService` | 2026-02-27 | Copilot |
-| 05 | Audio Asset Planner | `DONE` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
-| 06 | Audio Timeline Composer | `DONE` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
-| 07 | Entity Canonicalization & Cultural Binding | `DONE` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
-| 08 | Asset Matcher | `DONE` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
-| 09 | Visual Render Planner | `DONE` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
-| 10 | Prompt Planner | `DONE` | studio-api | `PromptPlannerService` | 2026-02-27 | Copilot |
-| 11 | RAG KB Manager | `DONE` | studio-api | `RagKBManagerService` | 2026-02-27 | Copilot |
-| 12 | RAG Pipeline & Embedding | `DONE` | studio-api | `RagEmbeddingService` | 2026-02-27 | Copilot |
-| 13 | Feedback Evolution Loop | `DONE` | studio-api | `FeedbackLoopService` | 2026-02-27 | Copilot |
-| 14 | Persona & Style Pack Manager | `DONE` | studio-api | `PersonaStyleService` | 2026-02-27 | Copilot |
-| 15 | Creative Control Policy | `DONE` | studio-api | `CreativeControlService` | 2026-02-27 | Copilot |
-| 16 | Critic Evaluation Suite | `DONE` | studio-api | `CriticEvaluationService` | 2026-02-27 | Copilot |
-| 17 | Experiment & A/B Test | `DONE` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
-| 18 | Failure Recovery & Degradation | `DONE` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
-| 19 | Compute-Aware Shot Budgeter | `DONE` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
-| 20 | Shot DSL Compiler & Prompt Backend | `DONE` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
+| 01 | Story Ingestion & Normalization | `DONE` | studio-api | `StoryIngestionService` | 2025-07-24 | Copilot | DTO:100L SVC:480L — sentence split, HTML/MD strip, segment语言标记, feature_flags, strict_mode |
+| 02 | Language Context Router | `DONE` | studio-api | `LanguageContextService` | 2025-07-24 | Copilot | DTO:87L SVC:447L — RecipeContextSeed, KB version, 可扩展culture rules, feature_flags |
+| 03 | Story→Scene→Shot Planner | `DONE` | studio-api | `SceneShotPlanService` | 2025-07-24 | Copilot | DTO:84L SVC:756L — characters_present, user_overrides, 6种shot type, culture_hint, 语义goals |
+| 04 | Entity Extraction & Structuring | `DONE` | studio-api | `EntityExtractionService` | 2025-07-24 | Copilot | DTO:76L SVC:491L — vehicle/creature/signage, 跨语言alias(14组), confidence过滤 |
+| 05 | Audio Asset Planner | `DONE` | studio-api | `AudioAssetPlanService` | 2025-07-24 | Copilot | DTO:97L SVC:510L — TTS text回填, backend validation, voice cast验证, 详细warnings |
+| 06 | Audio Timeline Composer | `DONE` | composer | `AudioTimelineService` | 2025-07-24 | Copilot | DTO:211L SVC:667L — 多轨道架构, audio_event_manifest, mix hints, timing anchors |
+| 07 | Entity Canonicalization & Cultural Binding | `DONE` | studio-api | `CanonicalizationService` | 2025-07-24 | Copilot | DTO:138L SVC:998L — 7种冲突检测, 丰富trait库(8-12/pack), prompt_template/asset_refs, KB建议 |
+| 08 | Asset Matcher | `DONE` | studio-api | `AssetMatcherService` | 2025-07-24 | Copilot | DTO:240L SVC:1119L — 7维评分引擎, 6级fallback cascade, 硬过滤, 冲突检测 |
+| 09 | Visual Render Planner | `DONE` | studio-api | `VisualRenderPlanService` | 2025-07-24 | Copilot | DTO:317L SVC:940L — 音频特征聚合, motion scoring 0-100, micro-shot split, 4级后端降级 |
+| 10 | Prompt Planner | `DONE` | studio-api | `PromptPlannerService` | 2025-07-24 | Copilot | DTO:338L SVC:1159L — 9层prompt架构, ComfyUI/SDXL/Flux preset, LoRA注入, token budget |
+| 11 | RAG KB Manager | `DONE` | studio-api | `RagKBManagerService` | 2025-07-24 | Copilot | DTO:345L SVC:1115L — KB CRUD, 版本管理, 审核流程, 去重, 搜索索引, manifest |
+| 12 | RAG Pipeline & Embedding | `DONE` | studio-api | `RagEmbeddingService` | 2025-07-24 | Copilot | DTO:313L SVC:891L — 4种chunking策略, embedding生成, HNSW/IVF索引, hybrid search |
+| 13 | Feedback Evolution Loop | `DONE` | studio-api | `FeedbackLoopService` | 2025-07-24 | Copilot | DTO:281L SVC:553L — 反馈分类, 知识抽象, 审核/合并, 回归测试, KB更新提案 |
+| 14 | Persona & Style Pack Manager | `DONE` | studio-api | `PersonaStyleService` | 2025-07-24 | Copilot | DTO:273L SVC:759L — Style DNA, 继承链解析, 版本管理, 4种导出格式, 冲突检测 |
+| 15 | Creative Control Policy | `DONE` | studio-api | `CreativeControlService` | 2025-07-24 | Copilot | DTO:183L SVC:1039L — 3种约束类型, 6种来源追溯, 冲突检测/解决, exploration band |
+| 16 | Critic Evaluation Suite | `DONE` | studio-api | `CriticEvaluationService` | 2025-07-24 | Copilot | DTO:266L SVC:975L — 8维critic(0-100), evidence跟踪, fix queue, auto gate |
+| 17 | Experiment & A/B Test | `DONE` | studio-api | `ExperimentService` | 2025-07-24 | Copilot | DTO:235L SVC:653L — 实验生命周期, Welch t-test, 多维排名, 晋升推荐 |
+| 18 | Failure Recovery & Degradation | `DONE` | studio-api | `FailureRecoveryService` | 2025-07-24 | Copilot | DTO:234L SVC:746L — 8类故障分类, 8级降级阶梯, 熔断器, 级联影响分析 |
+| 19 | Compute-Aware Shot Budgeter | `DONE` | studio-api | `ComputeBudgetService` | 2025-07-24 | Copilot | DTO:280L SVC:664L — 动态重分配, SLA分层, 成本模型, 后端路由, 并行批次 |
+| 20 | Shot DSL Compiler & Prompt Backend | `DONE` | composer | `DslCompilerService` | 2025-07-24 | Copilot | DTO:200L SVC:1073L — DSL校验, RAG注入, timing验证, 多候选编译, 5种后端payload |
+| 21 | Entity Registry & Continuity Manager | `INTEGRATION_READY` | studio-api | `EntityRegistryContinuityService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；E2E 待补 |
+| 22 | Persona Dataset & Index Manager | `INTEGRATION_READY` | studio-api | `PersonaDatasetIndexService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；E2E 待补 |
 
 ---
 

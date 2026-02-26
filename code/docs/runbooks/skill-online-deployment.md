@@ -1,4 +1,4 @@
-# Skill Online Deployment（SKILL_01~20）
+# Skill Online Deployment（SKILL_01~22）
 
 ## 1. 目标
 - 明确每个 Skill 的执行模块、运行节点（CPU/GPU）、依赖中间件、上线检查与回滚动作。
@@ -49,6 +49,8 @@
 | SKILL_18 | failure recovery policy | CPU | queue,postgres | failure events | recovery_decision | 降级阶梯可执行 | 强制 manual_review |
 | SKILL_19 | compute-aware budgeter | CPU | queue,metrics | 03/06/15 outputs | shot_compute_budget_plan | 总预算不超限 | 回退全局预算档位 |
 | SKILL_20 | shot dsl compiler | CPU | rag,policy registry | shot_dsl + 10 outputs | compiled_prompt_bundle | traceability 字段完整 | 回退 baseline compiler |
+| SKILL_21 | entity registry continuity | CPU | postgres,rag | 04 outputs + shot_plan | entity_registry_resolution | entity_id 稳定且实例链路完整 | 回退到 07 前的 canonical fallback |
+| SKILL_22 | persona dataset/index manager | CPU | postgres,pgvector | 11/12/14 outputs | persona_runtime_manifest | dataset/index/style 绑定可追溯 | 回退到默认 persona pack |
 
 ## 4. 上线流水线（通用）
 1. 预检查（配置、依赖、模型可达性）

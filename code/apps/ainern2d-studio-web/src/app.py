@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="ainern2d-studio-web", version="0.1.0")
 
-STATIC_DIR = Path(__file__).parent / "dist"
+STATIC_DIR = Path(__file__).resolve().parents[1] / "dist"
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 

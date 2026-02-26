@@ -38,20 +38,23 @@ class TestSkill06:
         from app.services.skills.skill_06_audio_timeline import AudioTimelineService
         return AudioTimelineService(db)
 
-    def _shots(self):
+    def _shot_plan(self):
         return [
-            {"shot_id": "sh_001", "duration_seconds": 3.0},
-            {"shot_id": "sh_002", "duration_seconds": 2.5},
+            {"shot_id": "sh_001", "scene_id": "sc_01", "duration_ms": 3000},
+            {"shot_id": "sh_002", "scene_id": "sc_01", "duration_ms": 2500},
         ]
 
     def _audio_results(self):
         return [
-            {"shot_id": "sh_001", "task_type": "dialogue",
-             "asset_uri": "s3://ainer/audio/sh_001_tts.wav", "volume": 1.0},
-            {"shot_id": "sh_001", "task_type": "bgm",
-             "asset_uri": "s3://ainer/audio/bgm_001.mp3", "volume": 0.6},
-            {"shot_id": "sh_002", "task_type": "sfx",
-             "asset_uri": "s3://ainer/audio/sfx_sword.wav", "volume": 0.8},
+            {"shot_id": "sh_001", "task_type": "tts", "scene_id": "sc_01",
+             "asset_ref": "s3://ainer/audio/sh_001_tts.wav",
+             "actual_duration_ms": 2800},
+            {"shot_id": "sh_001", "task_type": "bgm", "scene_id": "sc_01",
+             "asset_ref": "s3://ainer/audio/bgm_001.mp3",
+             "actual_duration_ms": 3000},
+            {"shot_id": "sh_002", "task_type": "sfx", "scene_id": "sc_01",
+             "asset_ref": "s3://ainer/audio/sfx_sword.wav",
+             "actual_duration_ms": 500},
         ]
 
     def test_execute_basic(self, mock_db, ctx):
@@ -59,45 +62,113 @@ class TestSkill06:
         svc = self._make_service(mock_db)
         inp = Skill06Input(
             audio_results=self._audio_results(),
-            shots=self._shots(),
-            timing_constraints={},
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready_for_audio_execution"},
         )
         out = svc.execute(inp, ctx)
         assert out.status == "ready_for_visual_render_planning"
         assert len(out.tracks) == 3
 
-    def test_timing_anchors_match_shots(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
-        svc = self._make_service(mock_db)
-        inp = Skill06Input(
-            audio_results=[], shots=self._shots(), timing_constraints={}
-        )
-        out = svc.execute(inp, ctx)
-        assert len(out.timing_anchors) == 2
-        assert out.timing_anchors[0].shot_id == "sh_001"
-
-    def test_total_duration_positive(self, mock_db, ctx):
+    def test_shot_timeline_matches_shots(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
         svc = self._make_service(mock_db)
         inp = Skill06Input(
             audio_results=self._audio_results(),
-            shots=self._shots(),
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready"},
         )
         out = svc.execute(inp, ctx)
-        assert out.total_duration_ms > 0
+        assert len(out.shot_timeline) == 2
+        assert out.shot_timeline[0].shot_id == "sh_001"
+
+    def test_final_duration_positive(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        inp = Skill06Input(
+            audio_results=self._audio_results(),
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready"},
+        )
+        out = svc.execute(inp, ctx)
+        assert out.final_duration_ms > 0
 
     def test_bgm_has_fade(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
         svc = self._make_service(mock_db)
         inp = Skill06Input(
-            audio_results=[{"shot_id": "sh_001", "task_type": "bgm",
-                             "asset_uri": "s3://x/bgm.mp3", "volume": 0.5}],
-            shots=[{"shot_id": "sh_001", "duration_seconds": 3.0}],
+            audio_results=[
+                {"shot_id": "sh_001", "task_type": "tts", "scene_id": "sc_01",
+                 "asset_ref": "s3://x/tts.wav", "actual_duration_ms": 1000},
+                {"shot_id": "sh_001", "task_type": "bgm", "scene_id": "sc_01",
+                 "asset_ref": "s3://x/bgm.mp3", "actual_duration_ms": 3000},
+            ],
+            shot_plan=[{"shot_id": "sh_001", "scene_id": "sc_01", "duration_ms": 3000}],
+            audio_plan={"status": "ready"},
         )
         out = svc.execute(inp, ctx)
         bgm_tracks = [t for t in out.tracks if t.track_type == "bgm"]
-        assert bgm_tracks[0].fade_in_ms > 0
-        assert bgm_tracks[0].fade_out_ms > 0
+        assert bgm_tracks[0].events[0].fade_in_ms > 0
+        assert bgm_tracks[0].events[0].fade_out_ms > 0
+
+    def test_review_when_no_tts(self, mock_db, ctx):
+        """§8: TTS missing → REVIEW_REQUIRED."""
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        inp = Skill06Input(
+            audio_results=[{"shot_id": "sh_001", "task_type": "bgm",
+                             "asset_ref": "s3://x/bgm.mp3"}],
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready"},
+        )
+        out = svc.execute(inp, ctx)
+        assert out.status == "review_required"
+
+    def test_mix_hints_ducking(self, mock_db, ctx):
+        """§C5: Ducking hints when dialogue + bgm present."""
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        inp = Skill06Input(
+            audio_results=self._audio_results(),
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready"},
+            feature_flags={"enable_auto_ducking_plan": True},
+        )
+        out = svc.execute(inp, ctx)
+        duck_hints = [h for h in out.mix_hints if h.type == "duck"]
+        assert len(duck_hints) >= 1
+        assert duck_hints[0].trigger_track == "dialogue"
+
+    def test_audio_event_manifest(self, mock_db, ctx):
+        """§7.2: Manifest includes events + summary + visual render hints."""
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        inp = Skill06Input(
+            audio_results=self._audio_results(),
+            shot_plan=self._shot_plan(),
+            audio_plan={"status": "ready"},
+        )
+        out = svc.execute(inp, ctx)
+        m = out.audio_event_manifest
+        assert len(m.events) == 3
+        assert m.summary.dialogue_events >= 1
+        assert isinstance(m.analysis_hints_for_visual_render.dialogue_heavy_shots, list)
+
+    def test_backfill_report(self, mock_db, ctx):
+        """§C2: TTS duration backfill reports shifts."""
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        # TTS longer than planned shot
+        inp = Skill06Input(
+            audio_results=[
+                {"shot_id": "sh_001", "task_type": "tts", "scene_id": "sc_01",
+                 "asset_ref": "s3://x/tts.wav", "actual_duration_ms": 5000},
+            ],
+            shot_plan=[{"shot_id": "sh_001", "scene_id": "sc_01", "duration_ms": 3000}],
+            audio_plan={"status": "ready"},
+        )
+        out = svc.execute(inp, ctx)
+        assert out.backfill_report.total_shift_ms == 2000
+        assert len(out.backfill_report.entries) == 1
 
 
 # ── SKILL 20: DslCompilerService ─────────────────────────────────────────────

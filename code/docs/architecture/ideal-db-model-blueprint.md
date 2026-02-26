@@ -1,9 +1,9 @@
-# Ideal DB Model Blueprint（01~20 闭环）
+# Ideal DB Model Blueprint（01~22 闭环）
 
 ## 1. 目标
 - 面向新项目理想态，不做历史兼容约束。
 - 以 `run / job / stage / event / artifact` 作为唯一主运行对象语义。
-- 覆盖 01~20 全链路：输入、编排、执行、合成、观测、RAG 进化、治理增强。
+- 覆盖 01~22 全链路：输入、编排、执行、合成、观测、RAG 进化、治理增强。
 
 ## 2. 核心域模型分层
 - 身份域：`tenants/users/projects/*members/service_accounts`
@@ -12,7 +12,7 @@
 - 知识域：`entities/entity_aliases/entity_canonicalizations/cultural_bindings/relationships/story_events/entity_states/asset_candidates`
 - 路由计费域：`model_providers/model_profiles/route_decisions/cost_ledgers`
 - RAG 进化域：`rag_collections/kb_versions/rag_documents/rag_embeddings/feedback_events/kb_proposals/rag_eval_reports/kb_rollouts`
-- 治理增强域（14~20）：`persona_packs/persona_pack_versions/creative_policy_stacks/shot_compute_budgets/shot_dsl_compilations/critic_evaluations/recovery_policies/recovery_executions/experiment_runs/experiment_arms/experiment_observations`
+- 治理增强域（14~22）：`persona_packs/persona_pack_versions/creative_policy_stacks/shot_compute_budgets/shot_dsl_compilations/critic_evaluations/recovery_policies/recovery_executions/experiment_runs/experiment_arms/experiment_observations/entity_instance_links/entity_continuity_profiles/entity_preview_variants/character_voice_bindings/persona_dataset_bindings/persona_index_bindings/persona_lineage_edges/persona_runtime_manifests`
 
 ## 3. 闭环主链映射
 1) `execution_requests` 创建请求

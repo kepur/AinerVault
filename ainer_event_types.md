@@ -90,7 +90,7 @@
 - `proposal.rejected`
 - `kb.rollout.promoted`
 
-## 11. 工业增强层事件（SKILL_14~20）
+## 11. 工业增强层事件（SKILL_14~22）
 - `persona.resolved`
 - `persona.version.published`
 - `policy.stack.built`
@@ -100,6 +100,15 @@
 - `recovery.degradation.applied`
 - `experiment.run.completed`
 - `experiment.recommendation.generated`
+- `entity.registry.resolved`
+- `entity.continuity.locked`
+- `preview.variant.generated`
+- `preview.variant.approved`
+- `voice.binding.updated`
+- `persona.dataset.bound`
+- `persona.index.bound`
+- `persona.lineage.updated`
+- `persona.runtime.manifested`
 
 ## 12. 废弃事件（兼容窗口）
 - `step.enqueued`（deprecated -> `job.enqueued`）

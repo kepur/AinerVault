@@ -1,6 +1,8 @@
 """SKILL 05: Audio Asset Planner — Input/Output DTOs."""
 from __future__ import annotations
 
+from typing import Optional
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
@@ -56,6 +58,15 @@ class ProvisionalAudioTimeline(BaseSchema):
     requires_tts_duration_backfill: bool = True
 
 
+class BackendAudioCapability(BaseSchema):
+    """Describes what the audio backend supports for validation."""
+    supported_tts_speakers: list[str] = []
+    supported_bgm_moods: list[str] = []
+    supported_sfx_event_types: list[str] = []
+    max_parallel_tasks: int = 10
+    supported_output_formats: list[str] = ["wav", "mp3"]
+
+
 # ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill05Input(BaseSchema):
@@ -69,6 +80,7 @@ class Skill05Input(BaseSchema):
     global_audio_profile: str = "standard"  # preview | standard | final
     voice_cast_profile: dict = {}
     music_style_profile: dict = {}
+    backend_audio_capability: Optional[BackendAudioCapability] = None
     user_overrides: dict = {}
     feature_flags: dict = {}
 

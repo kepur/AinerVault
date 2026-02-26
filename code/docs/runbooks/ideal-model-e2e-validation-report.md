@@ -2,7 +2,7 @@
 
 ## 验证范围
 - 单一 Alembic init revision 可落库
-- 数据模型与 01~20 Skill/架构术语一致性
+- 数据模型与 01~22 Skill/架构术语一致性
 - 业务主链与治理增强链闭环完整性
 - 迁移可逆性与再应用能力
 
@@ -14,12 +14,13 @@
 - 结果：成功
 
 ### 2) 结构完整性
-- 落库表数量：58（public schema）
+- 落库表数量：58（public schema，基于当前 init baseline）
 - 核心表校验通过：
   - 主链：`execution_requests`, `render_runs`, `jobs`, `workflow_events`, `artifacts`
   - 计划链：`prompt_plans`, `timeline_segments`
   - RAG 闭环：`kb_versions`, `kb_proposals`, `rag_eval_reports`, `kb_rollouts`
-  - 14~20 增强链：`persona_packs`, `creative_policy_stacks`, `critic_evaluations`, `recovery_policies`, `experiment_runs`, `shot_compute_budgets`, `shot_dsl_compilations`
+  - 14~22 增强链：`persona_packs`, `creative_policy_stacks`, `critic_evaluations`, `recovery_policies`, `experiment_runs`, `shot_compute_budgets`, `shot_dsl_compilations`
+  - 21/22 新增骨架：`entity_instance_links`, `entity_continuity_profiles`, `entity_preview_variants`, `character_voice_bindings`, `persona_dataset_bindings`, `persona_index_bindings`, `persona_lineage_edges`, `persona_runtime_manifests`（已在 shared models 定义，待独立 migration 纳入落库验证）
 
 ### 3) 迁移可逆性
 - 首轮发现：`drop_all` 在 `artifacts <-> render_runs` FK 环存在循环依赖。
@@ -28,7 +29,7 @@
 
 ### 4) 术语/流程一致性
 - 运行对象统一：`run / job / stage / event / artifact`
-- 20/20 Skill 文档已包含固定“术语对齐声明”。
+- 22/22 Skill 文档已纳入统一术语口径。
 - 事件主状态统一：`job.succeeded/job.failed`；`worker.*.completed` 仅作执行明细。
 
 ## 结论

@@ -28,6 +28,8 @@
 | E2E-018 | compute budget 可用 | 高成本分镜任务 | shot.compute_budget.generated | shot_compute_budgets 入库 | 超预算任务触发降级 | High |
 | E2E-019 | DSL compiler 可用 | 下发视频任务 | shot.dsl.compiled -> job.created | shot_dsl_compilations 入库 | backend 编译结果可执行 | Blocker |
 | E2E-020 | RAG 反馈闭环在线 | 提交差评反馈并审核通过 | feedback.event.created -> proposal.approved -> kb.rollout.promoted | kb_version/rollout_records 更新 | 新版本对后续 run 生效 | Blocker |
+| E2E-021 | continuity 预览链在线 | 提交实体多角度预览并审批 | entity.registry.resolved -> preview.variant.generated -> preview.variant.approved | entity_continuity_profiles/entity_preview_variants 入库 | 审批后锁定 continuity anchor | Blocker |
+| E2E-022 | persona dataset/index 在线 | 发布 persona 绑定并执行预览召回 | persona.dataset.bound -> persona.index.bound -> persona.runtime.manifested | persona_*_bindings/persona_runtime_manifests 入库 | 10/15/17 可消费同一 persona runtime manifest | Blocker |
 
 ## 3. 验收门禁
 - Blocker 用例全部通过才可上线。

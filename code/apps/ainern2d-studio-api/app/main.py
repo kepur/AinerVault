@@ -12,6 +12,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.observer import router as observer_router
 from app.api.v1.orchestrator import consume_orchestrator_topic
 from app.api.v1.orchestrator import router as orchestrator_router
+from app.api.v1.preview import router as preview_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.regenerate import router as regenerate_router
 from app.api.v1.tasks import router as task_router
@@ -26,6 +27,7 @@ app.include_router(projects_router)
 app.include_router(assets_router)
 app.include_router(timeline_router)
 app.include_router(regenerate_router)
+app.include_router(preview_router)
 
 
 @app.on_event("startup")
@@ -45,4 +47,3 @@ def startup_consumers() -> None:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
 	return {"status": "ok"}
-

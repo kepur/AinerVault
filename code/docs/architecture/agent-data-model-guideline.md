@@ -14,6 +14,7 @@
   - 知识提炼模型：`knowledge_models.py`
   - 核心 RAG 模型：`rag_models.py`
   - 治理与路由模型：`governance_models.py`, `provider_models.py`
+  - 预览与 21/22 绑定模型：`preview_models.py`
 - **Alembic 初始数据库定义在**：`code/apps/alembic/versions/6f66885e0588_init_baseline.py`
 - **共享 Pydantic DTO (Schemas) 目录在**：`code/shared/ainern2d_shared/schemas/`
   - 注意：当前该目录为“待补齐骨架”，必须先按 `code/docs/runbooks/agent-direct-implementation-readiness.md` 的 P0 清单补齐后，才允许批量业务实现。
@@ -32,7 +33,7 @@
 
 ### 3.3 数据库迁移 (Alembic) 的铁律
 - 初期基线 `6f66885e0588_init_baseline.py` **禁止篡改**。
-- 如果在实现新 Skill(14~20) 或增强 RAG 逻辑时，需要增加字段或新表，**必须生成新的 alembic revision**。所有的 downgrade 脚本必须经过测试可以无损回滚新建的列/表。
+- 如果在实现新 Skill(14~22) 或增强 RAG 逻辑时，需要增加字段或新表，**必须生成新的 alembic revision**。所有的 downgrade 脚本必须经过测试可以无损回滚新建的列/表。
 
 ## 4. API 与框架对接落地细节规范
 为了避免偏离现有框架，遵循以下代码落地细节：

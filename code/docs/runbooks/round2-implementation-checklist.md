@@ -14,7 +14,7 @@
 - E2E交接验收：`code/docs/runbooks/e2e-handoff-test-matrix.md`
 - Skill线上部署：`code/docs/runbooks/skill-online-deployment.md`
 - P1治理计划：`code/docs/runbooks/p1-ops-governance-plan.md`
-- 14~20接入说明：`README_14_20_INTEGRATION_GUIDE.md`
+- 01~22接入说明：`README_21_22_INTEGRATION_GUIDE.md`
 - CI门禁执行：`code/docs/runbooks/ci-gate-execution-spec.md`
 
 ## 2. 工作包（按优先级）
@@ -66,7 +66,7 @@
 ## 4.1 当前验证结论（2026-02-26）
 - [x] 模型闭环：已通过（见 `code/docs/runbooks/ideal-model-e2e-validation-report.md`）
 - [x] 迁移闭环：已通过（`upgrade -> downgrade -> upgrade`）
-- [x] 术语闭环：已通过（SKILL_01~20 均有术语对齐声明）
+- [x] 术语闭环：已通过（SKILL_01~22 均有术语对齐声明）
 - [ ] 服务实现闭环：待业务服务代码按契约接线后复验
 
 ## 4.2 直落地可行性结论（2026-02-26）
