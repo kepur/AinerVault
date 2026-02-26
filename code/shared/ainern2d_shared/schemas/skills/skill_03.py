@@ -49,6 +49,11 @@ class ParallelTaskGroup(BaseSchema):
     tasks: list[str] = []
 
 
+class ReviewRequiredItem(BaseSchema):
+    item: str
+    reason: str = ""
+
+
 # ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill03Input(BaseSchema):
@@ -67,6 +72,7 @@ class Skill03Input(BaseSchema):
 
 
 class Skill03Output(BaseSchema):
+    version: str = "1.0"
     scene_plan: list[ScenePlan] = []
     shot_plan: list[ShotPlan] = []
     provisional_timeline: ProvisionalTimeline = ProvisionalTimeline()
@@ -74,5 +80,5 @@ class Skill03Output(BaseSchema):
     audio_pre_hints: list[AudioPreHint] = []
     parallel_task_groups: list[ParallelTaskGroup] = []
     warnings: list[str] = []
-    review_required_items: list[str] = []
+    review_required_items: list[ReviewRequiredItem] = []
     status: str = "ready_for_parallel_execution"
