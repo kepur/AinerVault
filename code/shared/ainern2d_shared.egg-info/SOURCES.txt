@@ -17,6 +17,7 @@ ainern2d_shared/ainer_db_models/knowledge_models.py
 ainern2d_shared/ainer_db_models/pipeline_models.py
 ainern2d_shared/ainer_db_models/provider_models.py
 ainern2d_shared/ainer_db_models/rag_models.py
+ainern2d_shared/config/__init__.py
 ainern2d_shared/config/enums.py
 ainern2d_shared/config/setting.py
 ainern2d_shared/db/__init__.py
@@ -27,6 +28,8 @@ ainern2d_shared/db/repositories/pipeline.py
 ainern2d_shared/queue/message_contracts.py
 ainern2d_shared/queue/rabbitmq.py
 ainern2d_shared/queue/topics.py
+ainern2d_shared/queue/__pycache__/config/enums.py
+ainern2d_shared/queue/__pycache__/config/setting.py
 ainern2d_shared/schemas/__init__.py
 ainern2d_shared/schemas/artifact.py
 ainern2d_shared/schemas/base.py
