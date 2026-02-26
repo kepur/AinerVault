@@ -28,7 +28,7 @@
 | 03 | Story→Scene→Shot Planner | `SERVICE_READY` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
 | 04 | Entity Extraction & Structuring | `SERVICE_READY` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
 | 05 | Audio Asset Planner | `SERVICE_READY` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
-| 06 | Audio Timeline Composer | `PARTIAL` | composer | `AudioTimelineService` | 2026-02-26 | Copilot |
+| 06 | Audio Timeline Composer | `SERVICE_READY` | composer | `AudioTimelineService` | 2026-02-27 | Copilot |
 | 07 | Entity Canonicalization & Cultural Binding | `SERVICE_READY` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
 | 08 | Asset Matcher | `SERVICE_READY` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
 | 09 | Visual Render Planner | `SERVICE_READY` | studio-api | `VisualRenderPlanService` | 2026-02-27 | Copilot |
@@ -42,7 +42,7 @@
 | 17 | Experiment & A/B Test | `SERVICE_READY` | studio-api | `ExperimentService` | 2026-02-27 | Copilot |
 | 18 | Failure Recovery & Degradation | `SERVICE_READY` | studio-api | `FailureRecoveryService` | 2026-02-27 | Copilot |
 | 19 | Compute-Aware Shot Budgeter | `SERVICE_READY` | studio-api | `ComputeBudgetService` | 2026-02-27 | Copilot |
-| 20 | Shot DSL Compiler & Prompt Backend | `PARTIAL` | composer | `DslCompilerService` | 2026-02-26 | Copilot |
+| 20 | Shot DSL Compiler & Prompt Backend | `SERVICE_READY` | composer | `DslCompilerService` | 2026-02-27 | Copilot |
 
 ---
 
