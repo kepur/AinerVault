@@ -6,11 +6,22 @@ Status: SERVICE_READY (skeleton)
 from __future__ import annotations
 
 import re
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.content_models import Scene, Shot
+from ainern2d_shared.ainer_db_models.knowledge_models import Entity
+from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun
+from ainern2d_shared.ainer_db_models.preview_models import (
+    CharacterVoiceBinding,
+    EntityContinuityProfile,
+    EntityInstanceLink,
+    EntityPreviewVariant,
+)
 from ainern2d_shared.schemas.skills.skill_21 import (
     ContinuityExports,
     ContinuityProfileOut,
@@ -190,6 +201,15 @@ class EntityRegistryContinuityService(BaseSkillService[Skill21Input, Skill21Outp
             resolved_entities=resolved_entities,
             continuity_profiles=continuity_profiles,
         )
+        persisted = self._persist_outputs(
+            input_dto=input_dto,
+            ctx=ctx,
+            resolved_entities=resolved_entities,
+            entity_instance_links=instance_links,
+            continuity_profiles=continuity_profiles,
+            warnings=warnings,
+            review_required_items=review_required_items,
+        )
 
         status = (
             "review_required"
@@ -205,7 +225,9 @@ class EntityRegistryContinuityService(BaseSkillService[Skill21Input, Skill21Outp
         logger.info(
             f"[{self.skill_id}] run={ctx.run_id} "
             f"resolved={len(resolved_entities)} created={len(created_entities)} "
-            f"instances={len(instance_links)} status={status}"
+            f"instances={len(instance_links)} status={status} "
+            f"persisted(inst={persisted['instance_links']},cp={persisted['continuity_profiles']},"
+            f"pv={persisted['preview_variants']},voice={persisted['voice_bindings']})"
         )
 
         return Skill21Output(
@@ -224,6 +246,284 @@ class EntityRegistryContinuityService(BaseSkillService[Skill21Input, Skill21Outp
             warnings=warnings,
             review_required_items=sorted(set(review_required_items)),
         )
+
+    def _persist_outputs(
+        self,
+        input_dto: Skill21Input,
+        ctx: SkillContext,
+        resolved_entities: list[ResolvedEntity],
+        entity_instance_links: list[EntityInstanceLinkOut],
+        continuity_profiles: list[ContinuityProfileOut],
+        warnings: list[str],
+        review_required_items: list[str],
+    ) -> dict[str, int]:
+        persisted = {
+            "instance_links": 0,
+            "continuity_profiles": 0,
+            "preview_variants": 0,
+            "voice_bindings": 0,
+        }
+        source_to_entity = {r.source_entity_uid: r.matched_entity_id for r in resolved_entities}
+        run_exists = self._id_exists(RenderRun, ctx.run_id)
+
+        if not run_exists:
+            warnings.append(f"persistence_skip_run_not_found:{ctx.run_id}")
+            review_required_items.append(f"run_not_found:{ctx.run_id}")
+
+        try:
+            # 1) continuity profile upsert
+            for profile in continuity_profiles:
+                entity_id = profile.entity_id
+                if not self._id_exists(Entity, entity_id):
+                    warnings.append(f"continuity_profile_skip_entity_missing:{entity_id}")
+                    review_required_items.append(f"entity_missing:{entity_id}")
+                    continue
+
+                existing = self._find_continuity_profile(ctx, entity_id)
+                if existing:
+                    existing.continuity_status = profile.continuity_status
+                    existing.anchors_json = dict(profile.anchors)
+                    existing.rules_json = dict(profile.rules)
+                    existing.meta_json = {
+                        "allowed_variations": list(profile.allowed_variations),
+                        "updated_by": self.skill_id,
+                    }
+                else:
+                    self.db.add(
+                        EntityContinuityProfile(
+                            id=f"ECP_{uuid4().hex[:16].upper()}",
+                            tenant_id=ctx.tenant_id,
+                            project_id=ctx.project_id,
+                            trace_id=ctx.trace_id,
+                            correlation_id=ctx.correlation_id,
+                            idempotency_key=f"{ctx.idempotency_key}:ecp:{entity_id}",
+                            entity_id=entity_id,
+                            continuity_status=profile.continuity_status,
+                            anchors_json=dict(profile.anchors),
+                            rules_json=dict(profile.rules),
+                            meta_json={"allowed_variations": list(profile.allowed_variations)},
+                        )
+                    )
+                persisted["continuity_profiles"] += 1
+
+            # 2) entity instance links upsert
+            if run_exists:
+                for link in entity_instance_links:
+                    entity_id = link.entity_id
+                    if not self._id_exists(Entity, entity_id):
+                        warnings.append(f"instance_link_skip_entity_missing:{entity_id}")
+                        review_required_items.append(f"entity_missing:{entity_id}")
+                        continue
+
+                    shot_id = link.shot_id or None
+                    if shot_id and not self._id_exists(Shot, shot_id):
+                        warnings.append(f"instance_link_shot_missing:{shot_id}")
+                        shot_id = None
+                    scene_id = link.scene_id or None
+                    if scene_id and not self._id_exists(Scene, scene_id):
+                        warnings.append(f"instance_link_scene_missing:{scene_id}")
+                        scene_id = None
+
+                    instance_key = link.instance_id or f"INST_{uuid4().hex[:10].upper()}"
+                    existing = self._find_instance_link(
+                        ctx=ctx,
+                        run_id=ctx.run_id,
+                        entity_id=entity_id,
+                        shot_id=shot_id,
+                        instance_key=instance_key,
+                    )
+                    if existing:
+                        existing.scene_id = scene_id
+                        existing.meta_json = {"source_entity_uid": link.source_entity_uid}
+                        existing.source_skill = self.skill_id
+                    else:
+                        self.db.add(
+                            EntityInstanceLink(
+                                id=f"EIL_{uuid4().hex[:16].upper()}",
+                                tenant_id=ctx.tenant_id,
+                                project_id=ctx.project_id,
+                                trace_id=ctx.trace_id,
+                                correlation_id=ctx.correlation_id,
+                                idempotency_key=f"{ctx.idempotency_key}:eil:{instance_key}",
+                                entity_id=entity_id,
+                                run_id=ctx.run_id,
+                                shot_id=shot_id,
+                                scene_id=scene_id,
+                                instance_key=instance_key,
+                                source_skill=self.skill_id,
+                                confidence=1.0,
+                                meta_json={"source_entity_uid": link.source_entity_uid},
+                            )
+                        )
+                    persisted["instance_links"] += 1
+
+            # 3) optional preview variant seeds from user_overrides
+            preview_seeds = input_dto.user_overrides.get("preview_variant_seeds", [])
+            if isinstance(preview_seeds, list) and run_exists:
+                for seed in preview_seeds:
+                    if not isinstance(seed, dict):
+                        continue
+                    entity_ref = str(seed.get("entity_id") or seed.get("source_entity_uid") or "")
+                    entity_id = source_to_entity.get(entity_ref, entity_ref)
+                    if not entity_id or not self._id_exists(Entity, entity_id):
+                        warnings.append(f"preview_seed_skip_entity_missing:{entity_ref}")
+                        continue
+
+                    shot_id = str(seed.get("shot_id") or "") or None
+                    if shot_id and not self._id_exists(Shot, shot_id):
+                        warnings.append(f"preview_seed_shot_missing:{shot_id}")
+                        shot_id = None
+                    scene_id = str(seed.get("scene_id") or "") or None
+                    if scene_id and not self._id_exists(Scene, scene_id):
+                        warnings.append(f"preview_seed_scene_missing:{scene_id}")
+                        scene_id = None
+
+                    self.db.add(
+                        EntityPreviewVariant(
+                            id=f"EPV_{uuid4().hex[:16].upper()}",
+                            tenant_id=ctx.tenant_id,
+                            project_id=ctx.project_id,
+                            trace_id=ctx.trace_id,
+                            correlation_id=ctx.correlation_id,
+                            idempotency_key=f"{ctx.idempotency_key}:epv:{entity_id}:{uuid4().hex[:8]}",
+                            run_id=ctx.run_id,
+                            entity_id=entity_id,
+                            shot_id=shot_id,
+                            scene_id=scene_id,
+                            view_angle=str(seed.get("view_angle") or "front"),
+                            generation_backend=str(seed.get("generation_backend") or "comfyui"),
+                            status=str(seed.get("status") or "queued"),
+                            prompt_text=seed.get("prompt_text"),
+                            negative_prompt_text=seed.get("negative_prompt_text"),
+                            regenerate_from_variant_id=seed.get("regenerate_from_variant_id"),
+                            review_note=seed.get("review_note"),
+                            meta_json={"source": "skill_21.preview_variant_seed"},
+                        )
+                    )
+                    persisted["preview_variants"] += 1
+
+            # 4) optional character voice binding from user_overrides
+            voice_bindings = input_dto.user_overrides.get("voice_bindings", [])
+            if isinstance(voice_bindings, list):
+                for binding in voice_bindings:
+                    if not isinstance(binding, dict):
+                        continue
+                    entity_ref = str(binding.get("entity_id") or binding.get("source_entity_uid") or "")
+                    entity_id = source_to_entity.get(entity_ref, entity_ref)
+                    if not entity_id or not self._id_exists(Entity, entity_id):
+                        warnings.append(f"voice_binding_skip_entity_missing:{entity_ref}")
+                        continue
+
+                    voice_id = str(binding.get("voice_id") or "")
+                    if not voice_id:
+                        warnings.append(f"voice_binding_skip_voice_id_missing:{entity_id}")
+                        continue
+
+                    language_code = str(binding.get("language_code") or "zh-CN")
+                    existing = self._find_voice_binding(ctx, entity_id, language_code)
+                    if existing:
+                        existing.voice_id = voice_id
+                        existing.tts_model = str(binding.get("tts_model") or "tts-1")
+                        existing.provider = str(binding.get("provider") or "openai")
+                        existing.locked = bool(binding.get("locked", True))
+                        existing.notes = binding.get("notes")
+                        existing.meta_json = {"source": "skill_21.voice_binding_update"}
+                    else:
+                        self.db.add(
+                            CharacterVoiceBinding(
+                                id=f"CVB_{uuid4().hex[:16].upper()}",
+                                tenant_id=ctx.tenant_id,
+                                project_id=ctx.project_id,
+                                trace_id=ctx.trace_id,
+                                correlation_id=ctx.correlation_id,
+                                idempotency_key=f"{ctx.idempotency_key}:cvb:{entity_id}:{language_code}",
+                                entity_id=entity_id,
+                                language_code=language_code,
+                                voice_id=voice_id,
+                                tts_model=str(binding.get("tts_model") or "tts-1"),
+                                provider=str(binding.get("provider") or "openai"),
+                                locked=bool(binding.get("locked", True)),
+                                notes=binding.get("notes"),
+                                meta_json={"source": "skill_21.voice_binding_create"},
+                            )
+                        )
+                    persisted["voice_bindings"] += 1
+
+            self.db.flush()
+            return persisted
+        except Exception as exc:
+            self.db.rollback()
+            warnings.append(f"persistence_failed:{type(exc).__name__}")
+            review_required_items.append("persistence_failed")
+            logger.warning(f"[{self.skill_id}] persistence failed: {exc}")
+            return {k: 0 for k in persisted}
+
+    def _find_continuity_profile(self, ctx: SkillContext, entity_id: str) -> EntityContinuityProfile | None:
+        return self._first_model(
+            select(EntityContinuityProfile).where(
+                EntityContinuityProfile.tenant_id == ctx.tenant_id,
+                EntityContinuityProfile.project_id == ctx.project_id,
+                EntityContinuityProfile.entity_id == entity_id,
+                EntityContinuityProfile.deleted_at.is_(None),
+            ),
+            EntityContinuityProfile,
+        )
+
+    def _find_instance_link(
+        self,
+        ctx: SkillContext,
+        run_id: str,
+        entity_id: str,
+        shot_id: str | None,
+        instance_key: str,
+    ) -> EntityInstanceLink | None:
+        return self._first_model(
+            select(EntityInstanceLink).where(
+                EntityInstanceLink.tenant_id == ctx.tenant_id,
+                EntityInstanceLink.project_id == ctx.project_id,
+                EntityInstanceLink.run_id == run_id,
+                EntityInstanceLink.entity_id == entity_id,
+                EntityInstanceLink.shot_id == shot_id,
+                EntityInstanceLink.instance_key == instance_key,
+                EntityInstanceLink.deleted_at.is_(None),
+            ),
+            EntityInstanceLink,
+        )
+
+    def _find_voice_binding(
+        self,
+        ctx: SkillContext,
+        entity_id: str,
+        language_code: str,
+    ) -> CharacterVoiceBinding | None:
+        return self._first_model(
+            select(CharacterVoiceBinding).where(
+                CharacterVoiceBinding.tenant_id == ctx.tenant_id,
+                CharacterVoiceBinding.project_id == ctx.project_id,
+                CharacterVoiceBinding.entity_id == entity_id,
+                CharacterVoiceBinding.language_code == language_code,
+                CharacterVoiceBinding.deleted_at.is_(None),
+            ),
+            CharacterVoiceBinding,
+        )
+
+    def _first_model(self, query: Any, model_cls: type) -> Any | None:
+        try:
+            row = self.db.execute(query).scalars().first()
+            return row if isinstance(row, model_cls) else None
+        except Exception:
+            return None
+
+    def _id_exists(self, model_cls: type, item_id: str | None) -> bool:
+        if not item_id:
+            return False
+        try:
+            row = self.db.execute(
+                select(model_cls.id).where(model_cls.id == item_id)
+            ).first()
+            return bool(row)
+        except Exception:
+            return False
 
     @staticmethod
     def _collect_extracted_entities(input_dto: Skill21Input) -> list[ExtractedEntity]:

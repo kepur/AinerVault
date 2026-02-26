@@ -1,6 +1,6 @@
 # MODEL_CONFIRMATION_REPORT
 
-- generated_at_utc: `2026-02-26 18:40:48Z`
+- generated_at_utc: `2026-02-26 18:55:22Z`
 - strict_mode: `true`
 - summary: `PASS=10 FAIL=0 WARN=1 TOTAL=11`
 
@@ -16,7 +16,7 @@
 | C008 | PASS | DB model anchors for SKILL 21/22 are present. |
 | C009 | PASS | Alembic migration for 21/22 enum/table alignment is present. |
 | C010 | PASS | Progress matrix contains 21/22 + db_alignment anchors. |
-| C011 | WARN | Pending blockers remain: DB upgrade execution / SKILL_21-22 persistence wiring. |
+| C011 | WARN | Pending blockers remain: DB upgrade execution / SKILL_21-22 persistence E2E/real-db validation. |
 
 ## Next
 1. 若存在 FAIL：先修复 FAIL 再开始功能开发。

@@ -102,6 +102,60 @@ class TestSkill21:
         assert out.registry_actions.created_new == 1
         assert len(out.review_required_items) >= 1
 
+    def test_persist_outputs_writes_preview_models(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_21 import (
+            ExistingRegistryEntity,
+            ExtractedEntity,
+            ShotPlanRef,
+            Skill21Input,
+        )
+
+        svc = self._make_service(mock_db)
+        inp = Skill21Input(
+            extracted_entities=[
+                ExtractedEntity(
+                    source_entity_uid="E1",
+                    entity_type="character",
+                    label="Li Mu",
+                    aliases=["李牧"],
+                    shot_ids=["S1"],
+                    scene_ids=["SC1"],
+                )
+            ],
+            existing_entity_registry=[
+                ExistingRegistryEntity(
+                    entity_id="CHAR_0001",
+                    entity_type="character",
+                    canonical_name="Li Mu",
+                    aliases=["李牧"],
+                )
+            ],
+            shot_plan=[ShotPlanRef(shot_id="S1", scene_id="SC1", entity_refs=["Li Mu"])],
+            user_overrides={
+                "preview_variant_seeds": [
+                    {
+                        "source_entity_uid": "E1",
+                        "view_angle": "front",
+                        "generation_backend": "comfyui",
+                    }
+                ],
+                "voice_bindings": [
+                    {
+                        "source_entity_uid": "E1",
+                        "language_code": "zh-CN",
+                        "voice_id": "voice_li_mu",
+                    }
+                ],
+            },
+        )
+        svc.execute(inp, ctx)
+
+        added_types = {type(call.args[0]).__name__ for call in mock_db.add.call_args_list}
+        assert "EntityInstanceLink" in added_types
+        assert "EntityContinuityProfile" in added_types
+        assert "EntityPreviewVariant" in added_types
+        assert "CharacterVoiceBinding" in added_types
+
 
 class TestSkill22:
     def _make_service(self, db):
@@ -170,3 +224,60 @@ class TestSkill22:
         svc = self._make_service(mock_db)
         with pytest.raises(ValueError, match="REQ-VALIDATION-022"):
             svc.execute(Skill22Input(personas=[]), ctx)
+
+    def test_persist_outputs_writes_binding_models(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_22 import (
+            DatasetItem,
+            IndexItem,
+            PersonaItem,
+            PersonaLineageOp,
+            Skill22Input,
+        )
+
+        svc = self._make_service(mock_db)
+        inp = Skill22Input(
+            datasets=[
+                DatasetItem(dataset_id="DS_001", name="rules"),
+                DatasetItem(dataset_id="DS_002", name="camera_notes"),
+            ],
+            indexes=[
+                IndexItem(index_id="IDX_001", kb_version_id="KB_V1", dataset_ids=["DS_001"]),
+                IndexItem(index_id="IDX_002", kb_version_id="KB_V2", dataset_ids=["DS_002"]),
+            ],
+            personas=[
+                PersonaItem(
+                    persona_id="director_A",
+                    persona_version="1.0",
+                    dataset_ids=["DS_001"],
+                    index_ids=["IDX_001"],
+                    style_pack_ref="director_a@1.0",
+                    metadata={"persona_pack_version_id": "PPV_A_1"},
+                ),
+                PersonaItem(
+                    persona_id="director_B",
+                    persona_version="1.0",
+                    dataset_ids=["DS_002"],
+                    index_ids=["IDX_002"],
+                    style_pack_ref="director_b@1.0",
+                    metadata={"persona_pack_version_id": "PPV_B_1"},
+                ),
+            ],
+            lineage_operations=[
+                PersonaLineageOp(
+                    source_persona_ref="director_A@1.0",
+                    target_persona_ref="director_B@1.0",
+                    edge_type="branch",
+                    reason="experiment_split",
+                )
+            ],
+            preview_query="duel",
+            preview_top_k=2,
+        )
+
+        svc.execute(inp, ctx)
+
+        added_types = {type(call.args[0]).__name__ for call in mock_db.add.call_args_list}
+        assert "PersonaDatasetBinding" in added_types
+        assert "PersonaIndexBinding" in added_types
+        assert "PersonaLineageEdge" in added_types
+        assert "PersonaRuntimeManifest" in added_types

@@ -180,8 +180,19 @@ def run_checks(repo_root: Path) -> list[CheckResult]:
         checks.append(CheckResult("C010", "PASS", "Progress matrix contains 21/22 + db_alignment anchors."))
 
     # C011: Warn if hard blockers still pending (expected at this stage)
-    if "SKILL_21/22 service 持久化写库" in s_txt or "执行 alembic upgrade head" in s_txt:
-        checks.append(CheckResult("C011", "WARN", "Pending blockers remain: DB upgrade execution / SKILL_21-22 persistence wiring."))
+    c011_reasons: list[str] = []
+    if "执行 alembic upgrade head" in s_txt:
+        c011_reasons.append("DB upgrade execution")
+    if "持久化写库" in s_txt:
+        c011_reasons.append("SKILL_21-22 persistence E2E/real-db validation")
+    if c011_reasons:
+        checks.append(
+            CheckResult(
+                "C011",
+                "WARN",
+                f"Pending blockers remain: {' / '.join(c011_reasons)}.",
+            )
+        )
     else:
         checks.append(CheckResult("C011", "PASS", "No high-level pending blockers found in progress matrix."))
 

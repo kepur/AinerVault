@@ -21,7 +21,7 @@ meta:
       - "pytest: tests/skills/test_skills_21_22.py"
     pending:
       - "执行 alembic upgrade head（需可用 PostgreSQL）"
-      - "SKILL_21/22 service 持久化写库"
+      - "SKILL_21/22 持久化写库实库验证（E2E + 数据一致性校验）"
   framework_validation:
     script: "code/scripts/validate_skill_framework.py"
     last_run_report: "progress/MODEL_CONFIRMATION_REPORT.md"
@@ -320,7 +320,7 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/preview.py"
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
     next_action:
-      - "将 service 输出写入 entity_instance_links/entity_continuity_profiles/entity_preview_variants/character_voice_bindings"
+      - "基于真实 PostgreSQL 跑 E2E，验证 entity_instance_links/entity_continuity_profiles/entity_preview_variants/character_voice_bindings 写入与幂等"
       - "将 continuity exports 接入 08/10/16 输入"
       - "补 E2E：entity continuity 锁定与重生成闭环"
 
@@ -338,6 +338,6 @@ skills:
       - "code/shared/ainern2d_shared/ainer_db_models/preview_models.py"
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
     next_action:
-      - "将 service 输出写入 persona_dataset_bindings/persona_index_bindings/persona_lineage_edges/persona_runtime_manifests"
+      - "基于真实 PostgreSQL 跑 E2E，验证 persona_dataset_bindings/persona_index_bindings/persona_lineage_edges/persona_runtime_manifests 写入与幂等"
       - "将 runtime manifests 接入 10/15/17 输入"
       - "补 E2E：dataset/index/persona lineage 与 preview query"
