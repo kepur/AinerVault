@@ -14,7 +14,7 @@
 | 领域 | 状态 | 证据文件 | 说明 |
 |---|---|---|---|
 | 术语统一（run/job/stage/event/artifact） | DONE | `ainer_contracts.md`, `ainer_event_types.md`, `00.架构.md` | 全仓主词典已统一 |
-| 共享模型理想态（01~22） | IN_PROGRESS | `code/shared/ainern2d_shared/ainer_db_models/*.py` | 基础链路模型已定义；21/22 预览与绑定骨架已加，完整迁移与服务接线待补齐 |
+| 共享模型理想态（01~22） | IN_PROGRESS | `code/shared/ainern2d_shared/ainer_db_models/*.py` | 基础链路模型已定义；21/22 迁移与服务消费接线已落地，API级 E2E 与治理闭环待补 |
 | Alembic init baseline | DONE | `code/apps/alembic/versions/6f66885e0588_init_baseline.py` | upgrade/downgrade/upgrade 已验证 |
 | 01~22 Skill 术语声明 | DONE | `SKILL_01~22` | 22/22 需求文档已存在 |
 | 服务 API 细粒度契约 | DONE | `code/docs/architecture/service-api-contracts.md` | 已补齐 |
@@ -25,14 +25,14 @@
 | shared 基础骨架 | DONE | `code/shared/ainern2d_shared/` | schemas(8) + queue(3) + utils(3) + telemetry(3) + config(2) + storage(2) + db(4) + services(2) — 全部有实现 |
 | 服务入口骨架 | DONE | `code/apps/*/app/main.py` | 4 服务 main.py + 所有路由注册 + 所有 __init__.py |
 | 业务模块实现 | DONE | `code/apps/*/app/modules/` | 66 个原空文件已全部实现，16 个 __init__.py |
-| SKILL DTO schemas | IN_PROGRESS | `code/shared/ainern2d_shared/schemas/skills/` | 01~22 DTO 已落地；21/22 已接入调度与 DAG，E2E 待补 |
-| SKILL Service 层 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 01~22 Service 已落地；21/22 处于 INTEGRATION_READY，E2E 待补 |
+| SKILL DTO schemas | IN_PROGRESS | `code/shared/ainern2d_shared/schemas/skills/` | 01~22 DTO 已落地；21/22 及其 08/10/15/16/17 消费字段已接通，API级 E2E 待补 |
+| SKILL Service 层 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 01~22 Service 已落地；21/22 消费接线与服务级 E2E 已补，真实执行与 API 闭环待补 |
 | SKILL 注册表 | DONE | `code/apps/ainern2d-studio-api/app/services/skill_registry.py` | SkillRegistry.dispatch() 可调度 |
 | BaseSkillService 基类 | DONE | `code/shared/ainern2d_shared/services/base_skill.py` | 幂等/日志/状态记录/错误包装 |
 | SKILL 进度跟踪 | IN_PROGRESS | `SKILL_IMPLEMENTATION_PROGRESS.md` | 目标链路已升级为 01~22；21/22 代码化进度待继续推进 |
 | DevOps（docker/nginx/scripts） | DONE | `code/docker-compose.yml`, `code/infra/`, `code/scripts/` | 完整开发环境 |
-| SKILL 核心逻辑实现 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 基础 20 技能已实现但仍有契约/流程缺口；21/22 已完成 DTO+Service+Dispatcher+DAG 接线，E2E 待补 |
-| E2E 集成测试 | TODO | — | 需编写端到端测试用例 |
+| SKILL 核心逻辑实现 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 基础 20 技能已实现并接入 21/22 消费链；下一步是去纯模拟分支与真实执行闭环 |
+| E2E 集成测试 | IN_PROGRESS | `code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py` | 已新增 E2E-021/022 服务级链路验证；API+DB 级自动化归档待补 |
 
 ## 4. Agent 执行门禁
 - MUST：实现前读取本 Ledger 与 `ainer_contracts.md`。

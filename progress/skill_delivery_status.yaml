@@ -172,8 +172,7 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补 E2E：验证 21 continuity anchors -> 10 prompt consistency 全链路"
-      - "补 E2E：验证 22 active persona runtime -> 10 prompt policy/style 注入"
+      - "补 API/DB E2E：验证 persona/continuity 注入后的 prompt_plan 持久化与回放一致"
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"
@@ -238,7 +237,7 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补 E2E：验证 22 runtime manifest -> 15 policy stack 决策影响"
+      - "补 API/DB E2E：验证 22 runtime manifest -> 15 policy 决策入库与审计可追溯"
 
   - skill_id: "SKILL_16"
     name: "Critic Evaluation Suite"
@@ -264,7 +263,6 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补 E2E：验证 22 runtime manifest -> 17 variant version lock 注入"
       - "补齐真实执行路径（去除纯模拟分支）与胜者晋升门禁"
 
   - skill_id: "SKILL_18"
@@ -321,8 +319,9 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/preview.py"
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
+      - "code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py"
     next_action:
-      - "补 E2E：entity continuity 锁定与重生成闭环"
+      - "补 API 级 E2E：连通 preview 审批接口，验证 continuity lock 在后续 run 持续生效"
 
   - skill_id: "SKILL_22"
     name: "Persona Dataset & Index Manager"
@@ -338,5 +337,6 @@ skills:
       - "code/shared/ainern2d_shared/ainer_db_models/preview_models.py"
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
+      - "code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py"
     next_action:
-      - "补 E2E：dataset/index/persona lineage 与 preview query"
+      - "补 API/DB E2E：验证 persona lineage 变更后 10/15/17 消费一致且可回滚"

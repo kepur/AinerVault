@@ -21,6 +21,9 @@
   - SKILL_22 `runtime_manifests`（支持 `active_persona_ref`）
 - SKILL_08 / SKILL_16 已接入 SKILL_21 continuity exports
 - SKILL_15 / SKILL_17 已接入 SKILL_22 runtime manifests
+- 新增服务级 E2E 用例：
+  - code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py
+  - 覆盖 E2E-021 / E2E-022 的服务链路消费验证
 
 2.1) 开发前强制校验（MUST）：
 - 先运行：
@@ -29,12 +32,12 @@
 - 每次提交前再运行一次同命令，确保无新增漂移。
 
 3) 本轮只做一个目标（二选一）：
-A. 做 E2E：`04 -> 21 -> 07 -> 08 -> 10 -> 20`，验证 continuity anchors 在 prompt/DSL 中可追溯
-B. 做 E2E：`11/12/14 -> 22 -> 15/17`，验证 runtime manifest 对策略与实验配置生效
+A. 做 API 级 E2E：`preview API -> 21 continuity lock -> 08/10/16`，验证审批后连续运行不漂移
+B. 做 API+DB E2E：`22 lineage/version update -> 10/15/17`，验证消费一致性与回滚策略
 
 4) 执行边界：
 - 允许修改：
-  - 目标 SKILL 对应的 DTO/Service/Test 文件与必要 API
+  - 目标 SKILL 对应的 DTO/Service/Test 文件与必要 API/DAO
   - 必要时：skill_registry.py / skill_dispatcher.py / orchestrator_dag.py
   - progress/skill_delivery_status.yaml（必须更新）
 - 不允许大范围重构其他 skill。
