@@ -172,7 +172,8 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "接入 SKILL_21 continuity anchors 与 SKILL_22 runtime manifest"
+      - "补 E2E：验证 21 continuity anchors -> 10 prompt consistency 全链路"
+      - "补 E2E：验证 22 active persona runtime -> 10 prompt policy/style 注入"
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"

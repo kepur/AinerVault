@@ -166,6 +166,103 @@ class TestSkill10:
         out2 = svc.execute(inp2, ctx)
         assert out1.model_variants[0].variant_id == out2.model_variants[0].variant_id
 
+    def test_skill21_continuity_exports_are_consumed(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+        inp = self._make_input(
+            entity_canonicalization_result={
+                "selected_culture_pack": {"id": "cn_wuxia"},
+                "culture_constraints": {"visual_do": [], "visual_dont": []},
+                "entity_variant_mapping": [
+                    {
+                        "entity_uid": "CHAR_0001",
+                        "entity_id": "CHAR_0001",
+                        "entity_type": "character",
+                        "surface_form": "李明",
+                        "visual_traits": ["dark robe"],
+                    },
+                ],
+                "status": "ready_for_asset_match",
+            },
+            asset_match_result={
+                "entity_asset_matches": [
+                    {"entity_uid": "CHAR_0001", "lora_refs": [], "embedding_refs": []},
+                ],
+                "status": "ready",
+            },
+            visual_render_plan={
+                "shot_render_plans": [
+                    {"shot_id": "sh_001", "scene_id": "SC01", "motion_level": "MEDIUM"},
+                ],
+                "status": "ready_for_render_execution",
+            },
+            shot_plan={
+                "shots": [
+                    {
+                        "shot_id": "sh_001",
+                        "shot_type": "medium",
+                        "goal": "duel sequence",
+                        "entities": ["CHAR_0001"],
+                    },
+                ],
+            },
+            continuity_exports={
+                "prompt_consistency_anchors": [
+                    {
+                        "entity_id": "CHAR_0001",
+                        "continuity_status": "active",
+                        "consistency_tokens": ["scar on left brow", "black robe"],
+                    }
+                ],
+                "asset_matcher_anchors": [
+                    {
+                        "entity_id": "CHAR_0001",
+                        "entity_type": "character",
+                        "anchor_prompt": "same hero face and costume",
+                    }
+                ],
+                "critic_rules_baseline": [
+                    {"entity_id": "CHAR_0001", "identity_lock": True}
+                ],
+            },
+        )
+
+        out = svc.execute(inp, ctx)
+
+        assert len(out.shot_prompt_plans) == 1
+        shot = out.shot_prompt_plans[0]
+        assert "CHAR_0001" in shot.derived_from.continuity_anchor_refs
+        assert "identity drift" in shot.negative_layers.entity_negative
+        assert any(
+            anchor == "continuity_anchor:CHAR_0001"
+            for anchor in shot.prompt_layers.consistency_anchor
+        )
+
+    def test_skill22_runtime_manifest_is_consumed(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+        inp = self._make_input(
+            persona_dataset_index_result={
+                "runtime_manifests": [
+                    {
+                        "persona_ref": "director_A@2.0",
+                        "style_pack_ref": "director_a_style@2.0",
+                        "policy_override_ref": "policy_a_v2",
+                        "critic_profile_ref": "critic_a_v2",
+                        "runtime_manifest": {"persona_ref": "director_A@2.0"},
+                    }
+                ]
+            },
+            active_persona_ref="director_A@2.0",
+        )
+        out = svc.execute(inp, ctx)
+        assert out.global_prompt_constraints.persona_runtime_ref == "director_A@2.0"
+        assert out.global_prompt_constraints.persona_style_ref == "director_a_style@2.0"
+        assert out.global_prompt_constraints.persona_policy_ref == "policy_a_v2"
+        assert out.global_prompt_constraints.persona_critic_ref == "critic_a_v2"
+        assert any(
+            "persona baseline director_A@2.0" in frag
+            for frag in out.global_prompt_constraints.global_positive_fragments
+        )
+
 
 # ── SKILL 11: RagKBManagerService ────────────────────────────────────────────
 

@@ -188,9 +188,28 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             return Skill10Output(status="failed", warnings=blocking)
         self._record_state(ctx, "PRECHECKING", "PRECHECK_READY")
 
+        continuity_ctx = self._resolve_continuity_context(inp)
+        persona_ctx = self._resolve_persona_runtime_context(inp)
+        warnings.extend(persona_ctx.get("warnings", []))
+        if persona_ctx.get("review_reason"):
+            review_items.append(
+                ReviewRequiredItem(
+                    target_type="global",
+                    target_id=inp.active_persona_ref or "persona_runtime",
+                    reason=str(persona_ctx["review_reason"]),
+                    severity="medium",
+                )
+            )
+
         # ── P2: Global Constraints (§9 [P2]) ────────────────────────
         self._record_state(ctx, "PRECHECK_READY", "BUILDING_GLOBAL_CONSTRAINTS")
-        gc = self._build_global_constraints(inp, overrides, ff)
+        gc = self._build_global_constraints(
+            inp=inp,
+            overrides=overrides,
+            ff=ff,
+            continuity_ctx=continuity_ctx,
+            persona_ctx=persona_ctx,
+        )
         self._record_state(
             ctx, "BUILDING_GLOBAL_CONSTRAINTS", "GLOBAL_CONSTRAINTS_READY",
         )
@@ -224,6 +243,7 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             plan = self._build_shot_prompt_plan(
                 srp, shot_info_lookup, entity_lookup, asset_lookup,
                 culture_constraints, gc, inp, token_limit, ff, overrides,
+                continuity_ctx, persona_ctx,
             )
             shot_plans.append(plan)
             warnings.extend(plan.warnings)
@@ -374,6 +394,8 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         inp: Skill10Input,
         overrides: Skill10UserOverrides,
         ff: Skill10FeatureFlags,
+        continuity_ctx: dict[str, Any],
+        persona_ctx: dict[str, Any],
     ) -> GlobalPromptConstraints:
         culture_pack = inp.entity_canonicalization_result.get(
             "selected_culture_pack", {},
@@ -400,6 +422,16 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             pos.extend(inp.recipe_context.soft_hints)
         if overrides.forced_culture_fragments:
             pos.extend(overrides.forced_culture_fragments)
+        persona_ref = str(persona_ctx.get("persona_ref") or "")
+        style_ref = str(persona_ctx.get("style_pack_ref") or "")
+        policy_ref = str(persona_ctx.get("policy_override_ref") or "")
+        critic_ref = str(persona_ctx.get("critic_profile_ref") or "")
+        if persona_ref:
+            pos.append(f"persona baseline {persona_ref}")
+        if style_ref:
+            pos.append(f"style pack {style_ref}")
+        if policy_ref:
+            pos.append(f"policy profile {policy_ref}")
 
         # ── Negative fragments ───────────────────────────────────────
         neg = list(_GLOBAL_NEGATIVES)
@@ -408,6 +440,8 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         neg.extend(culture_cst.get("hard_constraints", []))
         if overrides.negative_prompt_append:
             neg.extend(overrides.negative_prompt_append)
+        if critic_ref:
+            neg.append(f"avoid violating critic profile {critic_ref}")
 
         # ── Consistency anchors ──────────────────────────────────────
         scene_ids: list[str] = []
@@ -421,6 +455,12 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                 scene_ids.append(uid)
             elif "character" in etype or "person" in etype:
                 char_ids.append(uid)
+        continuity_anchor_ids = list(continuity_ctx.get("anchor_ids", []))
+        for anchor_id in continuity_anchor_ids:
+            if anchor_id.upper().startswith("CHAR_"):
+                char_ids.append(anchor_id)
+            elif anchor_id.upper().startswith("SCENE_"):
+                scene_ids.append(anchor_id)
 
         return GlobalPromptConstraints(
             selected_culture_pack=pack_id,
@@ -429,9 +469,14 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             style_mode=style_mode,
             quality_profile=quality,
             global_consistency_anchors=GlobalConsistencyAnchors(
-                scene_anchor_ids=scene_ids,
-                character_anchor_ids=char_ids,
+                scene_anchor_ids=_dedup(scene_ids),
+                character_anchor_ids=_dedup(char_ids),
             ),
+            continuity_anchor_ids=continuity_anchor_ids,
+            persona_runtime_ref=persona_ref,
+            persona_style_ref=style_ref,
+            persona_policy_ref=policy_ref,
+            persona_critic_ref=critic_ref,
             user_overrides_applied=[
                 k for k, v in overrides.model_dump().items() if v
             ],
@@ -452,6 +497,8 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         token_limit: int,
         ff: Skill10FeatureFlags,
         overrides: Skill10UserOverrides,
+        continuity_ctx: dict[str, Any],
+        persona_ctx: dict[str, Any],
     ) -> ShotPromptPlan:
         shot_id = srp.get("shot_id", "")
         scene_id = srp.get("scene_id", "")
@@ -476,12 +523,16 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
 
         # ── 2) Cultural Layer ────────────────────────────────────────
         cultural = list(gc.global_positive_fragments[:4])
+        style_ref = str(persona_ctx.get("style_pack_ref") or "")
+        if style_ref:
+            cultural.append(f"style pack {style_ref}")
 
         # ── 3) Entity Layer + LoRA / embedding injection ─────────────
         entity: list[str] = []
         lora_triggers: list[str] = []
         embedding_tokens: list[str] = []
         entity_negs: list[str] = []
+        continuity_anchor_refs: list[str] = []
         uid_list = _normalize_uid_list(char_ids)
         for uid in uid_list:
             ev = entity_lookup.get(uid, {})
@@ -505,6 +556,28 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                 embedding_tokens.extend(asset.get("embedding_refs", []))
             entity_negs.extend(ev.get("avoid_trait_drift", []))
 
+            # Continuity anchors from SKILL 21 (if provided)
+            for key in self._continuity_candidate_keys(uid, ev):
+                anchor = continuity_ctx["prompt_anchor_map"].get(key)
+                if not anchor:
+                    continue
+                continuity_anchor_refs.append(str(anchor.get("entity_id") or key))
+                entity.extend(list(anchor.get("consistency_tokens") or [])[:2])
+                if str(anchor.get("continuity_status") or "") == "needs_review":
+                    warnings.append(f"PROMPT-CONTINUITY-001: {key} needs continuity review")
+
+                critic_rule = continuity_ctx["critic_rule_map"].get(
+                    str(anchor.get("entity_id") or key)
+                )
+                if critic_rule and critic_rule.get("identity_lock"):
+                    entity_negs.append("identity drift")
+                asset_anchor = continuity_ctx["asset_anchor_map"].get(
+                    str(anchor.get("entity_id") or key)
+                )
+                if asset_anchor and asset_anchor.get("anchor_prompt"):
+                    entity.append(str(asset_anchor["anchor_prompt"]))
+                break
+
         # ── 4) Shot Layer (camera / composition) ─────────────────────
         shot_layer: list[str] = []
         if camera:
@@ -514,6 +587,9 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         comp = detail.get("composition", "")
         if comp:
             shot_layer.append(comp)
+        policy_ref = str(persona_ctx.get("policy_override_ref") or "")
+        if policy_ref:
+            shot_layer.append(f"policy profile {policy_ref}")
 
         # ── 5) Motion Layer ──────────────────────────────────────────
         motion: list[str] = []
@@ -556,9 +632,16 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         for uid in uid_list:
             anchors.append(f"character_anchor:{uid}")
             anchor_ids.append(uid)
+        for continuity_ref in continuity_anchor_refs:
+            anchors.append(f"continuity_anchor:{continuity_ref}")
+            anchor_ids.append(continuity_ref)
         if scene_id:
             anchors.append(f"scene_anchor:{scene_id}")
             anchor_ids.append(scene_id)
+        persona_ref = str(persona_ctx.get("persona_ref") or "")
+        if persona_ref:
+            anchors.append(f"persona_anchor:{persona_ref}")
+            anchor_ids.append(persona_ref)
 
         # ── 9) Negative Layers ───────────────────────────────────────
         neg_layers = NegativeLayers(
@@ -596,6 +679,8 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             derived_from=DerivedFrom(
                 asset_match_refs=uid_list,
                 visual_render_plan_ref=shot_id,
+                continuity_anchor_refs=_dedup(continuity_anchor_refs),
+                persona_runtime_ref=persona_ref,
             ),
             assembly_rules=AssemblyRules(),
             lora_triggers=_dedup(lora_triggers),
@@ -1005,6 +1090,109 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                 issues=issues,
             ))
         return scores
+
+    @staticmethod
+    def _resolve_continuity_context(inp: Skill10Input) -> dict[str, Any]:
+        continuity_result = inp.entity_registry_continuity_result or {}
+        continuity_exports = inp.continuity_exports or {}
+        if not continuity_exports and isinstance(continuity_result, dict):
+            continuity_exports = dict(continuity_result.get("continuity_exports", {}))
+
+        prompt_anchor_map: dict[str, dict[str, Any]] = {}
+        asset_anchor_map: dict[str, dict[str, Any]] = {}
+        critic_rule_map: dict[str, dict[str, Any]] = {}
+        anchor_ids: list[str] = []
+
+        for item in _extract_list(continuity_exports, "prompt_consistency_anchors"):
+            entity_id = str(item.get("entity_id") or "")
+            if not entity_id:
+                continue
+            prompt_anchor_map[entity_id] = item
+            anchor_ids.append(entity_id)
+        for item in _extract_list(continuity_exports, "asset_matcher_anchors"):
+            entity_id = str(item.get("entity_id") or "")
+            if entity_id:
+                asset_anchor_map[entity_id] = item
+        for item in _extract_list(continuity_exports, "critic_rules_baseline"):
+            entity_id = str(item.get("entity_id") or "")
+            if entity_id:
+                critic_rule_map[entity_id] = item
+
+        return {
+            "prompt_anchor_map": prompt_anchor_map,
+            "asset_anchor_map": asset_anchor_map,
+            "critic_rule_map": critic_rule_map,
+            "anchor_ids": _dedup(anchor_ids),
+        }
+
+    @staticmethod
+    def _resolve_persona_runtime_context(inp: Skill10Input) -> dict[str, Any]:
+        persona_result = inp.persona_dataset_index_result or {}
+        manifests = _extract_list(persona_result, "runtime_manifests")
+        selected: dict[str, Any] | None = None
+        warnings: list[str] = []
+        review_reason = ""
+
+        if manifests:
+            active_ref = (inp.active_persona_ref or "").strip()
+            if active_ref:
+                selected = next(
+                    (
+                        manifest
+                        for manifest in manifests
+                        if str(manifest.get("persona_ref") or "") == active_ref
+                    ),
+                    None,
+                )
+                if selected is None:
+                    review_reason = (
+                        f"PROMPT-PERSONA-001: active_persona_ref '{active_ref}' not found"
+                    )
+                    warnings.append(review_reason)
+            if selected is None:
+                selected = manifests[0]
+        elif persona_result:
+            warnings.append(
+                "PROMPT-PERSONA-002: persona_dataset_index_result has no runtime_manifests"
+            )
+
+        runtime_manifest = dict((selected or {}).get("runtime_manifest") or {})
+        persona_ref = str((selected or {}).get("persona_ref") or runtime_manifest.get("persona_ref") or "")
+        style_pack_ref = str(
+            (selected or {}).get("style_pack_ref")
+            or runtime_manifest.get("style_pack_ref")
+            or ""
+        )
+        policy_override_ref = str(
+            (selected or {}).get("policy_override_ref")
+            or runtime_manifest.get("policy_override_ref")
+            or ""
+        )
+        critic_profile_ref = str(
+            (selected or {}).get("critic_profile_ref")
+            or runtime_manifest.get("critic_profile_ref")
+            or ""
+        )
+
+        return {
+            "persona_ref": persona_ref,
+            "style_pack_ref": style_pack_ref,
+            "policy_override_ref": policy_override_ref,
+            "critic_profile_ref": critic_profile_ref,
+            "warnings": warnings,
+            "review_reason": review_reason,
+        }
+
+    @staticmethod
+    def _continuity_candidate_keys(uid: str, entity_variant: dict[str, Any]) -> list[str]:
+        candidates = [
+            uid,
+            str(entity_variant.get("entity_id") or ""),
+            str(entity_variant.get("canonical_entity_id") or ""),
+            str(entity_variant.get("matched_entity_id") or ""),
+            str(entity_variant.get("source_entity_uid") or ""),
+        ]
+        return _dedup([c for c in candidates if c])
 
     # ── Internal helpers ─────────────────────────────────────────────────
 

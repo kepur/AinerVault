@@ -15,6 +15,10 @@
 - SKILL_21/22 的 DTO + Service + Registry/Dispatcher + DAG 已接线
 - 数据库增量迁移已新增：code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py
 - 迁移覆盖 jobtype 枚举补值 + 21/22 所需 8 张表
+- 已有真实库验证脚本：code/scripts/validate_skill_21_22_persistence_realdb.py（已通过）
+- SKILL_10 已接入：
+  - SKILL_21 `continuity_exports`
+  - SKILL_22 `runtime_manifests`（支持 `active_persona_ref`）
 
 2.1) 开发前强制校验（MUST）：
 - 先运行：
@@ -23,14 +27,13 @@
 - 每次提交前再运行一次同命令，确保无新增漂移。
 
 3) 本轮只做一个目标（二选一）：
-A. 完成 SKILL_21 service 持久化写库（entity continuity 全链）
-B. 完成 SKILL_22 service 持久化写库（persona dataset/index/lineage/manifest）
+A. 做 E2E：`04 -> 21 -> 07 -> 08 -> 10 -> 20`，验证 continuity anchors 在 prompt/DSL 中可追溯
+B. 完成 SKILL_15 或 SKILL_17 对 SKILL_22 runtime manifest 的消费接线（只选一个）
 
 4) 执行边界：
 - 允许修改：
-  - code/shared/ainern2d_shared/schemas/skills/skill_21.py / skill_22.py
-  - code/apps/ainern2d-studio-api/app/services/skills/skill_21_*.py / skill_22_*.py
-  - 必要时：skill_registry.py / skill_dispatcher.py / tests/skills/test_skills_21_22.py
+  - 目标 SKILL 对应的 DTO/Service/Test 文件
+  - 必要时：skill_registry.py / skill_dispatcher.py / orchestrator_dag.py
   - progress/skill_delivery_status.yaml（必须更新）
 - 不允许大范围重构其他 skill。
 

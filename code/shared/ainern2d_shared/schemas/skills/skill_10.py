@@ -122,6 +122,8 @@ class DerivedFrom(BaseSchema):
 
     asset_match_refs: list[str] = []
     visual_render_plan_ref: str = ""
+    continuity_anchor_refs: list[str] = []
+    persona_runtime_ref: str = ""
 
 
 # ── Consistency Anchors (§14) ────────────────────────────────────────────────
@@ -292,6 +294,11 @@ class GlobalPromptConstraints(BaseSchema):
     style_mode: str = ""
     quality_profile: str = "standard"  # preview | standard | final
     global_consistency_anchors: GlobalConsistencyAnchors = GlobalConsistencyAnchors()
+    continuity_anchor_ids: list[str] = []
+    persona_runtime_ref: str = ""
+    persona_style_ref: str = ""
+    persona_policy_ref: str = ""
+    persona_critic_ref: str = ""
     user_overrides_applied: list[str] = []
     rag_recipe_applied: RAGRecipeContext | None = None
 
@@ -307,6 +314,10 @@ class Skill10Input(BaseSchema):
     asset_match_result: dict = {}
     visual_render_plan: dict = {}
     shot_plan: dict = {}
+    entity_registry_continuity_result: dict = {}
+    continuity_exports: dict = {}
+    persona_dataset_index_result: dict = {}
+    active_persona_ref: str = ""
 
     # Optional context
     story_context: dict = {}
