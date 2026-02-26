@@ -7,6 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
+from uuid import uuid4
 
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -106,6 +107,7 @@ class BaseSkillService(ABC, Generic[InputT, OutputT]):
             from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
 
             evt = WorkflowEvent(
+                id=f"WE_{uuid4().hex[:16].upper()}",
                 tenant_id=ctx.tenant_id,
                 project_id=ctx.project_id,
                 run_id=ctx.run_id,
@@ -114,6 +116,7 @@ class BaseSkillService(ABC, Generic[InputT, OutputT]):
                 idempotency_key=f"{ctx.idempotency_key}:{self.skill_id}:{to_state}",
                 event_type=f"{self.skill_id}.state.{to_state.lower()}",
                 producer=self.skill_id,
+                occurred_at=utcnow(),
                 payload_json={
                     "from_state": from_state,
                     "to_state": to_state,
