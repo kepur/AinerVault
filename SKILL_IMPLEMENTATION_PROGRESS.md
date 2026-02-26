@@ -27,10 +27,10 @@
 | 02 | Language Context Router | `SERVICE_READY` | studio-api | `LanguageContextService` | 2026-02-26 | Copilot |
 | 03 | Story→Scene→Shot Planner | `SERVICE_READY` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
 | 04 | Entity Extraction & Structuring | `SERVICE_READY` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
-| 05 | Audio Asset Planner | `PARTIAL` | studio-api | `AudioAssetPlanService` | 2026-02-26 | Copilot |
+| 05 | Audio Asset Planner | `SERVICE_READY` | studio-api | `AudioAssetPlanService` | 2026-02-27 | Copilot |
 | 06 | Audio Timeline Composer | `PARTIAL` | composer | `AudioTimelineService` | 2026-02-26 | Copilot |
-| 07 | Entity Canonicalization & Cultural Binding | `PARTIAL` | studio-api | `CanonicalizationService` | 2026-02-26 | Copilot |
-| 08 | Asset Matcher | `PARTIAL` | studio-api | `AssetMatcherService` | 2026-02-26 | Copilot |
+| 07 | Entity Canonicalization & Cultural Binding | `SERVICE_READY` | studio-api | `CanonicalizationService` | 2026-02-27 | Copilot |
+| 08 | Asset Matcher | `SERVICE_READY` | studio-api | `AssetMatcherService` | 2026-02-27 | Copilot |
 | 09 | Visual Render Planner | `PARTIAL` | studio-api | `VisualRenderPlanService` | 2026-02-26 | Copilot |
 | 10 | Prompt Planner | `PARTIAL` | studio-api | `PromptPlannerService` | 2026-02-26 | Copilot |
 | 11 | RAG KB Manager | `PARTIAL` | studio-api | `RagKBManagerService` | 2026-02-26 | Copilot |
