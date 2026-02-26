@@ -1,29 +1,75 @@
 """SKILL 02: Language Context Router — Input/Output DTOs."""
 from __future__ import annotations
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
+# ── Sub-objects ───────────────────────────────────────────────────────────────
+
+class LanguageRoute(BaseSchema):
+    source_primary_language: str = "zh-CN"
+    target_output_language: str = "zh-CN"
+    translation_required: bool = False
+    bilingual_output: bool = False
+
+
+class TranslationPlan(BaseSchema):
+    mode: str = "none"  # none | full | partial | bilingual
+    preserve_named_entities: bool = True
+    source_lang: str = ""
+    target_lang: str = ""
+
+
 class CultureCandidate(BaseSchema):
-    culture_code: str  # e.g. "zh-CN-ancient", "ja-JP-modern"
+    culture_pack_id: str
     confidence: float = 0.0
-    description: str = ""
+    reason_tags: list[str] = []
 
 
-class KBSuggestion(BaseSchema):
-    kb_id: str
-    kb_name: str
-    relevance_score: float = 0.0
+class KBQueryPlan(BaseSchema):
+    must_queries: list[str] = []
+    optional_queries: list[str] = []
 
+
+class PlannerHints(BaseSchema):
+    scene_planner_mode: str = "generic"
+    shot_planner_bias: str = "neutral"
+    culture_binding_hint: str = ""
+
+
+class RetrievalFilters(BaseSchema):
+    culture_pack: str = ""
+    genre: str = ""
+    era: str = ""
+    style_mode: str = ""
+    filter_strength: str = "soft_preference"  # hard_constraint | soft_preference
+
+
+# ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill02Input(BaseSchema):
-    document_meta: dict
-    language_detection: dict
-    segments: list[dict] = []
+    # From SKILL 01 output
+    primary_language: str = "zh-CN"
+    secondary_languages: list[str] = []
+    normalized_text: str = ""
+    quality_status: str = "ready_for_routing"
+    # User / project context
+    target_output_language: str = ""
+    genre: str = ""
+    story_world_setting: str = ""  # realistic | historical | fantasy | scifi | modern
+    target_locale: str = ""
+    user_overrides: dict = {}
+    project_defaults: dict = {}
+    feature_flags: dict = {}
 
 
 class Skill02Output(BaseSchema):
-    language_code: str
+    language_route: LanguageRoute = LanguageRoute()
+    translation_plan: TranslationPlan = TranslationPlan()
     culture_candidates: list[CultureCandidate] = []
-    kb_suggestions: list[KBSuggestion] = []
-    routing_decision: str = ""
+    kb_query_plan: KBQueryPlan = KBQueryPlan()
+    planner_hints: PlannerHints = PlannerHints()
+    retrieval_filters: RetrievalFilters = RetrievalFilters()
+    warnings: list[str] = []
+    review_required_items: list[str] = []
     status: str = "ready_for_planning"

@@ -24,7 +24,7 @@
 | # | SKILL | 状态 | 所属服务 | Service 类 | 上次更新 | 更新者 |
 |---|-------|------|---------|-----------|---------|--------|
 | 01 | Story Ingestion & Normalization | `SERVICE_READY` | studio-api | `StoryIngestionService` | 2026-02-26 | Copilot |
-| 02 | Language Context Router | `PARTIAL` | studio-api | `LanguageContextService` | 2026-02-26 | Copilot |
+| 02 | Language Context Router | `SERVICE_READY` | studio-api | `LanguageContextService` | 2026-02-26 | Copilot |
 | 03 | Story→Scene→Shot Planner | `PARTIAL` | studio-api | `SceneShotPlanService` | 2026-02-26 | Copilot |
 | 04 | Entity Extraction & Structuring | `PARTIAL` | studio-api | `EntityExtractionService` | 2026-02-26 | Copilot |
 | 05 | Audio Asset Planner | `PARTIAL` | studio-api | `AudioAssetPlanService` | 2026-02-26 | Copilot |
@@ -457,4 +457,4 @@ task.submitted
 |------|------|-----------|--------|
 | 2026-02-26 | 初始创建文档，标记所有 SKILL 为 PARTIAL | ALL | Copilot |
 | 2026-02-26 | 完成 modules/ 层所有 66 个空文件实现 | ALL | Copilot |
-| 2026-02-26 | SKILL 01 execute() 全量实现：precheck/normalize/parse/detect/quality_check，状态机全路径，DTO 补全 structure/normalized_text/warnings/ingestion_log | 01 | Copilot |
+| 2026-02-26 | SKILL 02 execute() 全量实现：5步路由状态机，DTO 补全 LanguageRoute/TranslationPlan/CultureCandidate/KBQueryPlan/PlannerHints/RetrievalFilters | 02 | Copilot |
