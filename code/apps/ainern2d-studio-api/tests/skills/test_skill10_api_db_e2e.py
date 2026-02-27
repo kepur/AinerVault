@@ -214,6 +214,9 @@ def test_skill10_prompt_plan_api_db_replay_consistency(monkeypatch):
                 assert resp1.headers["x-prompt-plan-total"] == "1"
                 qms1 = int(resp1.headers["x-prompt-plan-query-ms"])
                 assert 0 <= qms1 < 5000
+                assert int(resp1.headers["x-prompt-plan-p50-ms"]) >= 0
+                assert int(resp1.headers["x-prompt-plan-p95-ms"]) >= 0
+                assert resp1.headers["x-prompt-plan-latency-alert"] in ("on", "off")
                 payload1 = resp1.json()
                 assert len(payload1) == 1
                 assert payload1[0]["run_id"] == run_id
@@ -419,6 +422,9 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
                 assert full.headers["x-prompt-plan-total"] == "2"
                 full_qms = int(full.headers["x-prompt-plan-query-ms"])
                 assert 0 <= full_qms < 5000
+                assert int(full.headers["x-prompt-plan-p50-ms"]) >= 0
+                assert int(full.headers["x-prompt-plan-p95-ms"]) >= 0
+                assert full.headers["x-prompt-plan-latency-alert"] in ("on", "off")
                 full_payload = full.json()
                 assert len(full_payload) == 2
 
@@ -427,6 +433,9 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
                 assert page.headers["x-prompt-plan-total"] == "2"
                 page_qms = int(page.headers["x-prompt-plan-query-ms"])
                 assert 0 <= page_qms < 5000
+                assert int(page.headers["x-prompt-plan-p50-ms"]) >= 0
+                assert int(page.headers["x-prompt-plan-p95-ms"]) >= 0
+                assert page.headers["x-prompt-plan-latency-alert"] in ("on", "off")
                 page_payload = page.json()
                 assert len(page_payload) == 1
                 assert page_payload[0]["shot_id"] == full_payload[1]["shot_id"]
@@ -572,6 +581,21 @@ def test_skill10_prompt_plan_api_replay_latency_baseline_large_batch():
                 p95 = ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
                 assert p50 <= 8000
                 assert p95 <= 8000
+                assert int(resp.headers["x-prompt-plan-p50-ms"]) >= 0
+                assert int(resp.headers["x-prompt-plan-p95-ms"]) >= 0
+                assert resp.headers["x-prompt-plan-latency-alert"] in ("on", "off")
+                from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
+                metric_events = db.execute(
+                    select(WorkflowEvent)
+                    .where(
+                        WorkflowEvent.run_id == run_id,
+                        WorkflowEvent.event_type == "prompt.plan.replay.queried",
+                    )
+                ).scalars().all()
+                assert len(metric_events) >= 9
+                latest_payload = (metric_events[-1].payload_json or {})
+                assert "p95_ms" in latest_payload
+                assert "latency_alert" in latest_payload
         finally:
             app.dependency_overrides.clear()
     finally:

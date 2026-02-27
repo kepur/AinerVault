@@ -20,6 +20,7 @@ from ainern2d_shared.schemas.task import RunDetailResponse, TaskCreateRequest, T
 from app.api.deps import get_db, publish
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
+_REPLAY_P95_ALERT_MS = 3000
 
 
 class TaskSubmitRequest(TaskCreateRequest):
@@ -39,6 +40,14 @@ class PromptPlanReplayItem(BaseModel):
 	prompt_text: str
 	negative_prompt_text: str | None = None
 	model_hint_json: dict | None = None
+
+
+def _percentile_ms(values: list[int], p: float) -> int:
+	if not values:
+		return 0
+	ordered = sorted(values)
+	idx = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * p)))
+	return ordered[idx]
 
 
 @router.post("/tasks", response_model=TaskSubmitAccepted, status_code=202)
@@ -156,6 +165,57 @@ def get_run_prompt_plans(
 	).scalars().all()
 	elapsed_ms = int((perf_counter() - start) * 1000)
 	response.headers["X-Prompt-Plan-Query-Ms"] = str(elapsed_ms)
+	history = []
+	recent_metrics = db.execute(
+		select(WorkflowEvent)
+		.where(
+			WorkflowEvent.run_id == run_id,
+			WorkflowEvent.event_type == "prompt.plan.replay.queried",
+			WorkflowEvent.deleted_at.is_(None),
+		)
+		.order_by(WorkflowEvent.occurred_at.desc())
+		.limit(50)
+	).scalars().all()
+	for evt in recent_metrics:
+		query_ms = (evt.payload_json or {}).get("query_ms")
+		if isinstance(query_ms, int):
+			history.append(query_ms)
+	latency_samples = history + [elapsed_ms]
+	p50_ms = _percentile_ms(latency_samples, 0.5)
+	p95_ms = _percentile_ms(latency_samples, 0.95)
+	alert = p95_ms >= _REPLAY_P95_ALERT_MS
+	response.headers["X-Prompt-Plan-P50-Ms"] = str(p50_ms)
+	response.headers["X-Prompt-Plan-P95-Ms"] = str(p95_ms)
+	response.headers["X-Prompt-Plan-Latency-Alert"] = "on" if alert else "off"
+
+	now = datetime.now(timezone.utc)
+	replay_metric_event = WorkflowEvent(
+		id=f"evt_{uuid4().hex[:24]}",
+		tenant_id=run.tenant_id,
+		project_id=run.project_id,
+		trace_id=run.trace_id,
+		correlation_id=run.correlation_id,
+		idempotency_key=f"idem_prompt_replay_{uuid4().hex}",
+		run_id=run_id,
+		stage=run.stage,
+		event_type="prompt.plan.replay.queried",
+		event_version="1.0",
+		producer="studio_api",
+		occurred_at=now,
+		payload_json={
+			"run_id": run_id,
+			"total": total,
+			"limit": limit,
+			"offset": offset,
+			"query_ms": elapsed_ms,
+			"p50_ms": p50_ms,
+			"p95_ms": p95_ms,
+			"latency_alert": alert,
+			"alert_threshold_ms": _REPLAY_P95_ALERT_MS,
+		},
+	)
+	WorkflowEventRepository(db).create(replay_metric_event)
+	db.commit()
 
 	return [
 		PromptPlanReplayItem(
