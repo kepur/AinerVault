@@ -487,7 +487,7 @@ skills:
 
   - skill_id: "SKILL_27"
     name: "World / Culture Pack Manager"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_27_WORLD_CULTURE_PACK_MANAGER.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/culture_packs.py"
@@ -498,8 +498,9 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/culture_packs.py (culture pack CRUD/version/export + keyword 过滤 + 删除)"
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioCulturePackPage.vue (culture pack 列表/增删查/过滤 + 导出)"
-    next_action:
-      - "culture pack 模板库与规则校验器（视觉/命名约束）"
+      - "code/apps/ainern2d-studio-api/app/api/v1/culture_packs.py (GET /templates 返回4个预定义文化包模板)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/culture_packs.py (POST /validate 约束校验：视觉规则冲突检测、签牌规则验证、服装/道具约束校验)"
+    next_action: []
 
   - skill_id: "SKILL_28"
     name: "Task / Run Orchestration UI"

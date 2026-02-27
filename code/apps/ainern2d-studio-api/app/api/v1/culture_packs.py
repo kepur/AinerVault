@@ -51,6 +51,35 @@ class CulturePackExportResponse(BaseModel):
     export_for_skill_10: dict = Field(default_factory=dict)
 
 
+class CulturePackTemplate(BaseModel):
+    template_id: str
+    name: str
+    description: str
+    category: str  # historical|modern|fantasy|sci-fi|other
+    visual_do: list[str] = []
+    visual_dont: list[str] = []
+    signage_rules: dict = Field(default_factory=dict)
+    costume_norms: dict = Field(default_factory=dict)
+    prop_norms: dict = Field(default_factory=dict)
+
+
+class ConstraintValidationRequest(BaseModel):
+    culture_pack_id: str
+    visual_do: list[str] = []
+    visual_dont: list[str] = []
+    signage_rules: dict = Field(default_factory=dict)
+    costume_norms: dict = Field(default_factory=dict)
+    prop_norms: dict = Field(default_factory=dict)
+
+
+class ConstraintValidationResponse(BaseModel):
+    culture_pack_id: str
+    is_valid: bool
+    violations: list[str] = []
+    warnings: list[str] = []
+    suggestions: list[str] = []
+
+
 @router.post("", response_model=CulturePackResponse, status_code=201)
 def create_culture_pack(
     body: CulturePackCreateRequest,
@@ -210,6 +239,72 @@ def delete_culture_pack(
     return {"status": "deleted", "culture_pack_id": culture_pack_id}
 
 
+@router.get("/templates", response_model=list[CulturePackTemplate])
+def list_culture_pack_templates() -> list[CulturePackTemplate]:
+    """Return predefined culture pack templates for users to select from."""
+    return _get_culture_pack_templates()
+
+
+@router.post("/validate", response_model=ConstraintValidationResponse)
+def validate_culture_pack_constraints(
+    body: ConstraintValidationRequest,
+) -> ConstraintValidationResponse:
+    """Validate culture pack constraints for visual rules, naming conventions, signage rules."""
+    violations: list[str] = []
+    warnings: list[str] = []
+    suggestions: list[str] = []
+
+    # Validate visual_do and visual_dont don't overlap
+    visual_do_set = set(str(v).lower() for v in body.visual_do)
+    visual_dont_set = set(str(v).lower() for v in body.visual_dont)
+    overlap = visual_do_set & visual_dont_set
+    if overlap:
+        violations.append(f"Visual rules contain conflicting constraints: {', '.join(overlap)}")
+
+    # Validate signage rules structure
+    signage_rules = body.signage_rules or {}
+    if signage_rules:
+        required_fields = {"character_limit", "language", "font_style"}
+        missing_fields = required_fields - set(signage_rules.keys())
+        if missing_fields:
+            warnings.append(f"Signage rules missing fields: {', '.join(missing_fields)}")
+
+    # Validate costume norms
+    costume_norms = body.costume_norms or {}
+    if costume_norms:
+        if "color_palette" in costume_norms:
+            colors = costume_norms.get("color_palette") or []
+            if not isinstance(colors, list) or len(colors) == 0:
+                violations.append("Costume color_palette must be a non-empty list")
+
+    # Validate prop norms
+    prop_norms = body.prop_norms or {}
+    if prop_norms:
+        if "material_constraints" in prop_norms:
+            materials = prop_norms.get("material_constraints") or []
+            if not isinstance(materials, list) or len(materials) == 0:
+                warnings.append("Prop material_constraints should specify allowed materials")
+
+    # Generate suggestions
+    if len(body.visual_do) == 0:
+        suggestions.append("Consider adding specific visual guidelines to visual_do")
+    if len(body.visual_dont) == 0:
+        suggestions.append("Consider adding specific prohibitions to visual_dont")
+    if not costume_norms:
+        suggestions.append("Consider defining costume_norms for consistency")
+    if not prop_norms:
+        suggestions.append("Consider defining prop_norms for consistency")
+
+    is_valid = len(violations) == 0
+    return ConstraintValidationResponse(
+        culture_pack_id=body.culture_pack_id,
+        is_valid=is_valid,
+        violations=violations,
+        warnings=warnings,
+        suggestions=suggestions,
+    )
+
+
 def _query_culture_pack_rows(
     *,
     db: Session,
@@ -301,3 +396,142 @@ def _to_response(row: CreativePolicyStack) -> CulturePackResponse:
         status=row.status,
         constraints=payload.get("constraints") or {},
     )
+
+
+def _get_culture_pack_templates() -> list[CulturePackTemplate]:
+    """Return predefined culture pack templates for various cultural settings."""
+    return [
+        CulturePackTemplate(
+            template_id="template_ancient_british",
+            name="Ancient British",
+            description="Medieval British setting with period-appropriate architecture and customs",
+            category="historical",
+            visual_do=[
+                "Stone castles and timber-framed buildings",
+                "Medieval armor and chainmail",
+                "Natural earth tones and heraldic symbols",
+                "Round arches and pointed arches",
+            ],
+            visual_dont=[
+                "Modern technology or vehicles",
+                "Electric lighting",
+                "Contemporary clothing",
+                "Plastic or synthetic materials",
+            ],
+            signage_rules={
+                "character_limit": 50,
+                "language": "English (Middle English acceptable)",
+                "font_style": "Gothic or calligraphic",
+                "material": "Wood, stone, or metal",
+            },
+            costume_norms={
+                "color_palette": ["Black", "Gold", "Red", "Green", "Brown", "Grey"],
+                "fabric_types": ["Wool", "Linen", "Silk"],
+                "social_class_indicators": "Fabric quality and color saturation",
+            },
+            prop_norms={
+                "material_constraints": ["Wood", "Metal", "Stone", "Leather"],
+                "common_items": ["Swords", "Shields", "Torches", "Wooden furniture"],
+            },
+        ),
+        CulturePackTemplate(
+            template_id="template_modern_japan",
+            name="Modern Japan",
+            description="Contemporary Japanese urban setting with modern aesthetics",
+            category="modern",
+            visual_do=[
+                "Modern high-rise buildings and architecture",
+                "Neon signs and LED displays",
+                "Contemporary fashion and accessories",
+                "Clean lines and minimalist design",
+                "Traditional Japanese elements mixed with modern",
+            ],
+            visual_dont=[
+                "Historical samurai aesthetics in non-historical context",
+                "Overly stereotypical representations",
+                "Obsolete technology",
+            ],
+            signage_rules={
+                "character_limit": 100,
+                "language": "Japanese (Hiragana, Katakana, Kanji)",
+                "font_style": "Modern sans-serif or stylized fonts",
+                "material": "Plastic, metal, LED, neon",
+            },
+            costume_norms={
+                "color_palette": ["Black", "White", "Navy", "Grey", "Pastels"],
+                "fabric_types": ["Cotton", "Polyester", "Denim", "Silk"],
+                "social_class_indicators": "Brand logos and fabric quality",
+            },
+            prop_norms={
+                "material_constraints": ["Plastic", "Metal", "Glass", "Fabric"],
+                "common_items": ["Mobile phones", "Convenience store items", "Bicycles"],
+            },
+        ),
+        CulturePackTemplate(
+            template_id="template_cyberpunk",
+            name="Cyberpunk",
+            description="High-tech dystopian future setting with advanced technology",
+            category="sci-fi",
+            visual_do=[
+                "Neon lighting and holographic displays",
+                "Futuristic cybernetic enhancements",
+                "High-tech materials like chrome and carbon fiber",
+                "Urban sprawl with vertical cities",
+                "Glowing circuitry and LED patterns",
+            ],
+            visual_dont=[
+                "Nature and natural materials",
+                "Warm, organic lighting",
+                "Historical references",
+                "Low-tech solutions",
+            ],
+            signage_rules={
+                "character_limit": 80,
+                "language": "Mixed tech jargon and neolanguage",
+                "font_style": "Bold, angular, futuristic digital fonts",
+                "material": "LED, holographic, plasma screens",
+            },
+            costume_norms={
+                "color_palette": ["Black", "Neon Pink", "Cyan", "Purple", "Silver"],
+                "fabric_types": ["Synthetic", "Leather", "Metallic"],
+                "social_class_indicators": "Technology augmentation level",
+            },
+            prop_norms={
+                "material_constraints": ["Metal", "Glass", "Synthetic", "Circuitry"],
+                "common_items": ["Data pads", "Weapons with energy cells", "Hacking tools"],
+            },
+        ),
+        CulturePackTemplate(
+            template_id="template_wuxia",
+            name="Chinese Wuxia",
+            description="Martial arts and ancient Chinese setting",
+            category="historical",
+            visual_do=[
+                "Traditional Chinese architecture with curved roofs",
+                "Silk robes and martial arts costumes",
+                "Calligraphic decorations and Chinese art",
+                "Bamboo forests and misty mountains",
+                "Lanterns and traditional lighting",
+            ],
+            visual_dont=[
+                "Western architectural styles",
+                "Modern materials or technology",
+                "Contemporary fashion",
+            ],
+            signage_rules={
+                "character_limit": 30,
+                "language": "Chinese (Traditional or Simplified)",
+                "font_style": "Calligraphic or brush-style",
+                "material": "Wood, silk, paper",
+            },
+            costume_norms={
+                "color_palette": ["Red", "Gold", "Black", "White", "Purple", "Blue"],
+                "fabric_types": ["Silk", "Linen", "Cotton"],
+                "social_class_indicators": "Martial school rank and embroidery quality",
+            },
+            prop_norms={
+                "material_constraints": ["Wood", "Metal", "Leather", "Stone"],
+                "common_items": ["Martial arts weapons", "Scrolls", "Tea sets"],
+            },
+        ),
+    ]
