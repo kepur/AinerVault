@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import requests
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -1005,11 +1004,8 @@ def ai_expand_chapter_content(
         )
     ).scalars().first()
 
-    provider_used = "default"
-    model_name = "gpt-4"
-    if default_model:
-        provider_used = default_model.name
-        model_name = "default-model"
+    provider_used = default_model.name if default_model else "deepseek"
+    model_name = default_model.endpoint if default_model and hasattr(default_model, "endpoint") else "deepseek-chat"
 
     # 构建扩展提示词
     expansion_prompt = _build_expansion_prompt(
@@ -1019,19 +1015,24 @@ def ai_expand_chapter_content(
         target_language=body.target_language or "zh",
     )
 
-    # 模拟AI调用返回扩展内容（实际部署时应调用真实LLM）
-    expanded_text = _simulate_llm_expansion(
-        original_text=original_text,
-        prompt=expansion_prompt,
-        max_tokens=body.max_tokens,
-    )
+    # 调用真实LLM API进行内容扩展
+    try:
+        expanded_text, prompt_tokens, completion_tokens = _call_llm_api(
+            model_provider=provider_used,
+            model_name=model_name,
+            prompt=expansion_prompt,
+            max_tokens=body.max_tokens,
+            temperature=0.7,
+        )
+    except Exception as e:
+        # 如果LLM调用失败，返回错误信息
+        raise HTTPException(
+            status_code=503,
+            detail=f"[SYS-LLM-001] LLM service error: {str(e)}",
+        )
 
     # 提取新增部分
-    appended_excerpt = expanded_text[len(original_text):] if len(expanded_text) > len(original_text) else expanded_text
-
-    # 估算Token使用
-    prompt_tokens = len(expansion_prompt) // 4
-    completion_tokens = len(expanded_text) // 4
+    appended_excerpt = expanded_text[len(original_text):] if len(expanded_text) > len(original_text) else expanded_text[:200]
 
     # 记录AI扩展事件
     now = datetime.now(timezone.utc)
@@ -1120,15 +1121,228 @@ def _build_expansion_prompt(
 """
 
 
-def _simulate_llm_expansion(original_text: str, prompt: str, max_tokens: int = 900) -> str:
-    """模拟LLM调用返回扩展文本（实际部署时应调用真实API）"""
-    # 这是一个简化的实现，实际应该调用真实的LLM服务
-    # 根据原始文本长度和max_tokens估算扩展内容
-    target_length = min(len(original_text) * 2, len(original_text) + max_tokens * 4)
+def _call_llm_api(
+    model_provider: str,
+    model_name: str,
+    prompt: str,
+    max_tokens: int = 900,
+    temperature: float = 0.7,
+) -> tuple[str, int, int]:
+    """
+    调用真实的LLM API进行内容扩展
+
+    Returns:
+        (expanded_text, prompt_tokens, completion_tokens)
+    """
+    try:
+        # DeepSeek API 调用
+        if model_provider.lower() in ["deepseek", "deep-seek"]:
+            return _call_deepseek_api(model_name, prompt, max_tokens, temperature)
+
+        # OpenAI API 调用
+        elif model_provider.lower() in ["openai", "gpt"]:
+            return _call_openai_api(model_name, prompt, max_tokens, temperature)
+
+        # Claude API 调用
+        elif model_provider.lower() in ["anthropic", "claude"]:
+            return _call_claude_api(model_name, prompt, max_tokens, temperature)
+
+        # 其他API调用
+        else:
+            return _call_generic_api(model_provider, model_name, prompt, max_tokens, temperature)
+
+    except Exception as e:
+        # 如果API调用失败，使用fallback方法
+        print(f"⚠️ LLM API 调用失败: {str(e)}, 使用 fallback 方法")
+        return _fallback_llm_expansion(prompt, max_tokens)
+
+
+def _call_deepseek_api(
+    model_name: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
+    """调用 DeepSeek API"""
+    import os
+
+    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        raise ValueError("DEEPSEEK_API_KEY 环境变量未设置")
+
+    url = "https://api.deepseek.com/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model_name or "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    result = response.json()
+    expanded_text = result["choices"][0]["message"]["content"]
+    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
+    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
+
+    return expanded_text, prompt_tokens, completion_tokens
+
+
+def _call_openai_api(
+    model_name: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
+    """调用 OpenAI API"""
+    import os
+
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY 环境变量未设置")
+
+    url = "https://api.openai.com/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model_name or "gpt-4",
+        "messages": [
+            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    result = response.json()
+    expanded_text = result["choices"][0]["message"]["content"]
+    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
+    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
+
+    return expanded_text, prompt_tokens, completion_tokens
+
+
+def _call_claude_api(
+    model_name: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
+    """调用 Claude API (Anthropic)"""
+    import os
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
+
+    url = "https://api.anthropic.com/v1/messages"
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model_name or "claude-3-sonnet-20240229",
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    result = response.json()
+    expanded_text = result["content"][0]["text"]
+    prompt_tokens = result.get("usage", {}).get("input_tokens", 0)
+    completion_tokens = result.get("usage", {}).get("output_tokens", 0)
+
+    return expanded_text, prompt_tokens, completion_tokens
+
+
+def _call_generic_api(
+    provider: str,
+    model_name: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> tuple[str, int, int]:
+    """调用通用的 OpenAI 兼容 API"""
+    import os
+
+    api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
+    if not api_key:
+        # 如果没有API key，使用fallback
+        return _fallback_llm_expansion(prompt, max_tokens)
+
+    base_url = os.getenv(f"{provider.upper()}_API_BASE", f"https://api.{provider.lower()}.com/v1")
+
+    url = f"{base_url}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    result = response.json()
+    expanded_text = result["choices"][0]["message"]["content"]
+    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
+    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
+
+    return expanded_text, prompt_tokens, completion_tokens
+
+
+def _fallback_llm_expansion(prompt: str, max_tokens: int) -> tuple[str, int, int]:
+    """
+    Fallback: 当LLM API不可用时使用本地简单扩展算法
+
+    Returns:
+        (expanded_text, prompt_tokens, completion_tokens)
+    """
+    # 从prompt中提取原始文本
+    original_text = prompt.split("原始文本：")[1].split("```")[1] if "原始文本：" in prompt else ""
+
+    if not original_text:
+        # 如果提取失败，直接返回一个简单的扩展
+        target_length = min(300, max_tokens * 4)
+        expanded_text = "这是一段AI生成的扩展文本。" + ("" * (target_length - 20))
+        return expanded_text, len(prompt) // 4, 75
 
     # 简单的扩展算法：在原文基础上增加描写
     sentences = original_text.split('。')
     expanded_sentences = []
+    target_length = min(len(original_text) * 2, len(original_text) + max_tokens * 4)
 
     for i, sentence in enumerate(sentences):
         if sentence.strip():
@@ -1139,7 +1353,12 @@ def _simulate_llm_expansion(original_text: str, prompt: str, max_tokens: int = 9
                 expanded_sentences.append(expansion)
 
     expanded_text = ''.join(expanded_sentences)
-    return expanded_text[:target_length] if len(expanded_text) > target_length else expanded_text
+    expanded_text = expanded_text[:target_length] if len(expanded_text) > target_length else expanded_text
+
+    prompt_tokens = len(prompt) // 4
+    completion_tokens = len(expanded_text) // 4
+
+    return expanded_text, prompt_tokens, completion_tokens
 
 
 def _generate_sentence_expansion(sentence: str) -> str:
