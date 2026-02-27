@@ -503,7 +503,7 @@ skills:
 
   - skill_id: "SKILL_28"
     name: "Task / Run Orchestration UI"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_28_TASK_RUN_ORCHESTRATION_UI.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/tasks.py"
@@ -519,8 +519,9 @@ skills:
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioRunCenterPage.vue (任务提交/Run Snapshot 独立页面 + 快速选章)"
       - "code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioRunCenterPage.vue (Run 详情 + Prompt 回放 + Policy 回放可视化)"
-    next_action:
-      - "DAG 可视化与阶段级 rerun-stage 前端入口"
+      - "code/apps/ainern2d-studio-api/app/api/v1/tasks.py (GET /runs/{run_id}/dag + DAG 可视化返回节点/边/状态)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/tasks.py (POST /runs/{run_id}/rerun-stage + 阶段级重跑请求 + TG 通知)"
+    next_action: []
 
   - skill_id: "SKILL_29"
     name: "Asset Library by Project"

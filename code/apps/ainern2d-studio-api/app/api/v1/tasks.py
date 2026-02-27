@@ -66,6 +66,51 @@ class RunSnapshotResponse(BaseModel):
 	snapshot: dict = Field(default_factory=dict)
 
 
+class DAGNodeResponse(BaseModel):
+	node_id: str
+	stage_name: str
+	status: str  # pending|running|completed|failed|skipped
+	progress_percent: float = 0.0
+	started_at: str | None = None
+	completed_at: str | None = None
+	duration_ms: int = 0
+	error_message: str | None = None
+	worker_type: str | None = None
+	metadata: dict = Field(default_factory=dict)
+
+
+class DAGEdgeResponse(BaseModel):
+	from_node: str
+	to_node: str
+	edge_type: str = "sequential"  # sequential|conditional|parallel
+
+
+class DAGVisualizationResponse(BaseModel):
+	run_id: str
+	pipeline_status: str  # queued|running|completed|failed
+	nodes: list[DAGNodeResponse] = []
+	edges: list[DAGEdgeResponse] = []
+	current_stage: str
+	progress_percent: float = 0.0
+	created_at: str
+	metadata: dict = Field(default_factory=dict)
+
+
+class RunRerunStageRequest(BaseModel):
+	stage_name: str
+	requested_by: str | None = None
+	idempotency_key: str = Field(default_factory=lambda: f"rerun_{uuid4().hex}")
+
+
+class RunRerunStageResponse(BaseModel):
+	run_id: str
+	rerun_job_id: str
+	stage_name: str
+	status: str
+	message: str
+	created_at: str
+
+
 def _percentile_ms(values: list[int], p: float) -> int:
 	if not values:
 		return 0
@@ -480,3 +525,152 @@ def get_run_policy_stacks(
 			)
 		)
 	return items
+
+
+def _build_dag_from_run(run: RenderRun) -> tuple[list[DAGNodeResponse], list[DAGEdgeResponse]]:
+	"""Construct DAG nodes and edges from RenderRun state."""
+	# Define standard pipeline stages (SKILL 01~22)
+	stages = [
+		"ingest", "route", "enrich", "generate", "qc", "archive",
+	]
+	stage_map = {s: i for i, s in enumerate(stages)}
+
+	current_stage = (run.stage.value if run.stage else "ingest").lower()
+	current_idx = stage_map.get(current_stage, 0)
+
+	nodes: list[DAGNodeResponse] = []
+	for stage in stages:
+		stage_idx = stage_map[stage]
+		if stage_idx < current_idx:
+			node_status = "completed"
+		elif stage_idx == current_idx:
+			node_status = "running" if run.status == RunStatus.running else "pending"
+		else:
+			node_status = "pending"
+
+		if run.status == RunStatus.failed and stage_idx >= current_idx:
+			node_status = "failed" if stage_idx == current_idx else "skipped"
+
+		nodes.append(DAGNodeResponse(
+			node_id=f"stage_{stage}",
+			stage_name=stage,
+			status=node_status,
+			progress_percent=float(run.progress or 0) if stage == current_stage else (100.0 if node_status == "completed" else 0.0),
+			metadata={"stage_order": stage_idx},
+		))
+
+	# Define edges between sequential stages
+	edges: list[DAGEdgeResponse] = []
+	for i, stage in enumerate(stages[:-1]):
+		edges.append(DAGEdgeResponse(
+			from_node=f"stage_{stage}",
+			to_node=f"stage_{stages[i+1]}",
+			edge_type="sequential",
+		))
+
+	return nodes, edges
+
+
+@router.get("/runs/{run_id}/dag", response_model=DAGVisualizationResponse)
+def get_run_dag(run_id: str, db: Session = Depends(get_db)) -> DAGVisualizationResponse:
+	run_repo = RenderRunRepository(db)
+	run = run_repo.get(run_id)
+	if run is None:
+		raise HTTPException(status_code=404, detail="run not found")
+
+	nodes, edges = _build_dag_from_run(run)
+	current_stage = (run.stage.value if run.stage else "ingest").lower()
+
+	return DAGVisualizationResponse(
+		run_id=run_id,
+		pipeline_status=run.status.value if run.status else "unknown",
+		nodes=nodes,
+		edges=edges,
+		current_stage=current_stage,
+		progress_percent=float(run.progress or 0),
+		created_at=run.created_at.isoformat() if run.created_at else "",
+		metadata={
+			"chapter_id": run.chapter_id,
+			"kb_version_id": run.kb_version_id,
+			"error_code": run.error_code,
+		},
+	)
+
+
+@router.post("/runs/{run_id}/rerun-stage", response_model=RunRerunStageResponse, status_code=202)
+def rerun_stage(
+	run_id: str,
+	body: RunRerunStageRequest,
+	db: Session = Depends(get_db),
+) -> RunRerunStageResponse:
+	run_repo = RenderRunRepository(db)
+	run = run_repo.get(run_id)
+	if run is None:
+		raise HTTPException(status_code=404, detail="run not found")
+
+	now = datetime.now(timezone.utc)
+	rerun_job_id = f"rerun_{uuid4().hex}"
+	stage_name = body.stage_name.lower().strip()
+
+	# Create rerun event
+	rerun_event = EventEnvelope(
+		event_type="run.stage.rerun.requested",
+		producer="studio_api",
+		occurred_at=now,
+		tenant_id=run.tenant_id,
+		project_id=run.project_id,
+		idempotency_key=body.idempotency_key,
+		run_id=run_id,
+		trace_id=run.trace_id,
+		correlation_id=run.correlation_id,
+		payload={
+			"rerun_job_id": rerun_job_id,
+			"stage_name": stage_name,
+			"requested_by": body.requested_by or "system",
+			"original_run_id": run_id,
+		},
+	)
+
+	event_repo = WorkflowEventRepository(db)
+	wf_event = WorkflowEvent(
+		id=f"evt_{uuid4().hex[:24]}",
+		tenant_id=run.tenant_id,
+		project_id=run.project_id,
+		trace_id=run.trace_id,
+		correlation_id=run.correlation_id,
+		idempotency_key=body.idempotency_key,
+		run_id=run_id,
+		event_type="run.stage.rerun.requested",
+		event_version="1.0",
+		producer="studio_api",
+		occurred_at=now,
+		payload_json=rerun_event.model_dump(mode="json"),
+	)
+	event_repo.create(wf_event)
+	publish("run.stage.rerun", rerun_event.model_dump(mode="json"))
+	db.commit()
+
+	notify_telegram_event(
+		db=db,
+		tenant_id=run.tenant_id,
+		project_id=run.project_id,
+		event_type="run.stage.rerun.requested",
+		summary=f"Stage rerun requested: {stage_name}",
+		run_id=run_id,
+		trace_id=run.trace_id,
+		correlation_id=run.correlation_id,
+		extra={
+			"rerun_job_id": rerun_job_id,
+			"stage_name": stage_name,
+			"requested_by": body.requested_by or "system",
+		},
+	)
+
+	return RunRerunStageResponse(
+		run_id=run_id,
+		rerun_job_id=rerun_job_id,
+		stage_name=stage_name,
+		status="initiated",
+		message="Stage rerun initiated, check job status for progress",
+		created_at=now.isoformat(),
+	)
