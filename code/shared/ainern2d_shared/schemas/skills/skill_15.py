@@ -160,6 +160,9 @@ class Skill15Output(BaseSchema):
 
     version: str = "1.0"
     status: str = "policy_ready"  # policy_ready | review_required | failed
+    policy_stack_id: str = ""
+    policy_stack_name: str = ""
+    policy_event_id: str = ""
 
     # Constraint layers
     hard_constraints: list[Constraint] = []

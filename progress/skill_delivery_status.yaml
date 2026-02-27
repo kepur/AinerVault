@@ -234,16 +234,15 @@ skills:
 
   - skill_id: "SKILL_15"
     name: "Creative Control Policy"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_15_CREATIVE_CONTROL_POLICY.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_15.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_15_creative_control.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "补 API/DB E2E：验证 22 runtime manifest -> 15 policy 决策入库与审计可追溯"
+    next_action: []
 
   - skill_id: "SKILL_16"
     name: "Critic Evaluation Suite"

@@ -12,8 +12,11 @@ import uuid
 from typing import Any
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
+from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
 from ainern2d_shared.schemas.skills.skill_15 import (
     AuditEntry,
     Constraint,
@@ -202,14 +205,7 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
 
         self._record_state(ctx, "EVALUATING", final_state)
 
-        logger.info(
-            f"[{self.skill_id}] completed | run={ctx.run_id} "
-            f"status={status} hard={len(hard)} soft={len(soft)} "
-            f"guidelines={len(guidelines)} conflicts={len(conflicts)} "
-            f"bands={len(bands)}"
-        )
-
-        return Skill15Output(
+        output = Skill15Output(
             version="1.0",
             status=status,
             hard_constraints=hard,
@@ -224,6 +220,22 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
             audit_trail=audit,
             review_items=review_items,
         )
+        policy_stack_id, policy_stack_name, policy_event_id = self._persist_policy_snapshot(
+            ctx=ctx,
+            input_dto=effective_input,
+            output=output,
+        )
+        output.policy_stack_id = policy_stack_id
+        output.policy_stack_name = policy_stack_name
+        output.policy_event_id = policy_event_id
+
+        logger.info(
+            f"[{self.skill_id}] completed | run={ctx.run_id} "
+            f"status={status} hard={len(hard)} soft={len(soft)} "
+            f"guidelines={len(guidelines)} conflicts={len(conflicts)} "
+            f"bands={len(bands)} policy_stack_id={policy_stack_id or 'n/a'}"
+        )
+        return output
 
     # ── Feature flags parsing ────────────────────────────────────
 
@@ -1058,6 +1070,129 @@ class CreativeControlService(BaseSkillService[Skill15Input, Skill15Output]):
             )
 
         return results
+
+    def _persist_policy_snapshot(
+        self,
+        ctx: SkillContext,
+        input_dto: Skill15Input,
+        output: Skill15Output,
+    ) -> tuple[str, str, str]:
+        """Persist policy stack + build event for API/DB replay and audit traceability."""
+        stack_name = f"run_policy_{ctx.run_id}"
+        event_id = ""
+        try:
+            stack_payload = {
+                "run_id": ctx.run_id,
+                "tenant_id": ctx.tenant_id,
+                "project_id": ctx.project_id,
+                "status": output.status,
+                "active_persona_ref": input_dto.active_persona_ref,
+                "summary": {
+                    "hard_constraints": len(output.hard_constraints),
+                    "soft_constraints": len(output.soft_constraints),
+                    "guidelines": len(output.guidelines),
+                    "conflicts": len(output.conflict_report),
+                    "review_items": len(output.review_items),
+                    "audit_entries": len(output.audit_trail),
+                },
+                "policy_output": output.model_dump(mode="json", exclude={
+                    "policy_stack_id",
+                    "policy_stack_name",
+                    "policy_event_id",
+                }),
+            }
+
+            stack = self._get_existing_policy_stack(ctx, stack_name)
+            if stack is None:
+                stack = CreativePolicyStack(
+                    id=f"CPS_{uuid.uuid4().hex[:16].upper()}",
+                    tenant_id=ctx.tenant_id,
+                    project_id=ctx.project_id,
+                    trace_id=ctx.trace_id,
+                    correlation_id=ctx.correlation_id,
+                    idempotency_key=(
+                        f"{ctx.idempotency_key}:{self.skill_id}:policy_stack:{ctx.run_id}"
+                    ),
+                    name=stack_name,
+                    status=output.status,
+                    stack_json=stack_payload,
+                )
+                self.db.add(stack)
+            else:
+                stack.trace_id = ctx.trace_id
+                stack.correlation_id = ctx.correlation_id
+                stack.idempotency_key = (
+                    f"{ctx.idempotency_key}:{self.skill_id}:policy_stack:{ctx.run_id}"
+                )
+                stack.status = output.status
+                stack.stack_json = stack_payload
+
+            run = self.db.get(RenderRun, ctx.run_id)
+            run_stage = None
+            if isinstance(run, RenderRun):
+                run_stage = run.stage
+                cfg = dict(run.config_json or {})
+                cfg["policy_stack_id"] = stack.id
+                cfg["policy_stack_name"] = stack.name
+                cfg["policy_status"] = output.status
+                run.config_json = cfg
+
+            event_id = f"evt_{uuid.uuid4().hex[:24]}"
+            self.db.add(
+                WorkflowEvent(
+                    id=event_id,
+                    tenant_id=ctx.tenant_id,
+                    project_id=ctx.project_id,
+                    trace_id=ctx.trace_id,
+                    correlation_id=ctx.correlation_id,
+                    idempotency_key=(
+                        f"{ctx.idempotency_key}:{self.skill_id}:policy_stack_built:{uuid.uuid4().hex[:12]}"
+                    ),
+                    run_id=ctx.run_id,
+                    stage=run_stage,
+                    event_type="policy.stack.built",
+                    event_version="1.0",
+                    producer="ainern2d-studio-api.skill_15",
+                    occurred_at=utcnow(),
+                    payload_json={
+                        "run_id": ctx.run_id,
+                        "policy_stack_id": stack.id,
+                        "policy_stack_name": stack.name,
+                        "status": output.status,
+                        "active_persona_ref": input_dto.active_persona_ref,
+                        "review_items": list(output.review_items),
+                        "audit_entries": len(output.audit_trail),
+                    },
+                )
+            )
+            self.db.commit()
+            return stack.id, stack.name, event_id
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning(
+                f"[{self.skill_id}] policy stack persistence failed | run={ctx.run_id} err={exc}"
+            )
+            return "", stack_name, ""
+
+    def _get_existing_policy_stack(
+        self,
+        ctx: SkillContext,
+        stack_name: str,
+    ) -> CreativePolicyStack | None:
+        try:
+            row = self.db.execute(
+                select(CreativePolicyStack)
+                .where(
+                    CreativePolicyStack.tenant_id == ctx.tenant_id,
+                    CreativePolicyStack.project_id == ctx.project_id,
+                    CreativePolicyStack.name == stack_name,
+                    CreativePolicyStack.deleted_at.is_(None),
+                )
+                .limit(1)
+            ).scalars().first()
+            return row if isinstance(row, CreativePolicyStack) else None
+        except Exception:
+            return None
 
     # ── Audit Trail Helper ───────────────────────────────────────
 

@@ -27,12 +27,12 @@
 | 服务入口骨架 | DONE | `code/apps/*/app/main.py` | 4 服务 main.py + 所有路由注册 + 所有 __init__.py |
 | 业务模块实现 | DONE | `code/apps/*/app/modules/` | 66 个原空文件已全部实现，16 个 __init__.py |
 | SKILL DTO schemas | IN_PROGRESS | `code/shared/ainern2d_shared/schemas/skills/` | 01~22 DTO 已落地；21/22 及其 08/10/15/16/17 消费字段已接通，API级 E2E 待补 |
-| SKILL Service 层 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 01~22 Service 已落地；10~14 已完成目标验收（10 API+DB 回放闭环；11~13 事件契约+发布消费闭环；14 已完成与 22 的 persona style/policy/critic 绑定字段联调）；21/22 消费接线与服务级 E2E 已补，剩余链路继续收敛 |
+| SKILL Service 层 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 01~22 Service 已落地；10~15 已完成目标验收（10 API+DB 回放闭环；11~13 事件契约+发布消费闭环；14 与 22 persona 绑定字段联调；15 已完成 policy stack 入库 + policy.stack.built 审计事件 + API 回放 E2E）；21/22 消费接线与服务级 E2E 已补，剩余链路继续收敛 |
 | SKILL 注册表 | DONE | `code/apps/ainern2d-studio-api/app/services/skill_registry.py` | SkillRegistry.dispatch() 可调度 |
 | BaseSkillService 基类 | DONE | `code/shared/ainern2d_shared/services/base_skill.py` | 幂等/日志/状态记录/错误包装 |
 | SKILL 进度跟踪 | IN_PROGRESS | `SKILL_IMPLEMENTATION_PROGRESS.md` | 目标链路已升级为 01~22；21/22 代码化进度待继续推进 |
 | DevOps（docker/nginx/scripts） | DONE | `code/docker-compose.yml`, `code/infra/`, `code/scripts/` | 完整开发环境 |
-| SKILL 核心逻辑实现 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 基础 20 技能已实现并接入 21/22 消费链；10~14 已完成回放/回滚/检索与 persona 绑定基线闭环，剩余技能继续推进真实执行收敛 |
+| SKILL 核心逻辑实现 | IN_PROGRESS | `code/apps/*/app/services/skills/` | 基础 20 技能已实现并接入 21/22 消费链；10~15 已完成回放/回滚/检索、persona 绑定与 policy 入库基线闭环，剩余技能继续推进真实执行收敛 |
 | E2E 集成测试 | IN_PROGRESS | `code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py` | 已新增 E2E-021/022 服务级链路验证；API+DB 级自动化归档待补 |
 
 ## 4. Agent 执行门禁

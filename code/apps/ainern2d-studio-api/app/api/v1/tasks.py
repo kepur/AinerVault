@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import PromptPlan
+from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
 from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
 from ainern2d_shared.db.repositories.pipeline import RenderRunRepository, WorkflowEventRepository
@@ -40,6 +41,20 @@ class PromptPlanReplayItem(BaseModel):
 	prompt_text: str
 	negative_prompt_text: str | None = None
 	model_hint_json: dict | None = None
+
+
+class PolicyStackReplayItem(BaseModel):
+	policy_stack_id: str
+	run_id: str
+	name: str
+	status: str
+	active_persona_ref: str = ""
+	review_items: list[str] = []
+	hard_constraints: int = 0
+	soft_constraints: int = 0
+	guidelines: int = 0
+	conflicts: int = 0
+	audit_entries: int = 0
 
 
 def _percentile_ms(values: list[int], p: float) -> int:
@@ -228,3 +243,53 @@ def get_run_prompt_plans(
 		)
 		for plan in plans
 	]
+
+
+@router.get("/runs/{run_id}/policy-stacks", response_model=list[PolicyStackReplayItem])
+def get_run_policy_stacks(
+	run_id: str,
+	response: Response,
+	db: Session = Depends(get_db),
+) -> list[PolicyStackReplayItem]:
+	run_repo = RenderRunRepository(db)
+	run = run_repo.get(run_id)
+	if run is None:
+		raise HTTPException(status_code=404, detail="run not found")
+
+	start = perf_counter()
+	stack_name = f"run_policy_{run_id}"
+	stacks = db.execute(
+		select(CreativePolicyStack)
+		.where(
+			CreativePolicyStack.tenant_id == run.tenant_id,
+			CreativePolicyStack.project_id == run.project_id,
+			CreativePolicyStack.name == stack_name,
+			CreativePolicyStack.deleted_at.is_(None),
+		)
+		.order_by(CreativePolicyStack.updated_at.desc())
+	).scalars().all()
+	elapsed_ms = int((perf_counter() - start) * 1000)
+	response.headers["X-Policy-Stack-Query-Ms"] = str(elapsed_ms)
+	response.headers["X-Policy-Stack-Total"] = str(len(stacks))
+
+	items: list[PolicyStackReplayItem] = []
+	for stack in stacks:
+		stack_json = stack.stack_json or {}
+		summary = stack_json.get("summary") or {}
+		policy_output = stack_json.get("policy_output") or {}
+		items.append(
+			PolicyStackReplayItem(
+				policy_stack_id=stack.id,
+				run_id=run_id,
+				name=stack.name,
+				status=stack.status,
+				active_persona_ref=str(stack_json.get("active_persona_ref") or ""),
+				review_items=list(policy_output.get("review_items") or []),
+				hard_constraints=int(summary.get("hard_constraints") or 0),
+				soft_constraints=int(summary.get("soft_constraints") or 0),
+				guidelines=int(summary.get("guidelines") or 0),
+				conflicts=int(summary.get("conflicts") or 0),
+				audit_entries=int(summary.get("audit_entries") or len(policy_output.get("audit_trail") or [])),
+			)
+		)
+	return items

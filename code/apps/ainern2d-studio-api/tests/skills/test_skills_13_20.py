@@ -327,6 +327,9 @@ class TestSkill15:
         inp = Skill15Input()
         out = svc.execute(inp, ctx)
         assert out.status == "policy_ready"
+        assert out.policy_stack_id.startswith("CPS_")
+        assert out.policy_stack_name == f"run_policy_{ctx.run_id}"
+        assert out.policy_event_id.startswith("evt_")
         assert len(out.hard_constraints) >= 2
         assert len(out.soft_constraints) >= 2
 
