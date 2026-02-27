@@ -167,7 +167,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { marked } from 'marked'
 
 const route = useRoute()
 const router = useRouter()
@@ -189,21 +188,27 @@ const showAIDialog = ref<boolean>(false)
 const isGenerating = ref<boolean>(false)
 const aiSuggestion = ref<string | null>(null)
 
+// 简单的 Markdown 渲染（无外部依赖）
+const renderMarkdown = (text: string): string => {
+  if (!text) return ''
+  return text
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>')
+    .replace(/^(.+)$/s, '<p>$1</p>')
+}
+
 // 计算属性
 const renderedPreview = computed(() => {
-  try {
-    return marked(markdownText.value)
-  } catch {
-    return markdownText.value
-  }
+  return renderMarkdown(markdownText.value)
 })
 
 const aiSuggestionRendered = computed(() => {
-  try {
-    return marked(aiSuggestion.value || '')
-  } catch {
-    return aiSuggestion.value || ''
-  }
+  return renderMarkdown(aiSuggestion.value || '')
 })
 
 // 方法
