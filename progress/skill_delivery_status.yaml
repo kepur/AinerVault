@@ -426,7 +426,7 @@ skills:
 
   - skill_id: "SKILL_25"
     name: "Config Center / API Model Router"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_25_CONFIG_CENTER_API_MODEL_ROUTER.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/config_center.py"
@@ -457,9 +457,9 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py + code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (provider test-connection API + 单条/批量健康探测)"
       - "code/apps/ainern2d-studio-web/src/pages/StudioModelRoutingPage.vue (feature routing 可视化绑定：功能->profile 下拉 + capability 兼容校验)"
       - "npm run build (ainern2d-studio-web) -> PASS"
-    next_action:
-      - "补充 provider 配额/限流/余额指标接入（在联通探测基础上扩展）"
-      - "补充 Role Studio run_skill 的异步队列模式与成本计量（当前为同步执行）"
+      - "TASK_CARD_25_PROVIDER_QUOTA_LIMIT: 增强 ProviderConnectionTestResponse，添加 quota_remaining/rate_limit_remaining/cost_estimate"
+      - "TASK_CARD_25_ROLESTUDIO_ASYNC_COST: 添加异步执行端点 POST /role-studio/run-skill-async（返回 job_id）+ GET /role-studio/async-job/{job_id}（查询状态与成本）"
+    next_action: []
 
   - skill_id: "SKILL_26"
     name: "RAG / KB / Dataset / Persona Console"

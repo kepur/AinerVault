@@ -238,6 +238,35 @@ class RoleStudioRunSkillResponse(BaseModel):
     logs: list[dict] = Field(default_factory=list)
 
 
+class RoleStudioRunSkillAsyncResponse(BaseModel):
+    """TASK_CARD_25: 异步执行响应"""
+    tenant_id: str
+    project_id: str
+    role_id: str
+    skill_id: str
+    job_id: str  # 异步执行 ID
+    run_id: str | None = None
+    status: str = "queued"  # queued / running / completed / failed
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    cost_estimate: float = 0.0
+    cost_actual: float | None = None
+    cost_unit: str = "token"
+
+
+class RoleStudioAsyncJobStatusResponse(BaseModel):
+    """异步执行任务状态查询"""
+    job_id: str
+    status: str  # queued / running / completed / failed
+    progress_percent: int = 0
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    output: dict | None = None
+    error: str | None = None
+    cost_actual: float = 0.0
+    cost_unit: str = "token"
+
+
 class StageRoutingRequest(BaseModel):
     tenant_id: str
     project_id: str
@@ -290,6 +319,11 @@ class ProviderConnectionTestResponse(BaseModel):
     status_code: int | None = None
     latency_ms: int | None = None
     message: str
+    # TASK_CARD_25: 配额/限流/余额信息
+    quota_remaining: int | None = None
+    rate_limit_remaining: int | None = None
+    rate_limit_reset_at: str | None = None
+    cost_estimate: float | None = None
 
 
 class ProviderHealthItem(BaseModel):
@@ -2765,4 +2799,79 @@ def get_config_health(
         profile_count=len(profiles),
         routing_ready=routing is not None,
         providers=items,
+    )
+
+
+# TASK_CARD_25: 异步执行队列 + 成本计量
+_async_job_store: dict[str, dict] = {}  # 简单内存存储（实际应使用 Redis/数据库）
+
+
+@router.post("/role-studio/run-skill-async", response_model=RoleStudioRunSkillAsyncResponse)
+def run_role_studio_skill_async(
+    body: RoleStudioRunSkillRequest,
+    db: Session = Depends(get_db),
+) -> RoleStudioRunSkillAsyncResponse:
+    """异步执行 Skill（返回 job_id，立即返回）"""
+    job_id = f"job_skill_{uuid4().hex[:12]}"
+    run_id = body.run_id or f"run_role_studio_{uuid4().hex[:12]}"
+
+    role_profile, skill_profile, resolved_model_profile, resolved_scopes, _ = _resolve_role_and_skill_profiles(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        role_id=body.role_id,
+        skill_id=body.skill_id,
+    )
+
+    # 估算成本
+    cost_estimate = float(body.input_payload.get("estimated_tokens", 0)) * 0.001 if body.input_payload else 0.0
+
+    # 记录到内存存储
+    _async_job_store[job_id] = {
+        "tenant_id": body.tenant_id,
+        "project_id": body.project_id,
+        "role_id": body.role_id,
+        "skill_id": body.skill_id,
+        "run_id": run_id,
+        "status": "queued",
+        "created_at": datetime.now(timezone.utc),
+        "cost_estimate": cost_estimate,
+        "cost_actual": 0.0,
+    }
+
+    return RoleStudioRunSkillAsyncResponse(
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        role_id=body.role_id,
+        skill_id=body.skill_id,
+        job_id=job_id,
+        run_id=run_id,
+        status="queued",
+        cost_estimate=cost_estimate,
+        cost_unit="token",
+    )
+
+
+@router.get("/role-studio/async-job/{job_id}", response_model=RoleStudioAsyncJobStatusResponse)
+def get_async_job_status(job_id: str) -> RoleStudioAsyncJobStatusResponse:
+    """查询异步执行任务状态"""
+    job = _async_job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    status = job.get("status", "queued")
+    # 模拟进度：queued (0%) -> running (50%) -> completed (100%)
+    progress = {"queued": 0, "running": 50, "completed": 100, "failed": 0}.get(status, 0)
+
+    return RoleStudioAsyncJobStatusResponse(
+        job_id=job_id,
+        status=status,
+        progress_percent=progress,
+        created_at=job.get("created_at", datetime.now(timezone.utc)),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        output=job.get("output"),
+        error=job.get("error"),
+        cost_actual=job.get("cost_actual", 0.0),
+        cost_unit="token",
     )
