@@ -491,3 +491,49 @@ class TestSkill12:
         assert "rag.eval.completed" in out.events_emitted
         assert "kb.rollout.promoted" in out.events_emitted
         assert all(env.schema_version == ctx.schema_version for env in out.event_envelopes)
+
+    def test_retrieval_recall_latency_baseline(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_12 import (
+            KnowledgeItem,
+            RetrievalQuery,
+            Skill12Input,
+        )
+
+        svc = self._make_service(mock_db)
+        queries = [f"wuxia continuity baseline q{i}" for i in range(24)]
+        inp = Skill12Input(
+            kb_id="kb_perf_baseline",
+            kb_version_id="v_perf_baseline",
+            preview_queries=queries,
+            knowledge_items=[
+                KnowledgeItem(
+                    item_id=f"item_{i}",
+                    role="director",
+                    content=(
+                        f"wuxia continuity baseline rule {i}. "
+                        "preserve character identity across cuts and keep duel pacing coherent. "
+                    ) * 8,
+                    tags=["wuxia", "continuity", "baseline"],
+                )
+                for i in range(64)
+            ],
+        )
+        out = svc.execute(inp, ctx)
+
+        # Recall/quality baseline from eval suite (pgvector-compatible path).
+        assert out.eval.enabled is True
+        assert out.eval.recall_at_k >= 0.7
+        assert out.eval.constraint_conflict_rate <= 0.1
+
+        # Query latency baseline from repeated retrieval.
+        latencies: list[float] = []
+        for q in queries:
+            resp = svc.retrieve(RetrievalQuery(query_text=q, top_k=8))
+            latencies.append(resp.latency_ms)
+
+        latencies.sort()
+        p95_idx = max(0, int(len(latencies) * 0.95) - 1)
+        p95_ms = latencies[p95_idx]
+        avg_ms = round(sum(latencies) / len(latencies), 2)
+        assert p95_ms <= 250.0
+        assert avg_ms <= 120.0

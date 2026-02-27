@@ -1,6 +1,7 @@
 """Unit tests for SkillRegistry and SkillDispatcher."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import sys
 import os
 from unittest.mock import MagicMock, patch
@@ -52,6 +53,70 @@ class TestSkillRegistry:
         assert SkillRegistry.is_registered("skill_07")
         assert not SkillRegistry.is_registered("skill_06")  # composer only
         assert not SkillRegistry.is_registered("skill_99")
+
+    def test_dispatch_publishes_skill_events_for_skill_13(self, mock_db):
+        from app.services.skill_registry import SkillRegistry
+        from ainern2d_shared.schemas.events import EventEnvelope
+
+        registry = SkillRegistry(mock_db)
+        service = MagicMock()
+        service.run.return_value = MagicMock(
+            event_envelopes=[
+                EventEnvelope(
+                    event_type="kb.version.rolled_back",
+                    event_version="1.0",
+                    schema_version="1.0",
+                    producer="ainern2d-studio-api.skill_13",
+                    occurred_at=datetime.now(timezone.utc),
+                    tenant_id="t1",
+                    project_id="p1",
+                    run_id="run_13",
+                    trace_id="tr_13",
+                    correlation_id="co_13",
+                    idempotency_key="idem_13",
+                    payload={"rollback_target_kb_version_id": "KB_V1"},
+                )
+            ]
+        )
+        ctx = SkillContext(
+            tenant_id="t1",
+            project_id="p1",
+            run_id="run_13",
+            trace_id="tr_13",
+            correlation_id="co_13",
+            idempotency_key="idem_13",
+            schema_version="1.0",
+        )
+
+        with patch.object(registry, "get", return_value=service), \
+             patch("app.services.skill_registry.publish") as mock_publish:
+            registry.dispatch("skill_13", {}, ctx)
+
+        assert mock_publish.call_count == 1
+        assert mock_publish.call_args[0][0] == "skill.events"
+        assert mock_publish.call_args[0][1]["event_type"] == "kb.version.rolled_back"
+
+    def test_dispatch_does_not_publish_skill_events_for_other_skills(self, mock_db):
+        from app.services.skill_registry import SkillRegistry
+
+        registry = SkillRegistry(mock_db)
+        service = MagicMock()
+        service.run.return_value = MagicMock(event_envelopes=[{"event_type": "dummy"}])
+        ctx = SkillContext(
+            tenant_id="t1",
+            project_id="p1",
+            run_id="run_10",
+            trace_id="tr_10",
+            correlation_id="co_10",
+            idempotency_key="idem_10",
+            schema_version="1.0",
+        )
+
+        with patch.object(registry, "get", return_value=service), \
+             patch("app.services.skill_registry.publish") as mock_publish:
+            registry.dispatch("skill_10", {}, ctx)
+
+        mock_publish.assert_not_called()
 
 
 # ── SkillDispatcher ───────────────────────────────────────────────────────────

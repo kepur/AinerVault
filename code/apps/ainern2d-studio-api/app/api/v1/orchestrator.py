@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
 from ainern2d_shared.db.repositories.pipeline import RenderRunRepository
 from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.schemas.events import EventEnvelope
+from ainern2d_shared.services.base_skill import SkillContext
 from ainern2d_shared.config.setting import settings
 from ainern2d_shared.queue.rabbitmq import RabbitMQConsumer
 
@@ -39,6 +41,11 @@ def _persist_event(db: Session, event: EventEnvelope) -> None:
         payload_json=event.payload,
     )
     db.add(wf)
+
+
+def _event_exists(db: Session, event_id: str) -> bool:
+    """Idempotency guard: whether this event_id is already persisted."""
+    return db.get(WorkflowEvent, event_id) is not None
 
 
 def handle_task_submitted(payload: dict) -> None:
@@ -167,6 +174,70 @@ def handle_compose_status(payload: dict) -> None:
         db.close()
 
 
+def handle_skill_event(payload: dict) -> None:
+    """Consume SKILL event stream and execute cross-skill rollback linkage."""
+    event = EventEnvelope.model_validate(payload)
+    db = get_db_session()
+    try:
+        if _event_exists(db, event.event_id):
+            _logger.info("skip duplicate skill event event_id={}", event.event_id)
+            return
+
+        _persist_event(db, event)
+        try:
+            # Force uniqueness check before side-effects to avoid duplicate rollback
+            # under concurrent consumers.
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            _logger.info("skip duplicate skill event on flush event_id={}", event.event_id)
+            return
+
+        if event.event_type == "kb.version.rolled_back":
+            rollback_payload = event.payload or {}
+            # If executor already handled rollback, this consumer is no-op.
+            if not rollback_payload.get("executor_triggered"):
+                kb_id = str(rollback_payload.get("kb_id") or "").strip()
+                target_version_id = str(
+                    rollback_payload.get("rollback_target_kb_version_id") or ""
+                ).strip()
+                if kb_id and target_version_id:
+                    from ainern2d_shared.schemas.skills.skill_11 import Skill11Input
+                    from app.services.skills.skill_11_rag_kb_manager import RagKBManagerService
+
+                    out11 = RagKBManagerService(db).execute(
+                        Skill11Input(
+                            kb_id=kb_id,
+                            action="rollback",
+                            rollback_target_version_id=target_version_id,
+                            rollback_reason=str(rollback_payload.get("reason") or "skill_event_consumer"),
+                        ),
+                        SkillContext(
+                            tenant_id=event.tenant_id,
+                            project_id=event.project_id,
+                            run_id=event.run_id or "",
+                            trace_id=event.trace_id,
+                            correlation_id=event.correlation_id,
+                            idempotency_key=event.idempotency_key,
+                            schema_version=event.schema_version,
+                        ),
+                    )
+                    for emitted in out11.event_envelopes:
+                        _persist_event(db, emitted)
+                else:
+                    _logger.warning(
+                        "skip rollback consume: missing kb_id/target_version_id event_id={}",
+                        event.event_id,
+                    )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def consume_orchestrator_topic(topic: str) -> None:
     consumer = RabbitMQConsumer(settings.rabbitmq_url)
     if topic == SYSTEM_TOPICS.TASK_SUBMITTED:
@@ -175,6 +246,8 @@ def consume_orchestrator_topic(topic: str) -> None:
         consumer.consume(topic, handle_job_status)
     elif topic == SYSTEM_TOPICS.COMPOSE_STATUS:
         consumer.consume(topic, handle_compose_status)
+    elif topic == SYSTEM_TOPICS.SKILL_EVENTS:
+        consumer.consume(topic, handle_skill_event)
 
 
 @router.post("/events", status_code=202)

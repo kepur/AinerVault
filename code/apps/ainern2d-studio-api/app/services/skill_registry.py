@@ -12,7 +12,9 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.services.base_skill import BaseSkillService, SkillContext
+from app.api.deps import publish
 
 from .skills.skill_01_story_ingestion import StoryIngestionService
 from .skills.skill_02_language_context import LanguageContextService
@@ -60,6 +62,7 @@ _SKILL_MAP: dict[str, type[BaseSkillService]] = {
     "skill_21": EntityRegistryContinuityService,
     "skill_22": PersonaDatasetIndexService,
 }
+_SKILL_EVENT_PUBLISH_SET = frozenset({"skill_11", "skill_12", "skill_13"})
 
 
 class SkillRegistry:
@@ -84,7 +87,34 @@ class SkillRegistry:
         """调度执行指定 SKILL。"""
         service = self.get(skill_id)
         logger.info(f"[SkillRegistry] Dispatching {skill_id} for run={ctx.run_id}")
-        return service.run(input_dto, ctx)
+        result = service.run(input_dto, ctx)
+        self._publish_skill_events(skill_id, result)
+        return result
+
+    @staticmethod
+    def _extract_event_payloads(result: Any) -> list[dict[str, Any]]:
+        envelopes = getattr(result, "event_envelopes", None)
+        if not envelopes:
+            return []
+
+        payloads: list[dict[str, Any]] = []
+        for envelope in envelopes:
+            if hasattr(envelope, "model_dump"):
+                payloads.append(envelope.model_dump(mode="json"))
+            elif isinstance(envelope, dict):
+                payloads.append(envelope)
+        return payloads
+
+    def _publish_skill_events(self, skill_id: str, result: Any) -> None:
+        if skill_id not in _SKILL_EVENT_PUBLISH_SET:
+            return
+
+        events = self._extract_event_payloads(result)
+        if not events:
+            return
+
+        for event_payload in events:
+            publish(SYSTEM_TOPICS.SKILL_EVENTS, event_payload)
 
     @staticmethod
     def list_skills() -> list[str]:

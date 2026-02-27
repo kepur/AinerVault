@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
+from typing import Any
 
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -236,6 +237,7 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                         event_envelopes,
                         ctx,
                         run_context=input_dto.run_context,
+                        kb_manager_config=input_dto.kb_manager_config,
                         proposal=proposal,
                         reason="regression_failed",
                     )
@@ -304,6 +306,7 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                         event_envelopes,
                         ctx,
                         run_context=input_dto.run_context,
+                        kb_manager_config=input_dto.kb_manager_config,
                         proposal=proposal,
                         reason="review_rejected",
                     )
@@ -698,23 +701,76 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
         ctx: SkillContext,
         *,
         run_context,
+        kb_manager_config: dict[str, Any],
         proposal: ImprovementProposal,
         reason: str,
     ) -> None:
         target_kb_version = run_context.kb_version_id
         if not target_kb_version:
             return
+        rollback_exec = self._trigger_skill11_rollback(
+            ctx,
+            kb_manager_config=kb_manager_config,
+            rollback_target_version_id=target_kb_version,
+            rollback_reason=f"skill_13_{reason}:{proposal.proposal_id}",
+        )
         self._emit_event(
             events,
             event_envelopes,
             ctx,
             event_type="kb.version.rolled_back",
             payload={
+                "kb_id": str(kb_manager_config.get("kb_id") or "").strip(),
                 "rollback_target_kb_version_id": target_kb_version,
                 "source_proposal_id": proposal.proposal_id,
                 "reason": reason,
+                "executor_triggered": rollback_exec["triggered"],
+                "executor_status": rollback_exec["status"],
+                "rollback_result_kb_version_id": rollback_exec.get("rollback_kb_version_id", ""),
             },
         )
+
+    def _trigger_skill11_rollback(
+        self,
+        ctx: SkillContext,
+        *,
+        kb_manager_config: dict[str, Any],
+        rollback_target_version_id: str,
+        rollback_reason: str,
+    ) -> dict[str, Any]:
+        kb_id = str(kb_manager_config.get("kb_id") or "").strip()
+        enabled = bool(kb_manager_config.get("enable_skill11_rollback"))
+        if not enabled or not kb_id or not rollback_target_version_id:
+            return {"triggered": False, "status": "skipped"}
+
+        try:
+            from app.services.skills.skill_11_rag_kb_manager import RagKBManagerService
+            from ainern2d_shared.schemas.skills.skill_11 import Skill11Input
+
+            out11 = RagKBManagerService(self.db).execute(
+                Skill11Input(
+                    kb_id=kb_id,
+                    action="rollback",
+                    rollback_target_version_id=rollback_target_version_id,
+                    rollback_reason=rollback_reason,
+                ),
+                ctx,
+            )
+            return {
+                "triggered": True,
+                "status": out11.status.lower(),
+                "rollback_kb_version_id": out11.kb_version_id,
+            }
+        except Exception as exc:  # pragma: no cover - best-effort safety path
+            logger.warning(
+                f"[{self.skill_id}] skill_11 rollback trigger failed | "
+                f"target={rollback_target_version_id} error={exc}"
+            )
+            return {
+                "triggered": True,
+                "status": "failed",
+                "error": str(exc),
+            }
 
     def _transition(
         self,

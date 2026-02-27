@@ -39,6 +39,7 @@ def startup_consumers() -> None:
 		SYSTEM_TOPICS.TASK_SUBMITTED,
 		SYSTEM_TOPICS.JOB_STATUS,
 		SYSTEM_TOPICS.COMPOSE_STATUS,
+		SYSTEM_TOPICS.SKILL_EVENTS,
 	):
 		thread = threading.Thread(target=consume_orchestrator_topic, args=(topic,), daemon=True)
 		thread.start()

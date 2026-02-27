@@ -8,5 +8,5 @@ class SYSTEM_TOPICS:
 	WORKER_DETAIL = "worker.detail"
 	COMPOSE_DISPATCH = "compose.dispatch"
 	COMPOSE_STATUS = "compose.status"
+	SKILL_EVENTS = "skill.events"
 	ALERT_EVENTS = "alert.events"
-

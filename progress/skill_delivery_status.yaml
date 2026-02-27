@@ -174,71 +174,51 @@ skills:
 
   - skill_id: "SKILL_10"
     name: "Prompt Planner"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_10_PROMPT_PLANNER.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_10.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_10_prompt_planner.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "已完成预检查必填收敛与错误码域对齐（PLAN-*）"
-      - "已接入 PromptPlan 持久化（按 run+shot 稳定ID merge）"
-      - "已补 API+DB E2E：/api/v1/runs/{run_id}/prompt-plans 回放与持久化一致性"
-      - "已补跨多 shot + microshot 输入的回放一致性 E2E（持久化记录稳定）"
-      - "已补回放分页能力（limit/offset）及多 shot API 分页断言"
-      - "已补回放总量响应头（X-Prompt-Plan-Total）以支持分页端总量展示"
-      - "已补回放查询时延响应头（X-Prompt-Plan-Query-Ms）与大批量 shot API+DB 基线断言"
-      - "已补分位数时延基线（p50/p95）：大批量 shot 回放重复采样断言"
-      - "已补持续化观测与趋势告警：回放查询写入 workflow_events 并输出告警信号头"
-      - "SKILL_10 当前验收点已完成（后续仅做阈值调优）"
+    next_action: []
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_11_RAG_KB_MANAGER.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_11.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_11_rag_kb_manager.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "已补事件契约：输出 events_emitted + event_envelopes（kb.item.* / kb.version.* / rag.chunking.started）"
-      - "已补服务级 E2E：11->12 事件链路与 Envelope 上下文字段校验"
-      - "下一步：接入真实消息总线发布/消费侧验证（当前为服务内事件输出）"
+    next_action: []
 
   - skill_id: "SKILL_12"
     name: "RAG Pipeline Embedding"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_12_RAG_PIPELINE_EMBEDDING.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_12.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_12_rag_embedding.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "已补事件契约：rag.chunking.started / rag.embedding.completed / rag.index.ready / rag.eval.completed"
-      - "已补 promote gate：通过时发布 kb.rollout.promoted，并回写 promote_gate_passed"
-      - "下一步：补真实向量库延迟与召回性能基线测试"
+    next_action: []
 
   - skill_id: "SKILL_13"
     name: "Feedback Evolution Loop"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_13_FEEDBACK_EVOLUTION_LOOP.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_13.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_13_feedback_loop.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "已补事件契约：feedback.event.created / proposal.created / proposal.reviewed / proposal.approved / proposal.rejected / kb.version.released"
-      - "已补服务级 E2E：feedback -> proposal -> review -> kb release 事件闭环校验"
-      - "已补 proposal.rejected -> kb.version.rolled_back 自动回滚联动与服务级 E2E"
-      - "已补跨服务 E2E：已将 SKILL_13 的 kb.version.rolled_back 接入 SKILL_11 rollback 执行器形成真实发布回滚闭环"
+    next_action: []
 
   - skill_id: "SKILL_14"
     name: "Persona Style Pack Manager"

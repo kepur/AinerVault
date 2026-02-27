@@ -132,6 +132,99 @@ class TestSkill13:
             env for env in out.event_envelopes if env.event_type == "kb.version.rolled_back"
         )
         assert rollback_env.payload["rollback_target_kb_version_id"] == "KB_V_BASE"
+        assert rollback_env.payload["executor_triggered"] is False
+        assert rollback_env.payload["executor_status"] == "skipped"
+        assert rollback_env.payload["rollback_result_kb_version_id"] == ""
+
+    def test_regression_reject_triggers_skill11_rollback_executor(self, mock_db, ctx):
+        from app.services.skills.skill_11_rag_kb_manager import RagKBManagerService
+        from ainern2d_shared.schemas.skills.skill_11 import KBEntry, Skill11Input
+        from ainern2d_shared.schemas.skills.skill_13 import (
+            RegressionTestResult,
+            RunContext,
+            ShotResultContext,
+            Skill13Input,
+            UserFeedback,
+        )
+
+        s11 = RagKBManagerService(mock_db)
+        kb_id = "kb_skill13_executor_path"
+        s11.execute(
+            Skill11Input(
+                kb_id=kb_id,
+                action="create",
+                entries=[
+                    KBEntry(
+                        entry_id="k1",
+                        title="v1 rule",
+                        content_markdown="baseline",
+                        status="active",
+                        entry_type="style_guide",
+                    )
+                ],
+            ),
+            ctx,
+        )
+        v1_out = s11.execute(Skill11Input(kb_id=kb_id, action="publish"), ctx)
+
+        s11.execute(
+            Skill11Input(
+                kb_id=kb_id,
+                action="create",
+                entries=[
+                    KBEntry(
+                        entry_id="k2",
+                        title="v2 rule",
+                        content_markdown="candidate",
+                        status="active",
+                        entry_type="style_guide",
+                    )
+                ],
+            ),
+            ctx,
+        )
+        s11.execute(Skill11Input(kb_id=kb_id, action="publish"), ctx)
+
+        svc = self._make_service(mock_db)
+        svc._run_regression_tests = lambda proposal: [  # type: ignore[method-assign]
+            RegressionTestResult(
+                test_id="rt_fail_exec",
+                proposal_id=proposal.proposal_id,
+                historical_case_id="case_exec",
+                previous_score=0.8,
+                new_score=0.2,
+                passed=False,
+                detail="force rollback executor",
+            )
+        ]
+
+        out = svc.execute(
+            Skill13Input(
+                run_context=RunContext(run_id="run_exec", kb_version_id=v1_out.kb_version_id),
+                shot_result_context=ShotResultContext(shot_id="S2"),
+                user_feedback=UserFeedback(
+                    rating=1,
+                    issues=["art_style"],
+                    free_text="force executor path",
+                ),
+                kb_manager_config={
+                    "kb_id": kb_id,
+                    "enable_skill11_rollback": True,
+                },
+            ),
+            ctx,
+        )
+        rollback_env = next(
+            env for env in out.event_envelopes if env.event_type == "kb.version.rolled_back"
+        )
+        rollback_payload = rollback_env.payload
+        assert rollback_payload["rollback_target_kb_version_id"] == v1_out.kb_version_id
+        assert rollback_payload["executor_triggered"] is True
+        assert rollback_payload["executor_status"] == "ready"
+        assert rollback_payload["rollback_result_kb_version_id"].startswith("KB_RB_")
+
+        out_export = s11.execute(Skill11Input(kb_id=kb_id, action="export"), ctx)
+        assert out_export.kb_version_id == rollback_payload["rollback_result_kb_version_id"]
 
 
 # ── SKILL 14: PersonaStyleService ────────────────────────────────────────────
