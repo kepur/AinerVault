@@ -18,6 +18,10 @@ import StudioRoleStudioPage from "@/pages/StudioRoleStudioPage.vue";
 import StudioRunCenterPage from "@/pages/StudioRunCenterPage.vue";
 import StudioTimelinePatchPage from "@/pages/StudioTimelinePatchPage.vue";
 import VoiceBindingPage from "@/pages/VoiceBindingPage.vue";
+import StudioAuditLogsPage from "@/pages/StudioAuditLogsPage.vue";
+import StudioChapterRevisionPage from "@/pages/StudioChapterRevisionPage.vue";
+import StudioRunSnapshotPage from "@/pages/StudioRunSnapshotPage.vue";
+import StudioChapterPreviewPage from "@/pages/StudioChapterPreviewPage.vue";
 import { AUTH_TOKEN_KEY } from "@/stores/auth";
 
 const router = createRouter({
@@ -182,6 +186,49 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "PR时间线编辑",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/audit-logs",
+      name: "studio-audit-logs",
+      component: StudioAuditLogsPage,
+      meta: {
+        requiresAuth: true,
+        title: "审计日志",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/novels/:novelId/chapters/:chapterId/revisions",
+      name: "studio-chapter-revisions",
+      component: StudioChapterRevisionPage,
+      props: true,
+      meta: {
+        requiresAuth: true,
+        title: "章节修订历史",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/runs/:runId/snapshot",
+      name: "studio-run-snapshot",
+      component: StudioRunSnapshotPage,
+      props: true,
+      meta: {
+        requiresAuth: true,
+        title: "运行配置快照",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/novels/:novelId/chapters/:chapterId/preview",
+      name: "studio-chapter-preview",
+      component: StudioChapterPreviewPage,
+      props: true,
+      meta: {
+        requiresAuth: true,
+        title: "章节预览规划",
         section: "studio",
       },
     },
