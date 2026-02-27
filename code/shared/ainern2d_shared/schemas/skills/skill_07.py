@@ -1,6 +1,8 @@
 """SKILL 07: Entity Canonicalization & Cultural Binding — Input/Output DTOs."""
 from __future__ import annotations
 
+from typing import Any
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
@@ -29,6 +31,7 @@ class RoutingReasoningSummary(BaseSchema):
 
 class CanonicalEntityFull(BaseSchema):
     entity_uid: str
+    entity_id: str = ""  # stable ID from SKILL 21 (fallback: entity_uid)
     entity_type: str
     surface_form: str = ""
     source_mentions: list[str] = []
@@ -40,6 +43,10 @@ class CanonicalEntityFull(BaseSchema):
 
 class EntityVariantMapping(BaseSchema):
     entity_uid: str
+    entity_id: str = ""           # stable ID for downstream continuity consumers
+    canonical_entity_id: str = "" # alias field for downstream compatibility
+    matched_entity_id: str = ""   # alias field for downstream compatibility
+    source_entity_uid: str = ""   # explicit source UID link
     canonical_entity_specific: str = ""
     selected_variant_id: str = ""
     variant_display_name: str = ""
@@ -120,6 +127,10 @@ class Skill07Input(BaseSchema):
     character_role: str = ""        # e.g. 侠客, 皇帝, 学生, 丫鬟, 掌柜
     asset_library_capability: dict = {}
     language_background_kb_output: dict = {}
+    # From SKILL 21 continuity chain (04 -> 21 -> 07)
+    resolved_entities: list[dict[str, Any]] = []
+    entity_registry_continuity_result: dict[str, Any] = {}
+    continuity_exports: dict[str, Any] = {}
 
 
 class Skill07Output(BaseSchema):

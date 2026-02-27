@@ -32,7 +32,7 @@ class ResultConsumer:
             result = WorkerResult.model_validate(payload)
 
             import asyncio
-            asyncio.get_event_loop().run_until_complete(self._hub.handle_callback(result))
+            asyncio.run(self._hub.handle_callback(result))
 
         except Exception:
             logger.exception("result consumer error – republishing for retry")

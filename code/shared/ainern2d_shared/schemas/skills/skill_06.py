@@ -171,6 +171,21 @@ class BackfillReport(BaseSchema):
 
 
 # ---------------------------------------------------------------------------
+# timeline_final tracks contract
+# ---------------------------------------------------------------------------
+
+
+class TimelineTracks(BaseSchema):
+    """timeline_final.tracks grouped by canonical track type (§7.1)."""
+
+    dialogue: list[AudioEvent] = []
+    ambience: list[AudioEvent] = []
+    sfx: list[AudioEvent] = []
+    bgm: list[AudioEvent] = []
+    aux: list[AudioEvent] = []
+
+
+# ---------------------------------------------------------------------------
 # Skill 06 Input / Output
 # ---------------------------------------------------------------------------
 
@@ -197,7 +212,8 @@ class Skill06Output(BaseSchema):
     version: str = "1.0"
     status: str = "ready_for_visual_render_planning"
     final_duration_ms: int = 0
-    tracks: list[AudioTrack] = []
+    tracks: TimelineTracks = TimelineTracks()
+    track_layers: list[AudioTrack] = []  # backward-compatible enriched track objects
     scene_timeline: list[SceneTimeline] = []
     shot_timeline: list[ShotTimeline] = []
     mix_hints: list[MixHint] = []

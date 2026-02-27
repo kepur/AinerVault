@@ -58,6 +58,13 @@ _SFX_AUTO_DENSITY: dict[str, str] = {
     "generic": "medium",
 }
 
+_REVIEW_REQUIRED_WARNING_PREFIXES = (
+    "voice_cast_unresolved:",
+    "backend_capability_unsupported_speaker:",
+    "backend_capability_unsupported_mood:",
+    "backend_capability_unsupported_sfx:",
+)
+
 
 class AudioAssetPlanService(BaseSkillService[Skill05Input, Skill05Output]):
     """SKILL 05 — Audio Asset Planner.
@@ -185,11 +192,23 @@ class AudioAssetPlanService(BaseSkillService[Skill05Input, Skill05Output]):
             )
 
         # ── Final status ──────────────────────────────────────────────────────
-        self._record_state(ctx, "BUILDING_AUDIO_DAG", "READY_FOR_AUDIO_EXECUTION")
+        review_required_items = self._derive_review_required_items(warnings)
+        status = (
+            "review_required"
+            if review_required_items
+            else "ready_for_audio_execution"
+        )
+        final_state = (
+            "REVIEW_REQUIRED"
+            if review_required_items
+            else "READY_FOR_AUDIO_EXECUTION"
+        )
+        self._record_state(ctx, "BUILDING_AUDIO_DAG", final_state)
         logger.info(
             f"[{self.skill_id}] completed | run={ctx.run_id} "
             f"tts={len(tts_plan)} bgm={len(bgm_plan)} "
-            f"sfx={len(sfx_plan)} amb={len(ambience_plan)}"
+            f"sfx={len(sfx_plan)} amb={len(ambience_plan)} "
+            f"status={status}"
         )
         return Skill05Output(
             tts_plan=tts_plan,
@@ -203,7 +222,8 @@ class AudioAssetPlanService(BaseSkillService[Skill05Input, Skill05Output]):
             ),
             parallel_audio_groups=parallel_groups,
             warnings=warnings,
-            status="ready_for_audio_execution",
+            review_required_items=review_required_items,
+            status=status,
         )
 
     # ── [A1] Voice-cast & backend validation helpers ──────────────────────────
@@ -508,3 +528,11 @@ class AudioAssetPlanService(BaseSkillService[Skill05Input, Skill05Output]):
                 )
 
         return tasks
+
+    @staticmethod
+    def _derive_review_required_items(warnings: list[str]) -> list[str]:
+        items: list[str] = []
+        for warning in warnings:
+            if warning.startswith(_REVIEW_REQUIRED_WARNING_PREFIXES):
+                items.append(warning)
+        return sorted(set(items))

@@ -394,7 +394,45 @@ class TestSkill16:
         out = svc.execute(inp, ctx)
         assert out.status in ("ready", "review_required", "evaluation_complete")
         assert len(out.dimension_scores) == 8
+        assert len(out.summary_scores) == 8
         assert 0 <= out.composite_score <= 100
+        assert 0.0 <= out.normalized_composite_score <= 1.0
+        assert out.score_scale == "0-100"
+
+    def test_threshold_supports_normalized_scale(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_16 import (
+            SCORE_SCALE_0_1,
+            Skill16FeatureFlags,
+            Skill16Input,
+            ShotPlanEntry,
+        )
+        svc = self._make_service(mock_db)
+        inp = Skill16Input(
+            run_id="run_norm_scale",
+            composed_artifact_uri="s3://bucket/run_norm_scale/final.mp4",
+            shot_plan=[ShotPlanEntry(shot_id="S1", scene_id="SC1", description="norm")],
+            feature_flags=Skill16FeatureFlags(
+                auto_fail_threshold=0.9,
+                score_scale=SCORE_SCALE_0_1,
+            ),
+        )
+        out = svc.execute(inp, ctx)
+        assert out.auto_fail_threshold == 90.0
+        assert out.normalized_auto_fail_threshold == 0.9
+        assert all(0.0 <= score <= 1.0 for score in out.summary_scores.values())
+
+    def test_threshold_supports_implicit_normalized_value(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_16 import Skill16FeatureFlags, Skill16Input
+        svc = self._make_service(mock_db)
+        inp = Skill16Input(
+            run_id="run_norm_hint",
+            composed_artifact_uri="s3://bucket/run_norm_hint/final.mp4",
+            feature_flags=Skill16FeatureFlags(auto_fail_threshold=0.85),
+        )
+        out = svc.execute(inp, ctx)
+        assert out.auto_fail_threshold == 85.0
+        assert out.normalized_auto_fail_threshold == 0.85
+        assert any("converted to 0-100" in w for w in out.warnings)
 
     def test_no_artifact_lower_scores(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_16 import Skill16Input
@@ -410,7 +448,7 @@ class TestSkill16:
         from ainern2d_shared.schemas.skills.skill_16 import Skill16Input
         svc = self._make_service(mock_db)
         inp = Skill16Input(run_id="")
-        with pytest.raises(ValueError, match="CRITIC-VALIDATION"):
+        with pytest.raises(ValueError, match="REQ-VALIDATION"):
             svc.execute(inp, ctx)
 
     def test_continuity_exports_are_consumed(self, mock_db, ctx):
@@ -450,6 +488,32 @@ class TestSkill17:
         from app.services.skills.skill_17_experiment import ExperimentService
         return ExperimentService(db)
 
+    @staticmethod
+    def _build_critic_reports(
+        variant_scores: dict[str, float],
+        sample_count: int = 12,
+    ) -> dict[str, list[dict]]:
+        from ainern2d_shared.schemas.skills.skill_17 import CRITIC_DIMENSIONS
+
+        reports: dict[str, list[dict]] = {}
+        for variant_id, base_score in variant_scores.items():
+            samples: list[dict] = []
+            for i in range(sample_count):
+                score = max(0.0, min(1.0, base_score + ((i % 3) - 1) * 0.01))
+                summary_scores = {dim: round(score, 4) for dim in CRITIC_DIMENSIONS}
+                dimension_scores = [
+                    {"dimension": dim, "score": round(score * 100.0, 2), "max_score": 100.0}
+                    for dim in CRITIC_DIMENSIONS
+                ]
+                samples.append(
+                    {
+                        "summary_scores": summary_scores,
+                        "dimension_scores": dimension_scores,
+                    }
+                )
+            reports[variant_id] = samples
+        return reports
+
     def test_execute_selects_winner(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_17 import VariantConfig, Skill17Input
         svc = self._make_service(mock_db)
@@ -463,6 +527,7 @@ class TestSkill17:
         assert out.winner_variant_id in ("v_a", "v_b")
         assert len(out.variant_metrics) == 2
         assert len(out.recommendations) >= 1
+        assert out.promotion_gate_passed is False
 
     def test_empty_variants_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_17 import Skill17Input, VariantConfig
@@ -472,7 +537,7 @@ class TestSkill17:
             control_variant=VariantConfig(variant_id="ctrl"),
             test_variants=[],
         )
-        with pytest.raises(ValueError, match="EXP-VALIDATION"):
+        with pytest.raises(ValueError, match="PLAN-VALIDATION"):
             svc.execute(inp, ctx)
 
     def test_deterministic_winner(self, mock_db, ctx):
@@ -486,6 +551,67 @@ class TestSkill17:
         w1 = svc.execute(inp, ctx).winner_variant_id
         w2 = svc.execute(inp, ctx).winner_variant_id
         assert w1 == w2
+
+    def test_no_critic_reports_no_synthetic_samples(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_17 import Skill17Input, VariantConfig
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill17Input(
+                control_variant=VariantConfig(variant_id="ctrl"),
+                test_variants=[VariantConfig(variant_id="test")],
+            ),
+            ctx,
+        )
+        metrics = {m.variant_id: m for m in out.variant_metrics}
+        assert metrics["ctrl"].sample_count == 0
+        assert metrics["test"].sample_count == 0
+        assert any("missing_critic_reports:ctrl" in w for w in out.warnings)
+        assert any("missing_critic_reports:test" in w for w in out.warnings)
+
+    def test_promotion_gate_blocks_when_auto_promote_disabled(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_17 import (
+            FeatureFlags,
+            Skill17Input,
+            VariantConfig,
+        )
+        svc = self._make_service(mock_db)
+        critic_reports = self._build_critic_reports({"v_ctrl": 0.72, "v_test": 0.92})
+        out = svc.execute(
+            Skill17Input(
+                control_variant=VariantConfig(variant_id="v_ctrl"),
+                test_variants=[VariantConfig(variant_id="v_test")],
+                critic_reports=critic_reports,
+                feature_flags=FeatureFlags(enable_auto_promote=False, min_sample_size=10),
+            ),
+            ctx,
+        )
+        assert any(r.decision == "promote_to_default" for r in out.recommendations)
+        assert out.promotion_candidate_id == "v_test"
+        assert out.promotion_gate_passed is False
+        assert out.promotion_block_reason == "enable_auto_promote_disabled"
+        assert out.winner_variant_id == "v_ctrl"
+
+    def test_promotion_gate_passes_with_auto_promote(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_17 import (
+            FeatureFlags,
+            Skill17Input,
+            VariantConfig,
+        )
+        svc = self._make_service(mock_db)
+        critic_reports = self._build_critic_reports({"v_ctrl": 0.70, "v_test": 0.93})
+        out = svc.execute(
+            Skill17Input(
+                control_variant=VariantConfig(variant_id="v_ctrl"),
+                test_variants=[VariantConfig(variant_id="v_test")],
+                critic_reports=critic_reports,
+                feature_flags=FeatureFlags(enable_auto_promote=True, min_sample_size=10),
+            ),
+            ctx,
+        )
+        assert out.promotion_candidate_id == "v_test"
+        assert out.promotion_gate_passed is True
+        assert out.promotion_block_reason == ""
+        assert out.winner_variant_id == "v_test"
 
     def test_runtime_manifest_injected_to_variants(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_17 import VariantConfig, Skill17Input
@@ -535,16 +661,41 @@ class TestSkill18:
         assert out.failure_classification.failure_type.value == "resource_exhaustion"
 
     def test_degrade_on_repeated_gpu_failure(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_18 import Skill18Input, FeatureFlags
+        from ainern2d_shared.schemas.skills.skill_18 import (
+            DegradationLevel,
+            FeatureFlags,
+            Skill18Input,
+        )
         svc = self._make_service(mock_db)
         inp = Skill18Input(error_code="WORKER-GPU-001",
                            failed_skill="skill_09", retry_count=4,
-                           feature_flags=FeatureFlags(max_retries=3))
+                           feature_flags=FeatureFlags(max_retries=3, enable_backend_fallback=False))
         out = svc.execute(inp, ctx)
         # Retry budget exhausted → degradation should be in the plan
         assert out.degradation_applied is True or any(
             s.action.strategy.value == "degrade_one_level" for s in out.recovery_plan
         )
+        if out.degradation_applied:
+            assert out.degradation_level == DegradationLevel.L1_SHORTEN_DURATION
+
+    def test_legacy_manual_review_threshold_is_compatible(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_18 import FeatureFlags, Skill18Input
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill18Input(
+                error_code="WORKER-GPU-001",
+                failed_skill="skill_09",
+                retry_count=4,
+                feature_flags=FeatureFlags(
+                    max_retries=3,
+                    enable_backend_fallback=False,
+                    manual_review_threshold="L5_PLACEHOLDER_ASSET",
+                ),
+            ),
+            ctx,
+        )
+        assert out.degradation_applied is True
+        assert out.manual_review_required is False
 
     def test_circuit_breaker_at_threshold(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_18 import Skill18Input
@@ -594,3 +745,84 @@ class TestSkill19:
         out_b = svc.execute(inp_battle, ctx)
         out_d = svc.execute(inp_dialogue, ctx)
         assert out_b.shot_plans[0].estimated_seconds > out_d.shot_plans[0].estimated_seconds
+
+    def test_historical_stats_adjust_estimation(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_19 import Skill19Input
+
+        svc = self._make_service(mock_db)
+        resources = {"gpu_tier": "A100", "gpu_hours_budget": 10.0}
+        shots = [{
+            "shot_id": "hist_001",
+            "shot_type": "dialogue",
+            "duration_seconds": 3.0,
+            "action_cues": ["dialogue"],
+        }]
+
+        out_without_history = svc.execute(
+            Skill19Input(shots=shots, cluster_resources=resources),
+            ctx,
+        )
+        out_with_history = svc.execute(
+            Skill19Input(
+                shots=shots,
+                cluster_resources=resources,
+                historical_render_stats=[{
+                    "shot_type": "dialogue",
+                    "complexity": "low",
+                    "sample_count": 30,
+                    "avg_gpu_sec_per_second": 20.0,
+                    "p95_gpu_sec_per_second": 24.0,
+                    "overrun_rate": 0.2,
+                }],
+            ),
+            ctx,
+        )
+
+        base_plan = out_without_history.shot_plans[0]
+        hist_plan = out_with_history.shot_plans[0]
+        assert hist_plan.estimated_seconds > base_plan.estimated_seconds
+        assert hist_plan.estimated_cost.historical_factor > 1.0
+        assert hist_plan.estimated_cost.history_confidence > 0.0
+
+    def test_dynamic_reallocation_prefers_deficit_fill(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_19 import Skill19Input
+
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill19Input(
+                shots=[
+                    {
+                        "shot_id": "heavy",
+                        "shot_type": "battle",
+                        "duration_seconds": 4.0,
+                        "action_cues": ["battle"],
+                        "narrative_importance": 1.0,
+                        "visual_complexity": 1.0,
+                        "motion_score": 1.0,
+                        "user_priority": 1.0,
+                    },
+                    {
+                        "shot_id": "light",
+                        "shot_type": "dialogue",
+                        "duration_seconds": 1.0,
+                        "action_cues": ["dialogue"],
+                        "narrative_importance": 1.0,
+                        "visual_complexity": 0.5,
+                        "motion_score": 0.5,
+                        "user_priority": 1.0,
+                    },
+                ],
+                cluster_resources={
+                    "gpu_tier": "A100",
+                    "gpu_hours_budget": 150.0 / 3600.0,
+                },
+            ),
+            ctx,
+        )
+
+        deficit_logs = [
+            row for row in out.reallocation_log
+            if row.get("shot_id") == "heavy" and row.get("action") == "deficit_fill"
+        ]
+        assert deficit_logs
+        assert deficit_logs[0]["new_budget_gpu_sec"] > deficit_logs[0]["old_budget_gpu_sec"]

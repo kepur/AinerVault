@@ -87,7 +87,7 @@ class SkillDispatcher:
         if skill_id is None:
             logger.warning(f"[SkillDispatcher] no skill_id for job_type={jt}")
             job.status = JobStatus.failed
-            job.result_json = {"error_code": "SKILL-DISPATCH-001", "error_message": f"unknown job_type: {jt}"}
+            job.result_json = {"error_code": "ORCH-STATE-001", "error_message": f"unknown job_type: {jt}"}
             self.db.flush()
             return None
 
@@ -108,7 +108,7 @@ class SkillDispatcher:
 
         except Exception as exc:
             err_msg = str(exc)
-            err_code = "SKILL-EXEC-001"
+            err_code = "SYS-DEPENDENCY-001"
             if ":" in err_msg:
                 parts = err_msg.split(":", 1)
                 if "-" in parts[0] and len(parts[0]) < 30:

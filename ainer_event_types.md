@@ -33,6 +33,7 @@
 ## 4. 规划链路（05/06）
 - `plan.shot.generated`
 - `plan.prompt.generated`
+- `prompt.plan.replay.queried`
 - `timeline.provisional.generated`
 - `route.decision.made`
 - `route.degraded`

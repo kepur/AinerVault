@@ -123,7 +123,7 @@ class LanguageContextService(BaseSkillService[Skill02Input, Skill02Output]):
         issues = self._precheck(input_dto)
         if issues:
             self._record_state(ctx, "PRECHECKING", "FAILED")
-            raise ValueError(f"LANG-VALIDATION-001: {'; '.join(issues)}")
+            raise ValueError(f"REQ-VALIDATION-001: {'; '.join(issues)}")
 
         src_lang = input_dto.primary_language or "unknown"
         tgt_lang = (

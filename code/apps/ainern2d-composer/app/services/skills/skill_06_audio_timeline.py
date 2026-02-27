@@ -31,6 +31,7 @@ from ainern2d_shared.schemas.skills.skill_06 import (
     Skill06Output,
     ShotTimeline,
     TimingAnchor,
+    TimelineTracks,
     ValidationReport,
 )
 from ainern2d_shared.services.base_skill import BaseSkillService, SkillContext
@@ -109,6 +110,7 @@ class AudioTimelineService(BaseSkillService[Skill06Input, Skill06Output]):
             )
         )
         conflicts.extend(place_conflicts)
+        tracks_contract = self._build_tracks_contract(tracks)
 
         total_duration_ms = self._compute_total_duration(tracks, shot_timing)
 
@@ -149,7 +151,8 @@ class AudioTimelineService(BaseSkillService[Skill06Input, Skill06Output]):
             version="1.0",
             status=final_status,
             final_duration_ms=total_duration_ms,
-            tracks=tracks,
+            tracks=tracks_contract,
+            track_layers=tracks,
             scene_timeline=scene_timelines,
             shot_timeline=shot_timelines,
             mix_hints=mix_hints,
@@ -628,6 +631,24 @@ class AudioTimelineService(BaseSkillService[Skill06Input, Skill06Output]):
     # =====================================================================
     # Helpers
     # =====================================================================
+    @staticmethod
+    def _build_tracks_contract(tracks: list[AudioTrack]) -> TimelineTracks:
+        grouped: dict[str, list[AudioEvent]] = {
+            "dialogue": [],
+            "ambience": [],
+            "sfx": [],
+            "bgm": [],
+            "aux": [],
+        }
+        for trk in tracks:
+            ttype = trk.track_type if trk.track_type in grouped else "aux"
+            grouped[ttype].extend(trk.events)
+
+        for ttype in grouped:
+            grouped[ttype].sort(key=lambda ev: (ev.start_ms, ev.end_ms, ev.event_id))
+
+        return TimelineTracks(**grouped)
+
     @staticmethod
     def _normalise_track_type(raw: str) -> str:
         mapping: dict[str, str] = {

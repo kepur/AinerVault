@@ -165,6 +165,7 @@ def test_e2e_021_continuity_chain_reaches_dsl_compile(mock_db, ctx):
             entity_aliases=[a.model_dump(mode="json") for a in out04.entity_aliases],
             shots=[{"shot_id": "S1", "scene_id": "SC1"}],
             scenes=[{"scene_id": "SC1"}],
+            entity_registry_continuity_result=out21.model_dump(mode="json"),
             culture_candidates=[
                 {
                     "culture_pack_id": "cn_wuxia",

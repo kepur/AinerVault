@@ -169,7 +169,8 @@ class StoryIngestionService(BaseSkillService[Skill01Input, Skill01Output]):
         )
 
         return Skill01Output(
-            version="1.0",
+            version=ctx.schema_version,
+            schema_version=ctx.schema_version,
             status=status,
             document_meta=doc_meta,
             language_detection=language_detection,
@@ -179,7 +180,10 @@ class StoryIngestionService(BaseSkillService[Skill01Input, Skill01Output]):
             quality_report=quality_report,
             warnings=warnings,
             ingestion_log=ingestion_log,
+            tenant_id=ctx.tenant_id,
+            project_id=ctx.project_id,
             trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
             idempotency_key=ctx.idempotency_key,
         )
 

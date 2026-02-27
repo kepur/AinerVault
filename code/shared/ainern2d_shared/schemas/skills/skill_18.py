@@ -36,13 +36,13 @@ class Severity(str, Enum):
 
 class DegradationLevel(str, Enum):
     L0_FULL_QUALITY = "L0_FULL_QUALITY"
-    L1_REDUCED_FX = "L1_REDUCED_FX"
-    L2_SIMPLIFIED_COMP = "L2_SIMPLIFIED_COMP"
-    L3_STATIC_KEYFRAME = "L3_STATIC_KEYFRAME"
-    L4_LOWER_RES = "L4_LOWER_RES"
-    L5_PLACEHOLDER_ASSET = "L5_PLACEHOLDER_ASSET"
-    L6_TEXT_ONLY = "L6_TEXT_ONLY"
-    L7_SKIP = "L7_SKIP"
+    L1_SHORTEN_DURATION = "L1_SHORTEN_DURATION"
+    L2_LOWER_FPS = "L2_LOWER_FPS"
+    L3_LOWER_RESOLUTION = "L3_LOWER_RESOLUTION"
+    L4_SPLIT_MICROSHOTS = "L4_SPLIT_MICROSHOTS"
+    L5_STATIC_IMAGE_MOTION = "L5_STATIC_IMAGE_MOTION"
+    L6_PLACEHOLDER_MANUAL_REVIEW = "L6_PLACEHOLDER_MANUAL_REVIEW"
+    L7_SKIP_NON_CRITICAL = "L7_SKIP_NON_CRITICAL"
 
 
 class CircuitState(str, Enum):
@@ -136,7 +136,7 @@ class ManualReviewItem(BaseSchema):
     entity_id: str = ""
     shot_id: str = ""
     reason: str = ""
-    degradation_level: DegradationLevel = DegradationLevel.L5_PLACEHOLDER_ASSET
+    degradation_level: DegradationLevel = DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW
     failure_classification: FailureClassification | None = None
     created_at: str = ""
 
@@ -160,7 +160,7 @@ class FeatureFlags(BaseSchema):
     max_retries: int = 3
     circuit_breaker_threshold: float = 0.5
     auto_degrade_enabled: bool = True
-    manual_review_threshold: str = DegradationLevel.L5_PLACEHOLDER_ASSET.value
+    manual_review_threshold: str = DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW.value
     health_check_interval_seconds: int = 30
     enable_partial_success: bool = True
     enable_backend_fallback: bool = True

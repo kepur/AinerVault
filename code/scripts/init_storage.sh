@@ -17,10 +17,11 @@ S3_SECRET_KEY="${S3_SECRET_KEY:-ainer_minio_2024}"
 S3_BUCKET="${S3_BUCKET:-ainer-assets}"
 
 echo "🪣 配置 MinIO 客户端..."
-docker compose exec minio mc alias set local "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" 2>/dev/null || \
+docker compose exec -T minio mc alias set local "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" 2>/dev/null || \
     mc alias set local "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
 
 echo "📁 创建 Bucket: $S3_BUCKET"
-mc mb "local/$S3_BUCKET" --ignore-existing
+docker compose exec -T minio mc mb "local/$S3_BUCKET" --ignore-existing 2>/dev/null || \
+    mc mb "local/$S3_BUCKET" --ignore-existing
 
 echo "✅ 对象存储初始化完成"

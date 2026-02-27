@@ -118,6 +118,18 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  studio-web:
+    build:
+      context: .
+      dockerfile: apps/ainern2d-studio-web/Dockerfile
+    restart: unless-stopped
+    environment:
+      - VITE_PROXY_TARGET=http://studio-api:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - studio-api
+
   # ── 反向代理 ──────────────────────────────────────────────
   nginx:
     image: nginx:1.27-alpine
@@ -130,6 +142,7 @@ services:
       - studio-api
       - worker-hub
       - composer
+      - studio-web
 
 volumes:
   pg_data:

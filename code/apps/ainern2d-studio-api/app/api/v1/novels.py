@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ainern2d_shared.ainer_db_models.content_models import Chapter, Novel
+from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
+from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
+from ainern2d_shared.schemas.skills.skill_01 import Skill01Input
+from ainern2d_shared.schemas.skills.skill_02 import Skill02Input
+from ainern2d_shared.schemas.skills.skill_03 import Skill03Input
+from ainern2d_shared.services.base_skill import SkillContext
+
+from app.api.deps import get_db
+from app.api.v1.tasks import TaskSubmitAccepted, TaskSubmitRequest, create_task
+from app.services.skill_registry import SkillRegistry
+
+router = APIRouter(prefix="/api/v1", tags=["novels"])
+
+
+class NovelCreateRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    title: str
+    summary: str | None = None
+    default_language_code: str = "zh"
+
+
+class NovelResponse(BaseModel):
+    id: str
+    tenant_id: str
+    project_id: str
+    title: str
+    summary: str | None = None
+    default_language_code: str
+
+
+class ChapterCreateRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    chapter_no: int
+    language_code: str = "zh"
+    title: str | None = None
+    markdown_text: str
+
+
+class ChapterUpdateRequest(BaseModel):
+    title: str | None = None
+    language_code: str | None = None
+    markdown_text: str
+    revision_note: str | None = None
+
+
+class ChapterResponse(BaseModel):
+    id: str
+    tenant_id: str
+    project_id: str
+    novel_id: str
+    chapter_no: int
+    language_code: str
+    title: str | None = None
+    markdown_text: str
+
+
+class ChapterRevisionItem(BaseModel):
+    revision_id: str
+    occurred_at: datetime
+    chapter_id: str
+    note: str | None = None
+    editor: str | None = None
+    previous_markdown_text: str
+
+
+class ChapterPreviewRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    target_output_language: str | None = None
+    target_locale: str | None = None
+    genre: str = ""
+    story_world_setting: str = ""
+    culture_pack_id: str | None = None
+    persona_ref: str | None = None
+
+
+class ChapterPreviewResponse(BaseModel):
+    preview_run_id: str
+    skill_01_status: str
+    skill_02_status: str
+    skill_03_status: str
+    normalized_text: str
+    culture_candidates: list[str] = Field(default_factory=list)
+    scene_count: int = 0
+    shot_count: int = 0
+    scene_plan: list[dict] = Field(default_factory=list)
+    shot_plan: list[dict] = Field(default_factory=list)
+
+
+class ChapterTaskRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    requested_quality: str = "standard"
+    language_context: str = "zh-CN"
+    payload: dict = Field(default_factory=dict)
+    trace_id: str | None = None
+    correlation_id: str | None = None
+    idempotency_key: str | None = None
+
+
+@router.post("/novels", response_model=NovelResponse, status_code=201)
+def create_novel(body: NovelCreateRequest, db: Session = Depends(get_db)) -> NovelResponse:
+    novel = Novel(
+        id=f"novel_{uuid4().hex}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=f"tr_novel_{uuid4().hex[:12]}",
+        correlation_id=f"cr_novel_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_novel_{body.project_id}_{uuid4().hex[:8]}",
+        title=body.title,
+        summary=body.summary,
+        default_language_code=body.default_language_code,
+    )
+    db.add(novel)
+    db.commit()
+    db.refresh(novel)
+    return NovelResponse(
+        id=novel.id,
+        tenant_id=novel.tenant_id,
+        project_id=novel.project_id,
+        title=novel.title,
+        summary=novel.summary,
+        default_language_code=novel.default_language_code,
+    )
+
+
+@router.get("/novels", response_model=list[NovelResponse])
+def list_novels(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> list[NovelResponse]:
+    rows = db.execute(
+        select(Novel)
+        .where(
+            Novel.tenant_id == tenant_id,
+            Novel.project_id == project_id,
+            Novel.deleted_at.is_(None),
+        )
+        .order_by(Novel.created_at.desc())
+    ).scalars().all()
+    return [
+        NovelResponse(
+            id=row.id,
+            tenant_id=row.tenant_id,
+            project_id=row.project_id,
+            title=row.title,
+            summary=row.summary,
+            default_language_code=row.default_language_code,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/novels/{novel_id}", response_model=NovelResponse)
+def get_novel(novel_id: str, db: Session = Depends(get_db)) -> NovelResponse:
+    row = db.get(Novel, novel_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    return NovelResponse(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        project_id=row.project_id,
+        title=row.title,
+        summary=row.summary,
+        default_language_code=row.default_language_code,
+    )
+
+
+@router.post("/novels/{novel_id}/chapters", response_model=ChapterResponse, status_code=201)
+def create_chapter(
+    novel_id: str,
+    body: ChapterCreateRequest,
+    db: Session = Depends(get_db),
+) -> ChapterResponse:
+    novel = db.get(Novel, novel_id)
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+
+    chapter = Chapter(
+        id=f"chapter_{uuid4().hex}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=f"tr_ch_{uuid4().hex[:12]}",
+        correlation_id=f"cr_ch_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_chapter_{novel_id}_{body.chapter_no}_{uuid4().hex[:8]}",
+        novel_id=novel_id,
+        chapter_no=body.chapter_no,
+        language_code=body.language_code,
+        title=body.title,
+        raw_text=body.markdown_text,
+    )
+    db.add(chapter)
+    db.commit()
+    db.refresh(chapter)
+    _append_revision_event(
+        db=db,
+        chapter=chapter,
+        previous_markdown_text="",
+        note="chapter.created",
+        editor="system",
+    )
+    return _chapter_to_response(chapter)
+
+
+@router.get("/novels/{novel_id}/chapters", response_model=list[ChapterResponse])
+def list_chapters(novel_id: str, db: Session = Depends(get_db)) -> list[ChapterResponse]:
+    rows = db.execute(
+        select(Chapter)
+        .where(
+            Chapter.novel_id == novel_id,
+            Chapter.deleted_at.is_(None),
+        )
+        .order_by(Chapter.chapter_no.asc())
+    ).scalars().all()
+    return [_chapter_to_response(row) for row in rows]
+
+
+@router.get("/chapters/{chapter_id}", response_model=ChapterResponse)
+def get_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterResponse:
+    row = db.get(Chapter, chapter_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    return _chapter_to_response(row)
+
+
+@router.put("/chapters/{chapter_id}", response_model=ChapterResponse)
+def update_chapter(
+    chapter_id: str,
+    body: ChapterUpdateRequest,
+    db: Session = Depends(get_db),
+) -> ChapterResponse:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    previous_markdown_text = chapter.raw_text
+    chapter.raw_text = body.markdown_text
+    if body.title is not None:
+        chapter.title = body.title
+    if body.language_code is not None:
+        chapter.language_code = body.language_code
+    db.commit()
+    db.refresh(chapter)
+
+    _append_revision_event(
+        db=db,
+        chapter=chapter,
+        previous_markdown_text=previous_markdown_text,
+        note=body.revision_note or "chapter.updated",
+        editor="editor",
+    )
+    return _chapter_to_response(chapter)
+
+
+@router.get("/chapters/{chapter_id}/revisions", response_model=list[ChapterRevisionItem])
+def list_chapter_revisions(chapter_id: str, db: Session = Depends(get_db)) -> list[ChapterRevisionItem]:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    rows = db.execute(
+        select(WorkflowEvent)
+        .where(
+            WorkflowEvent.tenant_id == chapter.tenant_id,
+            WorkflowEvent.project_id == chapter.project_id,
+            WorkflowEvent.event_type == "audit.recorded",
+            WorkflowEvent.deleted_at.is_(None),
+        )
+        .order_by(WorkflowEvent.occurred_at.desc())
+    ).scalars().all()
+
+    items: list[ChapterRevisionItem] = []
+    for row in rows:
+        payload = row.payload_json or {}
+        if payload.get("action") != "chapter.revision":
+            continue
+        if payload.get("chapter_id") != chapter_id:
+            continue
+        items.append(
+            ChapterRevisionItem(
+                revision_id=row.id,
+                occurred_at=row.occurred_at,
+                chapter_id=chapter_id,
+                note=payload.get("note"),
+                editor=payload.get("editor"),
+                previous_markdown_text=payload.get("previous_markdown_text") or "",
+            )
+        )
+    return items
+
+
+@router.post("/chapters/{chapter_id}/preview-plan", response_model=ChapterPreviewResponse)
+def preview_chapter_plan(
+    chapter_id: str,
+    body: ChapterPreviewRequest,
+    db: Session = Depends(get_db),
+) -> ChapterPreviewResponse:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    preview_run_id = f"run_preview_{uuid4().hex}"
+    run = RenderRun(
+        id=preview_run_id,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=f"tr_preview_{uuid4().hex[:12]}",
+        correlation_id=f"cr_preview_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_preview_{chapter_id}_{uuid4().hex[:8]}",
+        chapter_id=chapter_id,
+        status=RunStatus.running,
+        stage=RenderStage.plan,
+        progress=0,
+        config_json={"mode": "chapter_preview"},
+    )
+    db.add(run)
+    db.commit()
+
+    ctx = SkillContext(
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        run_id=preview_run_id,
+        trace_id=run.trace_id or f"tr_preview_{uuid4().hex[:12]}",
+        correlation_id=run.correlation_id or f"cr_preview_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_preview_chain_{uuid4().hex[:12]}",
+        schema_version="1.0",
+    )
+
+    registry = SkillRegistry(db)
+    out_01 = registry.dispatch(
+        "skill_01",
+        Skill01Input(
+            raw_text=chapter.raw_text,
+            input_source_type="manual_text",
+            source_metadata={"chapter_id": chapter.id, "novel_id": chapter.novel_id},
+            project_id=chapter.project_id,
+            task_id=f"preview_{chapter.id}",
+        ),
+        ctx,
+    )
+    out_02 = registry.dispatch(
+        "skill_02",
+        Skill02Input(
+            primary_language=out_01.language_detection.primary_language,
+            secondary_languages=out_01.language_detection.secondary_languages,
+            normalized_text=out_01.normalized_text,
+            quality_status=out_01.status,
+            target_output_language=body.target_output_language or chapter.language_code,
+            genre=body.genre,
+            story_world_setting=body.story_world_setting,
+            target_locale=body.target_locale or "",
+            user_overrides={"culture_pack": body.culture_pack_id} if body.culture_pack_id else {},
+            project_defaults={"active_persona_ref": body.persona_ref} if body.persona_ref else {},
+        ),
+        ctx,
+    )
+    out_03 = registry.dispatch(
+        "skill_03",
+        Skill03Input(
+            segments=[segment.model_dump() for segment in out_01.segments],
+            normalized_text=out_01.normalized_text,
+            language_route=out_02.language_route.model_dump(),
+            culture_hint=(
+                body.culture_pack_id
+                or (out_02.culture_candidates[0].culture_pack_id if out_02.culture_candidates else "")
+            ),
+            scene_planner_mode=out_02.planner_hints.scene_planner_mode,
+        ),
+        ctx,
+    )
+
+    run.progress = 100
+    run.status = RunStatus.success
+    run.stage = RenderStage.plan
+    db.commit()
+
+    return ChapterPreviewResponse(
+        preview_run_id=preview_run_id,
+        skill_01_status=out_01.status,
+        skill_02_status=out_02.status,
+        skill_03_status=out_03.status,
+        normalized_text=out_01.normalized_text,
+        culture_candidates=[item.culture_pack_id for item in out_02.culture_candidates],
+        scene_count=len(out_03.scene_plan),
+        shot_count=len(out_03.shot_plan),
+        scene_plan=[item.model_dump() for item in out_03.scene_plan],
+        shot_plan=[item.model_dump() for item in out_03.shot_plan],
+    )
+
+
+@router.post("/chapters/{chapter_id}/tasks", response_model=TaskSubmitAccepted, status_code=202)
+def create_chapter_task(
+    chapter_id: str,
+    body: ChapterTaskRequest,
+    db: Session = Depends(get_db),
+) -> TaskSubmitAccepted:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    now = datetime.now(timezone.utc)
+    submit = TaskSubmitRequest(
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        chapter_id=chapter_id,
+        requested_quality=body.requested_quality,
+        language_context=body.language_context,
+        payload=body.payload,
+        trace_id=body.trace_id or f"tr_task_{uuid4().hex[:12]}",
+        correlation_id=body.correlation_id or f"cr_task_{uuid4().hex[:12]}",
+        idempotency_key=body.idempotency_key or f"idem_task_{chapter_id}_{int(now.timestamp())}",
+    )
+    return create_task(submit, db)
+
+
+def _chapter_to_response(chapter: Chapter) -> ChapterResponse:
+    return ChapterResponse(
+        id=chapter.id,
+        tenant_id=chapter.tenant_id,
+        project_id=chapter.project_id,
+        novel_id=chapter.novel_id,
+        chapter_no=chapter.chapter_no,
+        language_code=chapter.language_code,
+        title=chapter.title,
+        markdown_text=chapter.raw_text,
+    )
+
+
+def _append_revision_event(
+    *,
+    db: Session,
+    chapter: Chapter,
+    previous_markdown_text: str,
+    note: str,
+    editor: str,
+) -> None:
+    event = WorkflowEvent(
+        id=f"evt_{uuid4().hex[:24]}",
+        tenant_id=chapter.tenant_id,
+        project_id=chapter.project_id,
+        trace_id=chapter.trace_id,
+        correlation_id=chapter.correlation_id,
+        idempotency_key=f"idem_revision_{chapter.id}_{uuid4().hex[:8]}",
+        run_id=None,
+        stage=None,
+        event_type="audit.recorded",
+        event_version="1.0",
+        producer="studio_api",
+        occurred_at=datetime.now(timezone.utc),
+        payload_json={
+            "action": "chapter.revision",
+            "chapter_id": chapter.id,
+            "note": note,
+            "editor": editor,
+            "previous_markdown_text": previous_markdown_text,
+        },
+    )
+    db.add(event)
+    db.commit()

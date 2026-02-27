@@ -18,6 +18,18 @@ from ainern2d_shared.telemetry.logging import get_logger
 
 _logger = get_logger("studio-api")
 
+ROLE_RANK: dict[str, int] = {
+	"viewer": 10,
+	"editor": 20,
+	"admin": 30,
+	"owner": 40,
+	"service": 50,
+}
+
+
+def has_required_role(role: str, min_role: str) -> bool:
+	return ROLE_RANK.get(role, 0) >= ROLE_RANK.get(min_role, 0)
+
 
 def get_db() -> Generator[Session, None, None]:
 	db = SessionLocal()
@@ -52,3 +64,15 @@ def get_db_session() -> Session:
 	"""Non-generator DB session for background consumers (not FastAPI Depends)."""
 	return SessionLocal()
 
+
+class _ObserverStore:
+	def __init__(self) -> None:
+		self.events: dict[str, list[dict[str, Any]]] = {}
+
+
+_OBSERVER_STORE = _ObserverStore()
+
+
+def get_store() -> _ObserverStore:
+	"""Backward-compatible observer in-memory store."""
+	return _OBSERVER_STORE

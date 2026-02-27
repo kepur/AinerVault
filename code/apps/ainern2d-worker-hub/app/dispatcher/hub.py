@@ -35,7 +35,7 @@ class DispatchHub:
         self.db = db
         self.node_registry = node_registry
         self.routing_table = routing_table
-        self._publisher = RabbitMQPublisher(settings)
+        self._publisher = RabbitMQPublisher(settings.rabbitmq_url)
         self._job_repo = JobRepository(db)
 
     # ------------------------------------------------------------------
@@ -64,13 +64,18 @@ class DispatchHub:
         envelope = EventEnvelope(
             event_id=str(uuid.uuid4()),
             event_type="job.claimed",
-            job_id=str(job.id),
+            producer="worker-hub",
+            occurred_at=datetime.now(timezone.utc),
+            tenant_id=job.tenant_id or "t_unknown",
+            project_id=job.project_id or "p_unknown",
+            idempotency_key=job.idempotency_key or f"idem_{job.id}",
             run_id=str(job.run_id) if job.run_id else None,
+            job_id=str(job.id),
+            trace_id=(getattr(job, "trace_id", "") or f"tr_{job.id}"),
+            correlation_id=(getattr(job, "correlation_id", "") or f"cr_{job.id}"),
             payload={"node_id": node_id, "worker_type": worker_type},
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            source="worker-hub",
         )
-        await self._publisher.publish(SYSTEM_TOPICS.JOB_DISPATCH, envelope.model_dump())
+        self._publisher.publish(SYSTEM_TOPICS.JOB_STATUS, envelope.model_dump(mode="json"))
         logger.info("dispatched job %s to node %s", job.id, node_id)
         return node_id
 
@@ -79,6 +84,11 @@ class DispatchHub:
     # ------------------------------------------------------------------
     async def handle_callback(self, result: WorkerResult) -> None:
         """Process a worker result – update DB status and publish event."""
+        job = self._job_repo.get(result.job_id)
+        if job is None:
+            logger.warning("callback ignored: job %s not found", result.job_id)
+            return
+
         if result.status == "succeeded":
             self._job_repo.update_status(result.job_id, JobStatus.succeeded)
             event_type = "job.succeeded"
@@ -89,11 +99,16 @@ class DispatchHub:
         envelope = EventEnvelope(
             event_id=str(uuid.uuid4()),
             event_type=event_type,
+            producer="worker-hub",
+            occurred_at=datetime.now(timezone.utc),
+            tenant_id=job.tenant_id or "t_unknown",
+            project_id=job.project_id or "p_unknown",
+            idempotency_key=job.idempotency_key or f"idem_{job.id}:{event_type}",
+            trace_id=(getattr(job, "trace_id", "") or f"tr_{job.id}"),
+            correlation_id=(getattr(job, "correlation_id", "") or f"cr_{job.id}"),
             job_id=result.job_id,
             run_id=result.run_id,
-            payload=result.model_dump(),
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            source="worker-hub",
+            payload=result.model_dump(mode="json"),
         )
-        await self._publisher.publish(SYSTEM_TOPICS.WORKER_CALLBACK, envelope.model_dump())
+        self._publisher.publish(SYSTEM_TOPICS.JOB_STATUS, envelope.model_dump(mode="json"))
         logger.info("handled callback for job %s: %s", result.job_id, event_type)

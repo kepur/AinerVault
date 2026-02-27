@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import Field
+
 from ainern2d_shared.schemas.base import BaseSchema
 
 
@@ -34,7 +36,7 @@ class ShotDSL(BaseSchema):
     asset_refs: list[str] = []
     positive_prompt: str = ""
     negative_prompt: str = ""
-    model_backend: str = "comfyui"
+    backend_target: str = Field(default="comfyui", alias="model_backend")
     seed: int = -1
     lora_refs: list[str] = []
     embedding_refs: list[str] = []
@@ -100,7 +102,7 @@ class ResolvedEmbedding(BaseSchema):
 
 class CompiledShot(BaseSchema):
     shot_id: str
-    backend: str = "comfyui"
+    backend_target: str = Field(default="comfyui", alias="backend")
     candidate_id: str = "C0"
     quality_tier: str = "primary"
     positive_prompt: str = ""

@@ -394,7 +394,12 @@ class CanonicalizationService(BaseSkillService[Skill07Input, Skill07Output]):
 
         # ── [B1] Canonicalization ─────────────────────────────────────────────
         self._record_state(ctx, "INIT", "CANONICALIZING")
-        canonical_entities = self._canonicalize(input_dto.entities, input_dto.scenes)
+        entity_id_map = self._build_entity_id_map(input_dto)
+        canonical_entities = self._canonicalize(
+            input_dto.entities,
+            input_dto.scenes,
+            entity_id_map,
+        )
         self._record_state(ctx, "CANONICALIZING", "CANONICAL_READY")
 
         # ── [B2] Culture Pack Routing ─────────────────────────────────────────
@@ -459,12 +464,20 @@ class CanonicalizationService(BaseSkillService[Skill07Input, Skill07Output]):
     def _canonicalize(
         entities: list[dict],
         scenes: list[dict],
+        entity_id_map: dict[str, str],
     ) -> list[CanonicalEntityFull]:
         scene_ids_by_order = [s.get("scene_id", "") for s in scenes]
 
         result: list[CanonicalEntityFull] = []
-        for ent in entities:
-            uid = ent.get("entity_uid", "")
+        for idx, ent in enumerate(entities, start=1):
+            uid = str(ent.get("entity_uid", ent.get("source_entity_uid", ""))).strip()
+            if not uid:
+                uid = f"entity_{idx:04d}"
+            entity_id = str(
+                ent.get("entity_id")
+                or entity_id_map.get(uid)
+                or uid
+            ).strip()
             etype = ent.get("entity_type", "character")
             surface = ent.get("surface_form", "")
 
@@ -474,6 +487,7 @@ class CanonicalizationService(BaseSkillService[Skill07Input, Skill07Output]):
             result.append(
                 CanonicalEntityFull(
                     entity_uid=uid,
+                    entity_id=entity_id,
                     entity_type=etype,
                     surface_form=surface,
                     source_mentions=[surface],
@@ -624,6 +638,10 @@ class CanonicalizationService(BaseSkillService[Skill07Input, Skill07Output]):
             variant_mapping.append(
                 EntityVariantMapping(
                     entity_uid=ent.entity_uid,
+                    entity_id=ent.entity_id or ent.entity_uid,
+                    canonical_entity_id=ent.entity_id or ent.entity_uid,
+                    matched_entity_id=ent.entity_id or ent.entity_uid,
+                    source_entity_uid=ent.entity_uid,
                     canonical_entity_specific=specific,
                     selected_variant_id=variant_id,
                     variant_display_name=display_name,
@@ -794,6 +812,34 @@ class CanonicalizationService(BaseSkillService[Skill07Input, Skill07Output]):
             uid_to_variants.setdefault(vm.entity_uid, []).append(vm)
 
         return conflicts, fallback_actions
+
+    @staticmethod
+    def _build_entity_id_map(input_dto: Skill07Input) -> dict[str, str]:
+        """Build source_uid -> stable entity_id map from SKILL 21 outputs."""
+        mapping: dict[str, str] = {}
+
+        def _ingest(items: list[dict]) -> None:
+            for item in items:
+                source_uid = str(item.get("source_entity_uid", "")).strip()
+                entity_id = str(
+                    item.get("matched_entity_id")
+                    or item.get("entity_id")
+                    or ""
+                ).strip()
+                if source_uid and entity_id:
+                    mapping[source_uid] = entity_id
+
+        if input_dto.resolved_entities:
+            _ingest([i for i in input_dto.resolved_entities if isinstance(i, dict)])
+
+        continuity_result = input_dto.entity_registry_continuity_result or {}
+        if isinstance(continuity_result, dict):
+            _ingest([
+                i for i in continuity_result.get("resolved_entities", [])
+                if isinstance(i, dict)
+            ])
+
+        return mapping
 
 
 # ── Module-level helpers ───────────────────────────────────────────────────────

@@ -94,4 +94,5 @@ class Skill05Output(BaseSchema):
     provisional_audio_timeline: ProvisionalAudioTimeline = ProvisionalAudioTimeline()
     parallel_audio_groups: list[ParallelAudioGroup] = []
     warnings: list[str] = []
+    review_required_items: list[str] = []
     status: str = "ready_for_audio_execution"

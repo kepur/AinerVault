@@ -70,6 +70,48 @@ class TestSkill05:
         out = svc.execute(inp, ctx)
         assert out.audio_task_dag is not None
 
+    def test_review_required_triggered_by_backend_capability_conflicts(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_05 import (
+            BackendAudioCapability,
+            Skill05Input,
+        )
+        svc = self._make_service(mock_db)
+        scene_plan = [
+            {
+                "scene_id": "sc_001",
+                "scene_type": "action",
+                "emotion_tone": "tense",
+            }
+        ]
+        shot_plan = [
+            {
+                "shot_id": "sh_001",
+                "scene_id": "sc_001",
+                "tts_backfill_required": True,
+                "characters_present": ["hero"],
+                "audio_hints": ["metal_hit_sfx"],
+                "dialogue_text": "动手！",
+            }
+        ]
+        inp = Skill05Input(
+            scene_plan=scene_plan,
+            shot_plan=shot_plan,
+            language_code="zh-CN",
+            voice_cast_profile={"hero": "voice_hero"},
+            backend_audio_capability=BackendAudioCapability(
+                supported_tts_speakers=["voice_safe"],
+                supported_bgm_moods=["neutral_background"],
+                supported_sfx_event_types=["crowd"],
+            ),
+        )
+        out = svc.execute(inp, ctx)
+        assert out.status == "review_required"
+        assert len(out.review_required_items) >= 1
+        assert any(
+            item.startswith("backend_capability_unsupported_")
+            for item in out.review_required_items
+        )
+
 
 # ── SKILL 07: CanonicalizationService ────────────────────────────────────────
 
@@ -136,6 +178,30 @@ class TestSkill07:
         out = svc.execute(inp, ctx)
         assert out.canonical_entities[0].canonical_entity_specific.startswith("prop.")
 
+    def test_consumes_skill21_resolved_entity_id_mapping(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_07 import Skill07Input
+        svc = self._make_service(mock_db)
+        inp = Skill07Input(
+            entities=self._entities(),
+            scenes=[{"scene_id": "sc_001"}],
+            target_language="zh-CN",
+            culture_candidates=[{"culture_pack_id": "cn_wuxia", "confidence": 0.9}],
+            entity_registry_continuity_result={
+                "resolved_entities": [
+                    {
+                        "source_entity_uid": "ent_001",
+                        "matched_entity_id": "CHAR_0001_FIXED",
+                    }
+                ]
+            },
+        )
+        out = svc.execute(inp, ctx)
+        mapped = next(e for e in out.canonical_entities if e.entity_uid == "ent_001")
+        assert mapped.entity_id == "CHAR_0001_FIXED"
+        vm = next(v for v in out.entity_variant_mapping if v.entity_uid == "ent_001")
+        assert vm.entity_id == "CHAR_0001_FIXED"
+        assert vm.matched_entity_id == "CHAR_0001_FIXED"
+
 
 # ── SKILL 08: AssetMatcherService ────────────────────────────────────────────
 
@@ -184,6 +250,108 @@ class TestSkill08:
                  len(out.asset_manifest.for_visual_render_planner) +
                  len(out.asset_manifest.for_audio_planner))
         assert total >= 1
+
+    def test_asset_library_index_variant_exact_is_preferred(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_08 import Skill08Input
+        svc = self._make_service(mock_db)
+        inp = Skill08Input(
+            canonical_entities=[
+                {
+                    "entity_uid": "ent_idx_1",
+                    "entity_type": "character",
+                    "criticality": "critical",
+                    "canonical_entity_specific": "character.human",
+                    "visual_tags": ["hero_face", "black_robe"],
+                }
+            ],
+            entity_variant_mapping=[
+                {
+                    "entity_uid": "ent_idx_1",
+                    "selected_variant_id": "character.human.cn_wuxia",
+                }
+            ],
+            selected_culture_pack={"id": "cn_wuxia"},
+            style_mode="realistic",
+            backend_capability=["comfyui"],
+            asset_library_index={
+                "assets": [
+                    {
+                        "asset_id": "idx_exact_001",
+                        "entity_uid": "ent_idx_1",
+                        "entity_type": "character",
+                        "selected_variant_id": "character.human.cn_wuxia",
+                        "asset_type": "lora",
+                        "culture_pack": "cn_wuxia",
+                        "style_tags": ["realistic"],
+                        "visual_tags": ["hero_face", "black_robe"],
+                        "backend_compatibility": ["comfyui"],
+                        "quality_tier": "high",
+                        "path_or_ref": "asset://idx_exact_001",
+                    },
+                    {
+                        "asset_id": "idx_wrong_001",
+                        "entity_uid": "ent_idx_1",
+                        "entity_type": "character",
+                        "selected_variant_id": "character.human.cn_wuxia",
+                        "asset_type": "lora",
+                        "culture_pack": "en_western_fantasy",
+                        "style_tags": ["realistic"],
+                        "visual_tags": ["hero_face"],
+                        "backend_compatibility": ["comfyui"],
+                        "quality_tier": "high",
+                    },
+                ]
+            },
+        )
+        out = svc.execute(inp, ctx)
+        assert out.entity_asset_matches
+        selected = out.entity_asset_matches[0].selected_asset
+        assert selected is not None
+        assert selected.asset_id == "idx_exact_001"
+        assert selected.source == "asset_library_index"
+
+    def test_asset_library_index_canonical_specific_fallback(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_08 import Skill08Input
+        svc = self._make_service(mock_db)
+        inp = Skill08Input(
+            canonical_entities=[
+                {
+                    "entity_uid": "ent_idx_2",
+                    "entity_type": "scene_place",
+                    "criticality": "important",
+                    "canonical_entity_root": "place.social_lodging_venue",
+                    "canonical_entity_specific": "place.social_lodging_venue.inn",
+                    "visual_tags": ["wood_architecture", "lantern_lighting"],
+                }
+            ],
+            entity_variant_mapping=[{"entity_uid": "ent_idx_2"}],
+            selected_culture_pack={"id": "cn_wuxia"},
+            style_mode="realistic",
+            backend_capability=["comfyui"],
+            asset_library_index={
+                "assets": [
+                    {
+                        "asset_id": "idx_specific_001",
+                        "entity_uid": "ent_idx_2",
+                        "entity_type": "scene_place",
+                        "canonical_entity_specific": "place.social_lodging_venue.inn",
+                        "asset_type": "scene_pack",
+                        "culture_pack": "cn_wuxia",
+                        "style_tags": ["realistic"],
+                        "visual_tags": ["wood_architecture", "lantern_lighting"],
+                        "backend_compatibility": ["comfyui"],
+                        "quality_tier": "high",
+                    }
+                ]
+            },
+        )
+        out = svc.execute(inp, ctx)
+        assert out.entity_asset_matches
+        match = out.entity_asset_matches[0]
+        assert match.match_status == "matched_with_fallback"
+        assert match.selected_asset is not None
+        assert match.selected_asset.asset_id == "idx_specific_001"
+        assert match.fallback_level == "variant_same_pack_parent"
 
     def test_empty_entities_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_08 import Skill08Input

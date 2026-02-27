@@ -104,6 +104,8 @@ class CostEstimate(BaseSchema):
     duration_factor: float = 1.0
     backend_rate: float = 1.0
     quality_multiplier: float = 1.0
+    historical_factor: float = 1.0
+    history_confidence: float = 0.0
 
 
 class PriorityScore(BaseSchema):
@@ -222,6 +224,17 @@ class ShotInputDetail(BaseSchema):
     preferred_backend: str = ""
 
 
+class HistoricalRenderStat(BaseSchema):
+    """Historical render profile keyed by shot type/complexity."""
+
+    shot_type: str = ""
+    complexity: Complexity | None = None
+    sample_count: int = 0
+    avg_gpu_sec_per_second: float = 0.0
+    p95_gpu_sec_per_second: float | None = None
+    overrun_rate: float = 0.0
+
+
 # ── Resource State ───────────────────────────────────────────────────────────
 
 
@@ -246,6 +259,7 @@ class Skill19Input(BaseSchema):
     audio_manifest: dict[str, Any] = {}
     cluster_resources: ClusterResourceState = ClusterResourceState()
     creative_controls: dict[str, Any] = {}
+    historical_render_stats: list[HistoricalRenderStat] = []
     global_load_profile: str = "MEDIUM"
     user_mode: str = "standard"
     feature_flags: Skill19FeatureFlags = Skill19FeatureFlags()

@@ -1,45 +1,60 @@
 <template>
-  <section class="grid">
-    <article class="card">
-      <h2>Voice Binding</h2>
-      <p class="muted">Project: {{ projectId }} | Entity: {{ entityId }}</p>
-      <div class="grid cols-2">
-        <div>
-          <label>Language</label>
-          <input v-model="form.language_code" />
-        </div>
-        <div>
-          <label>Voice ID</label>
-          <input v-model="form.voice_id" placeholder="narrator / male_zh / custom_voice_id" />
-        </div>
-        <div>
-          <label>TTS Model</label>
-          <input v-model="form.tts_model" />
-        </div>
-        <div>
-          <label>Provider</label>
-          <input v-model="form.provider" />
-        </div>
-      </div>
-      <div>
-        <label>Notes</label>
-        <textarea rows="3" v-model="form.notes"></textarea>
-      </div>
-      <div class="button-row">
-        <label>
-          <input type="checkbox" v-model="form.locked" />
-          lock voice
-        </label>
-        <button @click="saveBinding">Save</button>
-      </div>
-      <p v-if="message" class="badge ok">{{ message }}</p>
-      <p v-if="errorMessage" class="badge bad">{{ errorMessage }}</p>
-    </article>
-  </section>
+  <div class="page-grid">
+    <NCard title="Voice Binding">
+      <NText depth="3">Project: {{ projectId }} | Entity: {{ entityId }}</NText>
+      <NGrid :cols="2" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Language">
+            <NInput v-model:value="form.language_code" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Voice ID">
+            <NInput v-model:value="form.voice_id" placeholder="narrator / male_zh / custom_voice_id" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="TTS Model">
+            <NInput v-model:value="form.tts_model" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Provider">
+            <NInput v-model:value="form.provider" />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NFormItem label="Notes">
+        <NInput v-model:value="form.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
+      </NFormItem>
+      <NSpace justify="space-between" align="center">
+        <NSwitch v-model:value="form.locked">
+          <template #checked>Locked</template>
+          <template #unchecked>Unlocked</template>
+        </NSwitch>
+        <NButton type="primary" @click="saveBinding">保存绑定</NButton>
+      </NSpace>
+    </NCard>
+
+    <NAlert v-if="message" type="success" :show-icon="true">{{ message }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NFormItem,
+  NGrid,
+  NGridItem,
+  NInput,
+  NSpace,
+  NSwitch,
+  NText,
+} from "naive-ui";
 
 import { getVoiceBinding, upsertVoiceBinding } from "@/api/preview";
 

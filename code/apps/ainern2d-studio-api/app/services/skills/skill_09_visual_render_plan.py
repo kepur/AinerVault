@@ -10,9 +10,10 @@ Per SKILL_09_VISUAL_RENDER_PLANNER.md spec with:
 - Feature flags & user overrides
 
 State machine:
-  INIT → PRECHECKING → PRECHECK_READY → AGGREGATING_AUDIO → AUDIO_FEATURES_READY
-       → SCORING_MOTION → MOTION_SCORED → ASSIGNING_RENDER → STRATEGY_READY
-       → SPLITTING_MICRO → PLANNING_CAMERA → PLANNING_TRANSITIONS
+  INIT → PRECHECKING → PRECHECK_READY → AUDIO_FEATURES_AGGREGATING
+       → AUDIO_FEATURES_READY → MOTION_SCORING → MOTION_SCORED
+       → STRATEGY_MAPPING → STRATEGY_READY → MICROSHOT_SPLITTING
+       → PLANNING_CAMERA → PLANNING_TRANSITIONS
        → COMPOSING_LAYERS → DEGRADE_PROCESSING → ASSEMBLING_RENDER_PLAN
        → READY_FOR_RENDER_EXECUTION | REVIEW_REQUIRED | FAILED
 """
@@ -122,7 +123,7 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
                 shot_events_map.setdefault(sid, []).append(ev)
 
         # ── V2: Audio Feature Aggregation ─────────────────────────────────────
-        self._record_state(ctx, RenderState.PRECHECK_READY, RenderState.AGGREGATING_AUDIO)
+        self._record_state(ctx, RenderState.PRECHECK_READY, RenderState.AUDIO_FEATURES_AGGREGATING)
         shot_audio: dict[str, AudioFeatures] = {}
         for shot in input_dto.shots:
             sid = shot.get("shot_id", "")
@@ -133,20 +134,20 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
                 end_ms = int(shot.get("end_ms", 0) or 0)
                 duration_s = max((end_ms - start_ms) / 1000.0, 1.0)
             shot_audio[sid] = self._aggregate_audio_features(evts, duration_s)
-        self._record_state(ctx, RenderState.AGGREGATING_AUDIO, RenderState.AUDIO_FEATURES_READY)
+        self._record_state(ctx, RenderState.AUDIO_FEATURES_AGGREGATING, RenderState.AUDIO_FEATURES_READY)
 
         # ── V3: Motion Scoring ────────────────────────────────────────────────
-        self._record_state(ctx, RenderState.AUDIO_FEATURES_READY, RenderState.SCORING_MOTION)
+        self._record_state(ctx, RenderState.AUDIO_FEATURES_READY, RenderState.MOTION_SCORING)
         shot_scores: dict[str, tuple[int, str, list[str]]] = {}
         for shot in input_dto.shots:
             sid = shot.get("shot_id", "")
             af = shot_audio.get(sid, AudioFeatures())
             score, level, tags = self._compute_motion_score(shot, af, ff)
             shot_scores[sid] = (score, level, tags)
-        self._record_state(ctx, RenderState.SCORING_MOTION, RenderState.MOTION_SCORED)
+        self._record_state(ctx, RenderState.MOTION_SCORING, RenderState.MOTION_SCORED)
 
         # ── V4: Render Strategy Mapping ───────────────────────────────────────
-        self._record_state(ctx, RenderState.MOTION_SCORED, RenderState.ASSIGNING_RENDER)
+        self._record_state(ctx, RenderState.MOTION_SCORED, RenderState.STRATEGY_MAPPING)
         shot_plans: list[ShotRenderPlan] = []
         for i, shot in enumerate(input_dto.shots):
             sid = shot.get("shot_id", f"shot_{i:03d}")
@@ -191,10 +192,10 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
                 },
             )
             shot_plans.append(plan)
-        self._record_state(ctx, RenderState.ASSIGNING_RENDER, RenderState.STRATEGY_READY)
+        self._record_state(ctx, RenderState.STRATEGY_MAPPING, RenderState.STRATEGY_READY)
 
         # ── V5: Micro-shot Splitting ──────────────────────────────────────────
-        self._record_state(ctx, RenderState.STRATEGY_READY, RenderState.SPLITTING_MICRO)
+        self._record_state(ctx, RenderState.STRATEGY_READY, RenderState.MICROSHOT_SPLITTING)
         microshots: list[MicroshotRenderPlan] = []
         if ff.micro_shot_enabled and not ff.static_fallback_only:
             for plan in shot_plans:
@@ -205,7 +206,7 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
                         microshots.extend(ms_list)
 
         # ── V6-extra: Camera Motion ───────────────────────────────────────────
-        self._record_state(ctx, RenderState.SPLITTING_MICRO, RenderState.PLANNING_CAMERA)
+        self._record_state(ctx, RenderState.MICROSHOT_SPLITTING, RenderState.PLANNING_CAMERA)
         for plan in shot_plans:
             cam = self._infer_camera_motion(plan)
             plan.camera_motion = cam
@@ -301,10 +302,10 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
     def _precheck(inp: Skill09Input) -> list[str]:
         issues: list[str] = []
         if not inp.shots:
-            issues.append("RENDER-PRECHECK-001: shot_plan is empty or missing")
+            issues.append("PLAN-VALIDATION-008: shot_plan is empty or missing")
         tl_status = (inp.audio_timeline or {}).get("status", "")
         if tl_status and "provisional" in str(tl_status).lower():
-            issues.append("RENDER-PRECHECK-002: timeline is provisional, not final")
+            issues.append("PLAN-VALIDATION-009: timeline is provisional, not final")
         return issues
 
     # ── V2: Audio Feature Aggregation ─────────────────────────────────────────
@@ -877,7 +878,7 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
             child_count = sum(1 for m in microshots if m.parent_shot_id == p.shot_id)
             if child_count > 6:
                 warnings.append(
-                    f"RENDER-WARN-001: shot {p.shot_id} split into {child_count} microshots (>6)"
+                    f"PLAN-WARN-001: shot {p.shot_id} split into {child_count} microshots (>6)"
                 )
                 review_items.append(ReviewRequiredItem(
                     item_type="shot",
@@ -890,7 +891,7 @@ class VisualRenderPlanService(BaseSkillService[Skill09Input, Skill09Output]):
         for da in degrade_actions:
             if da.degrade_level == DegradeLevel.STATIC_FALLBACK.value:
                 warnings.append(
-                    f"RENDER-WARN-002: {da.target_id} degraded to STATIC_FALLBACK"
+                    f"PLAN-WARN-002: {da.target_id} degraded to STATIC_FALLBACK"
                 )
 
     @staticmethod

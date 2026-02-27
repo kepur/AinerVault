@@ -49,45 +49,57 @@ _DEGRADATION_LADDER: list[DegradationStep] = [
         description="Full quality — no degradation",
     ),
     DegradationStep(
-        level=DegradationLevel.L1_REDUCED_FX,
-        param_adjustments={"disable_effects": True, "simplify_transitions": True},
-        description="Disable non-essential visual effects and transitions",
+        level=DegradationLevel.L1_SHORTEN_DURATION,
+        param_adjustments={"duration_scale": 0.75},
+        description="Shorten shot duration",
     ),
     DegradationStep(
-        level=DegradationLevel.L2_SIMPLIFIED_COMP,
-        param_adjustments={"composition_mode": "simple", "max_layers": 2},
-        description="Simplified composition — fewer layers, basic blending",
+        level=DegradationLevel.L2_LOWER_FPS,
+        param_adjustments={"fps_scale": 0.5, "target_fps": 12},
+        description="Lower frame rate",
     ),
     DegradationStep(
-        level=DegradationLevel.L3_STATIC_KEYFRAME,
-        param_adjustments={"motion_mode": "static_keyframe", "fps": 1},
-        description="Static keyframe with Ken Burns / slight pan effect",
-    ),
-    DegradationStep(
-        level=DegradationLevel.L4_LOWER_RES,
+        level=DegradationLevel.L3_LOWER_RESOLUTION,
         param_adjustments={"resolution_scale": 0.5, "max_resolution": "720p"},
-        description="Lower resolution output (half resolution)",
+        description="Lower output resolution",
     ),
     DegradationStep(
-        level=DegradationLevel.L5_PLACEHOLDER_ASSET,
+        level=DegradationLevel.L4_SPLIT_MICROSHOTS,
+        param_adjustments={"split_mode": "microshots", "max_microshot_ms": 800},
+        description="Split into shorter micro-shots and retry",
+    ),
+    DegradationStep(
+        level=DegradationLevel.L5_STATIC_IMAGE_MOTION,
+        param_adjustments={"motion_mode": "static_keyframe", "effect": "ken_burns"},
+        description="Static image plus lightweight motion effect",
+    ),
+    DegradationStep(
+        level=DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW,
         param_adjustments={"use_placeholder": True, "asset_type": "placeholder"},
-        description="Use placeholder asset — requires manual review",
+        description="Placeholder output and queue manual review",
     ),
     DegradationStep(
-        level=DegradationLevel.L6_TEXT_ONLY,
-        param_adjustments={"render_mode": "text_only", "skip_visual": True},
-        description="Text-only fallback — no visual render",
-    ),
-    DegradationStep(
-        level=DegradationLevel.L7_SKIP,
+        level=DegradationLevel.L7_SKIP_NON_CRITICAL,
         param_adjustments={"skip": True},
-        description="Skip this shot/entity entirely",
+        description="Skip non-critical shot/entity",
     ),
 ]
 
 # Map level enum to ladder index for ordering
 _LEVEL_ORDER: dict[DegradationLevel, int] = {
     step.level: i for i, step in enumerate(_DEGRADATION_LADDER)
+}
+
+# Backward compatibility for old degradation enum strings.
+_LEGACY_DEGRADATION_LEVEL_MAP: dict[str, DegradationLevel] = {
+    "L0_FULL_QUALITY": DegradationLevel.L0_FULL_QUALITY,
+    "L1_REDUCED_FX": DegradationLevel.L1_SHORTEN_DURATION,
+    "L2_SIMPLIFIED_COMP": DegradationLevel.L2_LOWER_FPS,
+    "L3_STATIC_KEYFRAME": DegradationLevel.L5_STATIC_IMAGE_MOTION,
+    "L4_LOWER_RES": DegradationLevel.L3_LOWER_RESOLUTION,
+    "L5_PLACEHOLDER_ASSET": DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW,
+    "L6_TEXT_ONLY": DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW,
+    "L7_SKIP": DegradationLevel.L7_SKIP_NON_CRITICAL,
 }
 
 # ── Failure classification rules ──────────────────────────────────────────────
@@ -120,6 +132,7 @@ _STRATEGY_MATRIX: dict[FailureType, list[RecoveryStrategyType]] = {
     ],
     FailureType.RESOURCE_EXHAUSTION: [
         RecoveryStrategyType.RETRY_BACKOFF,
+        RecoveryStrategyType.FALLBACK_BACKEND,
         RecoveryStrategyType.DEGRADE_ONE_LEVEL,
         RecoveryStrategyType.SKIP_NON_CRITICAL,
     ],
@@ -146,6 +159,7 @@ _STRATEGY_MATRIX: dict[FailureType, list[RecoveryStrategyType]] = {
     ],
     FailureType.UNKNOWN: [
         RecoveryStrategyType.RETRY_BACKOFF,
+        RecoveryStrategyType.FALLBACK_BACKEND,
         RecoveryStrategyType.DEGRADE_ONE_LEVEL,
         RecoveryStrategyType.MANUAL_REVIEW,
     ],
@@ -256,7 +270,10 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
         # ── Determine manual review ───────────────────────────────────────
         review_items: list[ManualReviewItem] = []
         manual_needed = False
-        review_threshold = DegradationLevel(flags.manual_review_threshold)
+        review_threshold = self._resolve_degradation_level(
+            flags.manual_review_threshold,
+            default=DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW,
+        )
 
         if _LEVEL_ORDER[current_deg_level] >= _LEVEL_ORDER[review_threshold]:
             manual_needed = True
@@ -327,8 +344,8 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
             degradation_trace=deg_trace,
             hard_constraints_preserved=current_deg_level in (
                 DegradationLevel.L0_FULL_QUALITY,
-                DegradationLevel.L1_REDUCED_FX,
-                DegradationLevel.L2_SIMPLIFIED_COMP,
+                DegradationLevel.L1_SHORTEN_DURATION,
+                DegradationLevel.L2_LOWER_FPS,
             ),
             circuit_breaker_states=cb_states,
             circuit_breaker_triggered=cb_triggered,
@@ -515,8 +532,13 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
             if cb_triggered and strat == RecoveryStrategyType.FALLBACK_BACKEND:
                 if not inp.backend_capabilities:
                     continue
+            if not flags.enable_backend_fallback and strat == RecoveryStrategyType.FALLBACK_BACKEND:
+                continue
             # Skip degradation if disabled
-            if not flags.auto_degrade_enabled and strat == RecoveryStrategyType.DEGRADE_ONE_LEVEL:
+            if (
+                (not flags.auto_degrade_enabled or not flags.enable_degradation_ladder)
+                and strat == RecoveryStrategyType.DEGRADE_ONE_LEVEL
+            ):
                 continue
 
             order += 1
@@ -552,7 +574,7 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
                     target_skill=inp.failed_skill,
                     reason="Last resort — all automated strategies exhausted",
                 ),
-                expected_degradation=DegradationLevel.L5_PLACEHOLDER_ASSET,
+                expected_degradation=DegradationLevel.L6_PLACEHOLDER_MANUAL_REVIEW,
                 result="pending",
             ))
 
@@ -577,11 +599,20 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
         If retries are exhausted and degradation is the recommended path,
         we walk the degradation ladder to find the target level.
         """
+        _ = (classification, flags)
         current_level = DegradationLevel.L0_FULL_QUALITY
         executed: list[RecoveryPlanStep] = []
+        primary_selected = False
 
         for step in plan:
             strat = step.action.strategy
+            if primary_selected:
+                executed.append(step.model_copy(update={"result": "skipped"}))
+                self._log_audit(ts, "recovery_step_skipped", "", "", {
+                    "order": step.order,
+                    "strategy": strat.value,
+                })
+                continue
 
             if strat in (
                 RecoveryStrategyType.RETRY_IMMEDIATE,
@@ -595,6 +626,7 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
                     "strategy": strat.value,
                     "result": "pending",
                 })
+                primary_selected = True
 
             elif strat == RecoveryStrategyType.DEGRADE_ONE_LEVEL:
                 # Walk degradation ladder one step
@@ -609,9 +641,10 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
                     "from": _DEGRADATION_LADDER[cur_idx].level.value,
                     "to": current_level.value,
                 })
+                primary_selected = True
 
             elif strat == RecoveryStrategyType.SKIP_NON_CRITICAL:
-                current_level = DegradationLevel.L7_SKIP
+                current_level = DegradationLevel.L7_SKIP_NON_CRITICAL
                 executed.append(step.model_copy(update={
                     "result": "pending",
                     "expected_degradation": current_level,
@@ -619,12 +652,14 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
                 self._log_audit(ts, "skip_non_critical", "", "", {
                     "strategy": strat.value,
                 })
+                primary_selected = True
 
             elif strat == RecoveryStrategyType.MANUAL_REVIEW:
                 executed.append(step.model_copy(update={"result": "pending"}))
                 self._log_audit(ts, "manual_review_queued", "", "", {
                     "strategy": strat.value,
                 })
+                primary_selected = True
 
         return executed, current_level
 
@@ -719,6 +754,21 @@ class FailureRecoveryService(BaseSkillService[Skill18Input, Skill18Output]):
             parts.append("retry_budget_exhausted")
         parts.append(f"strategy={strat.value}")
         return "; ".join(parts)
+
+    @staticmethod
+    def _resolve_degradation_level(
+        level_raw: str | DegradationLevel,
+        *,
+        default: DegradationLevel,
+    ) -> DegradationLevel:
+        if isinstance(level_raw, DegradationLevel):
+            return level_raw
+        if level_raw in _LEGACY_DEGRADATION_LEVEL_MAP:
+            return _LEGACY_DEGRADATION_LEVEL_MAP[level_raw]
+        try:
+            return DegradationLevel(str(level_raw))
+        except ValueError:
+            return default
 
     def _log_audit(
         self,

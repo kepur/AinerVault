@@ -217,6 +217,8 @@ class Skill08Input(BaseSchema):
     culture_constraints: dict[str, Any] = {}
     conflicts: list[dict[str, Any]] = []
     unresolved_entities: list[dict[str, Any]] = []
+    # Asset index source (spec §3.1)
+    asset_library_index: dict[str, Any] = {}
     # From SKILL 21 (optional continuity enrichment)
     entity_registry_continuity_result: dict[str, Any] = {}
     continuity_exports: dict[str, Any] = {}

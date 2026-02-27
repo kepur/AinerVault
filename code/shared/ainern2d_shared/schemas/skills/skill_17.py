@@ -15,13 +15,13 @@ from ainern2d_shared.schemas.base import BaseSchema
 
 # ── Standard critic dimensions (sourced from SKILL 16) ────────────────────────
 CRITIC_DIMENSIONS: list[str] = [
-    "visual_consistency",
+    "visual_quality",
     "audio_sync",
     "narrative_coherence",
-    "style_match",
-    "composition_quality",
-    "motion_fluidity",
-    "emotional_impact",
+    "character_consistency",
+    "cultural_accuracy",
+    "style_adherence",
+    "pacing_timing",
     "technical_quality",
 ]
 
@@ -35,7 +35,8 @@ class BenchmarkCase(BaseSchema):
     shot_id: str = ""
     description: str = ""
     reference_artifact_uri: str = ""
-    expected_quality_floor: float = 5.0
+    # Normalized quality floor in [0, 1].
+    expected_quality_floor: float = 0.5
 
 
 # ── Variant configuration ─────────────────────────────────────────────────────
@@ -64,7 +65,8 @@ class EvaluationCriteria(BaseSchema):
     """Defines how variants are evaluated and compared."""
     dimensions: list[str] = CRITIC_DIMENSIONS.copy()
     dimension_weights: dict[str, float] = {}
-    pass_threshold: float = 6.0
+    # Normalized quality threshold in [0, 1].
+    pass_threshold: float = 0.6
     confidence_level: float = 0.95
     primary_metric: str = "quality_score"
     enable_cost_weighted_ranking: bool = False
@@ -113,6 +115,7 @@ class VariantMetrics(BaseSchema):
     sample_count: int = 0
     # Quality (from SKILL 16 critic scores)
     dimension_scores: list[DimensionScore] = []
+    # Normalized quality in [0, 1].
     quality_score: float = 0.0
     # Efficiency
     avg_latency_ms: float = 0.0
@@ -227,6 +230,9 @@ class Skill17Output(BaseSchema):
     # Recommendations (§3 promotion_recommendation)
     recommendations: list[PromotionRecommendation] = []
     winner_variant_id: str = ""
+    promotion_gate_passed: bool = False
+    promotion_candidate_id: str = ""
+    promotion_block_reason: str = ""
     # Manifest (§3 experiment_run_manifest)
     traffic_allocation: Optional[TrafficAllocation] = None
     # Audit trail (§8)

@@ -1,0 +1,9 @@
+**/.DS_Store
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+apps/ainern2d-studio-web/node_modules/
+apps/ainern2d-studio-web/dist/
+apps/logs/

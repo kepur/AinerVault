@@ -119,7 +119,7 @@ class ContinuityProfileResponse(BaseModel):
 
 def _build_event(run: RenderRun, job: Job, payload: dict, now: datetime) -> EventEnvelope:
 	return EventEnvelope(
-		event_type="job.dispatch",
+		event_type="job.created",
 		producer="studio-api",
 		occurred_at=now,
 		tenant_id=run.tenant_id,

@@ -66,7 +66,7 @@ def regenerate_run(
         jobs_created += 1
 
         envelope = EventEnvelope(
-            event_type="job.dispatch",
+            event_type="job.created",
             producer="studio-api",
             occurred_at=now,
             tenant_id=run.tenant_id,
@@ -125,7 +125,7 @@ def regenerate_shot(
     db.add(job)
 
     envelope = EventEnvelope(
-        event_type="job.dispatch",
+        event_type="job.created",
         producer="studio-api",
         occurred_at=now,
         tenant_id=run.tenant_id,

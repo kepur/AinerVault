@@ -48,6 +48,28 @@ class AudioEventCandidate(BaseSchema):
     confidence: float = 0.5
 
 
+class ContinuityExtractedEntity(BaseSchema):
+    source_entity_uid: str
+    entity_type: str = "character"
+    label: str = ""
+    aliases: list[str] = []
+    world_model_id: str = ""
+    traits: dict = {}
+    shot_ids: list[str] = []
+    scene_ids: list[str] = []
+
+
+class ContinuityShotPlanRef(BaseSchema):
+    shot_id: str
+    scene_id: str = ""
+    entity_refs: list[str] = []
+
+
+class ContinuityHandoff(BaseSchema):
+    extracted_entities: list[ContinuityExtractedEntity] = []
+    shot_plan_refs: list[ContinuityShotPlanRef] = []
+
+
 # ── Input / Output ────────────────────────────────────────────────────────────
 
 class Skill04Input(BaseSchema):
@@ -71,6 +93,7 @@ class Skill04Output(BaseSchema):
     entity_aliases: list[AliasGroup] = []
     entity_scene_shot_links: list[EntitySceneShotLink] = []
     audio_event_candidates: list[AudioEventCandidate] = []
+    continuity_handoff: ContinuityHandoff = ContinuityHandoff()
     warnings: list[str] = []
     review_required_items: list[str] = []
     status: str = "ready_for_canonicalization"

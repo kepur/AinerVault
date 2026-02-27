@@ -33,6 +33,8 @@ from ainern2d_shared.schemas.skills.skill_16 import (
     DECISION_MANUAL_REVIEW,
     DECISION_PASS,
     DECISION_RETRY,
+    SCORE_SCALE_0_1,
+    SCORE_SCALE_0_100,
     SEVERITY_BLOCKER,
     SEVERITY_CRITICAL,
     SEVERITY_INFO,
@@ -126,7 +128,7 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
 
         if not input_dto.run_id:
             self._record_state(ctx, SM_LOADING_ARTIFACTS, SM_FAILED)
-            raise ValueError("CRITIC-VALIDATION-001: run_id is required")
+            raise ValueError("REQ-VALIDATION-001: run_id is required")
 
         if not input_dto.composed_artifact_uri and not input_dto.artifact_refs:
             warnings.append("No artifact references provided; scoring will be heuristic-only")
@@ -134,10 +136,11 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
         shot_plan = input_dto.shot_plan or []
         weights = self._resolve_weights(ff)
         depth = ff.evaluation_depth if ff.evaluation_depth in _DEPTH_CHECK_COUNT else "standard"
+        threshold = self._resolve_threshold_100(ff, warnings)
 
         # ── EVALUATING_SHOTS ───────────────────────────────────
         self._record_state(ctx, SM_LOADING_ARTIFACTS, SM_EVALUATING_SHOTS)
-        shot_evals = self._evaluate_shots(shot_plan, input_dto, depth, weights)
+        shot_evals = self._evaluate_shots(shot_plan, input_dto, depth, weights, threshold)
 
         # ── EVALUATING_SCENES ──────────────────────────────────
         self._record_state(ctx, SM_EVALUATING_SHOTS, SM_EVALUATING_SCENES)
@@ -171,7 +174,6 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
 
         # ── GATING ─────────────────────────────────────────────
         self._record_state(ctx, SM_GENERATING_FIXES, SM_GATING)
-        threshold = ff.auto_fail_threshold
         passed = composite >= threshold
         has_blockers = any(i.severity == SEVERITY_BLOCKER for i in all_issues)
         human_review = has_blockers or any(i.severity == SEVERITY_CRITICAL for i in all_issues)
@@ -198,15 +200,20 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
         logger.info(
             f"[{self.skill_id}] {final_state} | run={ctx.run_id} "
             f"composite={composite:.1f} passed={passed} issues={len(all_issues)} "
-            f"decision={decision}"
+            f"threshold={threshold:.1f} decision={decision}"
         )
+
+        summary_scores = self._build_normalized_summary_scores(agg_dim_scores)
 
         return Skill16Output(
             version="1.0",
             status=status,
+            score_scale=SCORE_SCALE_0_100,
             overall_decision=decision,
             composite_score=composite,
+            normalized_composite_score=self._to_normalized_score(composite),
             dimension_scores=agg_dim_scores,
+            summary_scores=summary_scores,
             issues=all_issues,
             fix_queue=fix_queue,
             shot_evaluations=shot_evals,
@@ -214,6 +221,7 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
             cross_shot_results=cross_shot_results,
             benchmark_comparisons=benchmarks,
             auto_fail_threshold=threshold,
+            normalized_auto_fail_threshold=self._to_normalized_score(threshold),
             passed=passed,
             human_review_required=human_review,
             auto_fix_recommendations=auto_fix_recs,
@@ -231,6 +239,7 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
         input_dto: Skill16Input,
         depth: str,
         weights: dict[str, float],
+        threshold_100: float,
     ) -> list[ShotEvaluation]:
         if not shot_plan:
             # Synthesize a single virtual shot from composed artifact
@@ -245,7 +254,7 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
             dim_scores = self._evaluate_shot_dimensions(shot, input_dto, depth)
             composite = self._weighted_composite(dim_scores, weights)
             issues = self._issues_from_dim_scores(dim_scores, shot.shot_id, shot.scene_id)
-            passed = composite >= input_dto.feature_flags.auto_fail_threshold and not any(
+            passed = composite >= threshold_100 and not any(
                 i.severity == SEVERITY_BLOCKER for i in issues
             )
             shot_evals.append(ShotEvaluation(
@@ -615,6 +624,49 @@ class CriticEvaluationService(BaseSkillService[Skill16Input, Skill16Output]):
         if decision == DECISION_MANUAL_REVIEW:
             return "review_required", SM_REVIEW_REQUIRED
         return "evaluation_complete", SM_READY
+
+    @staticmethod
+    def _to_normalized_score(value_100: float) -> float:
+        clamped = min(max(value_100, 0.0), 100.0)
+        return round(clamped / 100.0, 4)
+
+    @staticmethod
+    def _build_normalized_summary_scores(
+        dim_scores: list[DimensionScore],
+    ) -> dict[str, float]:
+        return {
+            ds.dimension: CriticEvaluationService._to_normalized_score(ds.score)
+            for ds in dim_scores
+        }
+
+    @staticmethod
+    def _resolve_threshold_100(
+        ff: Skill16FeatureFlags,
+        warnings: list[str],
+    ) -> float:
+        raw = ff.auto_fail_threshold
+        scale = ff.score_scale
+
+        if scale == SCORE_SCALE_0_1:
+            if raw > 1.0:
+                warnings.append(
+                    "score_scale is 0-1 but auto_fail_threshold > 1; interpreting threshold as 0-100"
+                )
+                return round(min(max(raw, 0.0), 100.0), 2)
+            return round(min(max(raw * 100.0, 0.0), 100.0), 2)
+
+        if scale != SCORE_SCALE_0_100:
+            warnings.append(
+                f"Unknown score_scale '{scale}', fallback to 0-100 threshold interpretation"
+            )
+
+        if 0.0 <= raw <= 1.0:
+            warnings.append(
+                "auto_fail_threshold appears normalized (0-1); converted to 0-100 for gating"
+            )
+            return round(raw * 100.0, 2)
+
+        return round(min(max(raw, 0.0), 100.0), 2)
 
     # ── Weight resolution ──────────────────────────────────────
 

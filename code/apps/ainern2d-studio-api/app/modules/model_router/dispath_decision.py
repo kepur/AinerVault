@@ -91,7 +91,7 @@ class DispatchDecisionAuditor:
         event = WorkflowEvent(
             id=f"we_{uuid4().hex[:12]}",
             run_id=run_id,
-            event_type="dispatch.decision",
+            event_type="route.decision.made",
             event_version="1",
             producer="model_router",
             occurred_at=datetime.now(timezone.utc),

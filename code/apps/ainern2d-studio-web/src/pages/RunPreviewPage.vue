@@ -1,88 +1,49 @@
 <template>
-  <section class="grid">
-    <article class="card">
-      <h2>Run Preview</h2>
-      <p class="muted">Project: {{ props.projectId }} | Run: {{ props.runId }}</p>
-      <div class="grid cols-2">
-        <div>
-          <label>Prompt (optional)</label>
-          <textarea v-model="promptText" rows="2" />
-        </div>
-        <div>
-          <label>Negative Prompt (optional)</label>
-          <textarea v-model="negativePromptText" rows="2" />
-        </div>
-      </div>
-      <div class="button-row">
-        <button @click="reloadAll">Reload</button>
-      </div>
-      <p v-if="errorMessage" class="badge bad">{{ errorMessage }}</p>
-    </article>
+  <div class="page-grid">
+    <NCard title="Run Preview">
+      <NText depth="3">Project: {{ props.projectId }} | Run: {{ props.runId }}</NText>
+      <NGrid :cols="2" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Prompt (optional)">
+            <NInput v-model:value="promptText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Negative Prompt (optional)">
+            <NInput v-model:value="negativePromptText" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NButton type="primary" @click="reloadAll">Reload</NButton>
+      <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+    </NCard>
 
-    <article class="card">
-      <h3>Entities</h3>
-      <p class="muted">Continuity candidates from SKILL 21 + preview variants.</p>
-      <div class="list">
-        <div class="card" v-for="entity in entities" :key="entity.entity_id">
-          <div class="grid cols-2">
-            <div>
-              <strong>{{ entity.label }}</strong>
-              <p class="muted">ID: {{ entity.entity_id }} | Type: {{ entity.entity_type }}</p>
-              <p class="muted">
-                Continuity: <span :class="statusClass(entity.continuity_status)" class="badge">{{ entity.continuity_status }}</span>
-                <span v-if="entity.voice_id" class="badge ok">voice: {{ entity.voice_id }}</span>
-              </p>
-            </div>
-            <div class="button-row">
-              <button @click="loadEntityVariants(entity.entity_id)">Load Variants</button>
-              <button @click="generateForEntity(entity.entity_id)">Generate 4-Angle</button>
-              <RouterLink
-                v-if="entity.entity_type === 'person'"
-                :to="{
-                  name: 'voice-binding',
-                  params: { projectId: props.projectId, entityId: entity.entity_id }
-                }"
-              >
-                Voice Binding
-              </RouterLink>
-            </div>
-          </div>
-        </div>
-      </div>
-      <p v-if="!entities.length" class="muted">No entities found for this run.</p>
-    </article>
+    <NCard title="Entities">
+      <NDataTable :columns="entityColumns" :data="entities" :pagination="{ pageSize: 8 }" />
+    </NCard>
 
-    <article class="card">
-      <h3>Variants {{ selectedEntityId ? `(entity: ${selectedEntityId})` : "" }}</h3>
-      <div class="list">
-        <div class="card" v-for="variant in variants" :key="variant.variant_id">
-          <div class="grid cols-2">
-            <div>
-              <strong>{{ variant.entity_label }}</strong>
-              <p class="muted">
-                Variant: {{ variant.variant_id }} | Angle: {{ variant.view_angle }} | Backend: {{ variant.generation_backend }}
-              </p>
-              <p class="muted">
-                Status:
-                <span class="badge" :class="statusClass(variant.status)">{{ variant.status }}</span>
-                <span v-if="variant.artifact_uri" class="badge ok">artifact ready</span>
-              </p>
-            </div>
-            <div class="button-row">
-              <button @click="reviewVariant(variant.variant_id, 'approve')">Approve</button>
-              <button @click="reviewVariant(variant.variant_id, 'reject')">Reject</button>
-              <button @click="reviewVariant(variant.variant_id, 'regenerate')">Regenerate</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <p v-if="!variants.length" class="muted">No variants loaded.</p>
-    </article>
-  </section>
+    <NCard :title="`Variants ${selectedEntityId ? `(entity: ${selectedEntityId})` : ''}`">
+      <NDataTable :columns="variantColumns" :data="variants" :pagination="{ pageSize: 8 }" />
+    </NCard>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { h, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NDataTable,
+  NFormItem,
+  NGrid,
+  NGridItem,
+  NInput,
+  NTag,
+  NText,
+  type DataTableColumns,
+} from "naive-ui";
 
 import {
   type PreviewEntity,
@@ -98,6 +59,8 @@ const props = defineProps<{
   runId: string;
 }>();
 
+const router = useRouter();
+
 const entities = ref<PreviewEntity[]>([]);
 const variants = ref<PreviewVariant[]>([]);
 const selectedEntityId = ref<string>("");
@@ -105,14 +68,97 @@ const promptText = ref<string>("");
 const negativePromptText = ref<string>("");
 const errorMessage = ref<string>("");
 
-function statusClass(status: string): string {
+const entityColumns: DataTableColumns<PreviewEntity> = [
+  { title: "Entity", key: "label" },
+  { title: "ID", key: "entity_id" },
+  { title: "Type", key: "entity_type" },
+  {
+    title: "Continuity",
+    key: "continuity_status",
+    render: (row) => h(NTag, { type: statusTagType(row.continuity_status), bordered: false }, { default: () => row.continuity_status }),
+  },
+  {
+    title: "Voice",
+    key: "voice_id",
+    render: (row) => row.voice_id || "-",
+  },
+  {
+    title: "Actions",
+    key: "actions",
+    render: (row) =>
+      h("div", { style: "display:flex;gap:6px;flex-wrap:wrap;" }, [
+        h(
+          NButton,
+          { size: "tiny", onClick: () => void loadEntityVariants(row.entity_id) },
+          { default: () => "Load Variants" }
+        ),
+        h(
+          NButton,
+          { size: "tiny", type: "info", onClick: () => void generateForEntity(row.entity_id) },
+          { default: () => "Generate 4-Angle" }
+        ),
+        row.entity_type === "person"
+          ? h(
+              NButton,
+              {
+                size: "tiny",
+                type: "warning",
+                onClick: () => {
+                  void router.push({
+                    name: "voice-binding",
+                    params: { projectId: props.projectId, entityId: row.entity_id },
+                  });
+                },
+              },
+              { default: () => "Voice Binding" }
+            )
+          : null,
+      ]),
+  },
+];
+
+const variantColumns: DataTableColumns<PreviewVariant> = [
+  { title: "Variant", key: "variant_id" },
+  { title: "Entity", key: "entity_label" },
+  { title: "Angle", key: "view_angle" },
+  { title: "Backend", key: "generation_backend" },
+  {
+    title: "Status",
+    key: "status",
+    render: (row) => h(NTag, { type: statusTagType(row.status), bordered: false }, { default: () => row.status }),
+  },
+  {
+    title: "Actions",
+    key: "actions",
+    render: (row) =>
+      h("div", { style: "display:flex;gap:6px;flex-wrap:wrap;" }, [
+        h(
+          NButton,
+          { size: "tiny", type: "success", onClick: () => void reviewVariant(row.variant_id, "approve") },
+          { default: () => "Approve" }
+        ),
+        h(
+          NButton,
+          { size: "tiny", type: "error", onClick: () => void reviewVariant(row.variant_id, "reject") },
+          { default: () => "Reject" }
+        ),
+        h(
+          NButton,
+          { size: "tiny", type: "warning", onClick: () => void reviewVariant(row.variant_id, "regenerate") },
+          { default: () => "Regenerate" }
+        ),
+      ]),
+  },
+];
+
+function statusTagType(status: string): "success" | "warning" | "error" | "default" {
   if (status.includes("approve") || status === "locked" || status === "ready") {
-    return "ok";
+    return "success";
   }
   if (status.includes("reject") || status.includes("fail")) {
-    return "bad";
+    return "error";
   }
-  return "warn";
+  return "warning";
 }
 
 async function reloadEntities(): Promise<void> {

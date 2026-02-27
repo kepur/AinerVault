@@ -87,6 +87,7 @@ class Skill01Input(BaseSchema):
 
 class Skill01Output(BaseSchema):
     version: str = "1.0"
+    schema_version: str = "1.0"
     status: str = "ready_for_routing"
     document_meta: DocumentMeta = DocumentMeta()
     language_detection: LanguageDetection = LanguageDetection()
@@ -96,5 +97,8 @@ class Skill01Output(BaseSchema):
     quality_report: QualityReport = QualityReport()
     warnings: list[str] = []
     ingestion_log: list[IngestionLogEntry] = []
+    tenant_id: str = ""
+    project_id: str = ""
     trace_id: str = ""
+    correlation_id: str = ""
     idempotency_key: str = ""

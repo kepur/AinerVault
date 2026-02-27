@@ -73,7 +73,7 @@ class ComposerSkillDispatcher:
         except Exception as exc:
             job.status = JobStatus.failed
             job.attempts = (job.attempts or 0) + 1
-            job.result_json = {"error_code": "COMPOSER-SKILL-001", "error_message": str(exc)}
+            job.result_json = {"error_code": "COMPOSE-SKILL-001", "error_message": str(exc)}
             self.db.flush()
             logger.error(f"[ComposerDispatcher] job={job.id} jt={jt} FAILED: {exc}")
             return None

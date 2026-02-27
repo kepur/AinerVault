@@ -297,6 +297,7 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 cc=cc,
                 ff=ff,
                 project_asset_pack=input_dto.project_asset_pack,
+                asset_library_index=input_dto.asset_library_index,
             )
             entity_candidates.append((ent, candidates))
 
@@ -628,18 +629,29 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
         cc: CultureConstraints,
         ff: FeatureFlags,
         project_asset_pack: dict[str, Any],
+        asset_library_index: dict[str, Any],
     ) -> list[CandidateAsset]:
         """Generate candidates through the 6-level fallback cascade with hard filters."""
-        uid = entity.get("entity_uid", "")
-        etype = entity.get("entity_type", "character")
-        specific = entity.get("canonical_entity_specific", "")
-        crit = entity.get("criticality", "normal")
-        variant_id = variant_info.get("selected_variant_id", "")
+        uid = str(entity.get("entity_uid", ""))
+        etype = str(entity.get("entity_type", "character"))
+        specific = str(entity.get("canonical_entity_specific", ""))
+        root = str(entity.get("canonical_entity_root", ""))
+        crit = str(entity.get("criticality", "normal"))
+        variant_id = str(variant_info.get("selected_variant_id", ""))
         entity_tags = entity.get("visual_tags", []) or entity.get("tags", []) or []
         asset_types = _ENTITY_TO_ASSET_TYPES.get(etype, ["ref_image"])
         primary_type = asset_types[0]
+        index_assets = self._extract_index_assets(asset_library_index)
 
         all_cands: list[CandidateAsset] = []
+        seen_asset_ids: set[str] = set()
+
+        def _append_if_valid(candidate: CandidateAsset, target_culture: str) -> None:
+            if not candidate.asset_id or candidate.asset_id in seen_asset_ids:
+                return
+            if self._passes_hard_filters(candidate, target_culture, cc, backend_capability):
+                all_cands.append(candidate)
+                seen_asset_ids.add(candidate.asset_id)
 
         # Level 0: Project asset pack (highest priority)
         if project_asset_pack:
@@ -648,10 +660,30 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                     continue
                 if pa.get("entity_type", "") == etype or pa.get("entity_uid") == uid:
                     cand = self._asset_dict_to_candidate(
-                        pa, FallbackLevel.VARIANT_EXACT.value, primary_type,
+                        pa,
+                        FallbackLevel.VARIANT_EXACT.value,
+                        primary_type,
+                        source="project_pack",
                     )
-                    if self._passes_hard_filters(cand, pack_id, cc, backend_capability):
-                        all_cands.append(cand)
+                    _append_if_valid(cand, pack_id)
+
+        # Level 1: asset_library_index variant_exact
+        if variant_id and index_assets:
+            for asset in index_assets:
+                if not self._index_asset_matches_entity(asset, uid, etype, variant_info):
+                    continue
+                asset_variant = str(
+                    asset.get("selected_variant_id") or asset.get("variant_id") or ""
+                ).strip()
+                if asset_variant != variant_id:
+                    continue
+                cand = self._asset_dict_to_candidate(
+                    asset,
+                    FallbackLevel.VARIANT_EXACT.value,
+                    primary_type,
+                    source="asset_library_index",
+                )
+                _append_if_valid(cand, pack_id)
 
         # Level 1: variant_exact — exact variant from culture pack
         if variant_id:
@@ -660,10 +692,31 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 target_era, target_genre, style_mode, quality_profile,
                 FallbackLevel.VARIANT_EXACT.value, count=3,
             ):
-                if self._passes_hard_filters(c, pack_id, cc, backend_capability):
-                    all_cands.append(c)
+                _append_if_valid(c, pack_id)
 
-        # Level 2: variant_same_pack_parent
+        # Level 2: asset_library_index canonical specific
+        if len(all_cands) < 2 and specific and index_assets:
+            for asset in index_assets:
+                if not self._index_asset_matches_entity(asset, uid, etype, variant_info):
+                    continue
+                asset_specific = str(
+                    asset.get("canonical_entity_specific")
+                    or asset.get("canonical_entity_id")
+                    or ""
+                ).strip()
+                if not asset_specific:
+                    continue
+                if asset_specific != specific and not asset_specific.startswith(f"{specific}."):
+                    continue
+                cand = self._asset_dict_to_candidate(
+                    asset,
+                    FallbackLevel.VARIANT_PARENT.value,
+                    primary_type,
+                    source="asset_library_index",
+                )
+                _append_if_valid(cand, pack_id)
+
+        # Level 2: variant_same_pack_parent (synthetic fallback)
         if len(all_cands) < 2 and specific:
             parent = ".".join(specific.split(".")[:-1]) if "." in specific else specific
             for c in self._generate_variant_candidates(
@@ -671,10 +724,25 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 target_era, target_genre, style_mode, quality_profile,
                 FallbackLevel.VARIANT_PARENT.value, count=2,
             ):
-                if self._passes_hard_filters(c, pack_id, cc, backend_capability):
-                    all_cands.append(c)
+                _append_if_valid(c, pack_id)
 
-        # Level 3: variant_similar_era_genre
+        # Level 3: asset_library_index canonical root / era-genre similar
+        if len(all_cands) < 2 and index_assets:
+            for asset in index_assets:
+                if not self._index_asset_matches_entity(asset, uid, etype, variant_info):
+                    continue
+                asset_root = str(asset.get("canonical_entity_root") or "").strip()
+                if root and asset_root != root:
+                    continue
+                cand = self._asset_dict_to_candidate(
+                    asset,
+                    FallbackLevel.ERA_SIMILAR.value,
+                    primary_type,
+                    source="asset_library_index",
+                )
+                _append_if_valid(cand, pack_id)
+
+        # Level 3: variant_similar_era_genre (synthetic fallback)
         if len(all_cands) < 2:
             pack_root = pack_id.split("_")[0] if pack_id else "generic"
             similar_pack = f"{pack_root}_historical"
@@ -685,15 +753,13 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
                 trimmed_tags, primary_type, target_era, target_genre, style_mode,
                 tier, FallbackLevel.ERA_SIMILAR.value, count=2,
             ):
-                if self._passes_hard_filters(c, pack_id, cc, backend_capability):
-                    all_cands.append(c)
+                _append_if_valid(c, pack_id)
 
         # Level 4: generic_culturally_safe
         if len(all_cands) < 1 and ff.generic_fallback_policy != "disabled":
             if crit != "critical" or ff.generic_fallback_policy == "allowed":
                 for c in self._generate_generic_candidates(uid, etype, entity_tags, primary_type):
-                    if self._passes_hard_filters(c, "generic", cc, backend_capability):
-                        all_cands.append(c)
+                    _append_if_valid(c, "generic")
 
         # Level 5: placeholder_to_generate
         if len(all_cands) < 1 and ff.auto_placeholder:
@@ -783,22 +849,102 @@ class AssetMatcherService(BaseSkillService[Skill08Input, Skill08Output]):
         )
 
     @staticmethod
+    def _extract_index_assets(asset_library_index: dict[str, Any]) -> list[dict[str, Any]]:
+        if not asset_library_index:
+            return []
+        raw_assets: Any = asset_library_index
+        if isinstance(asset_library_index, dict):
+            raw_assets = []
+            for key in ("assets", "items", "entries", "index"):
+                if isinstance(asset_library_index.get(key), list):
+                    raw_assets = asset_library_index.get(key, [])
+                    break
+        if not isinstance(raw_assets, list):
+            return []
+        return [item for item in raw_assets if isinstance(item, dict)]
+
+    @staticmethod
+    def _index_asset_matches_entity(
+        asset: dict[str, Any],
+        entity_uid: str,
+        entity_type: str,
+        variant_info: dict[str, Any],
+    ) -> bool:
+        refs = {
+            entity_uid,
+            str(variant_info.get("entity_id") or ""),
+            str(variant_info.get("canonical_entity_id") or ""),
+            str(variant_info.get("matched_entity_id") or ""),
+            str(variant_info.get("source_entity_uid") or ""),
+        }
+        refs.discard("")
+
+        asset_uid = str(asset.get("entity_uid") or asset.get("source_entity_uid") or "")
+        asset_entity_id = str(asset.get("entity_id") or asset.get("canonical_entity_id") or "")
+        if asset_uid and asset_uid in refs:
+            return True
+        if asset_entity_id and asset_entity_id in refs:
+            return True
+
+        asset_type = str(asset.get("entity_type") or "")
+        if asset_type and asset_type == entity_type:
+            if any(asset.get(key) for key in (
+                "selected_variant_id",
+                "variant_id",
+                "canonical_entity_specific",
+                "canonical_entity_root",
+            )):
+                return True
+
+        return False
+
+    @staticmethod
+    def _as_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(v) for v in value if str(v)]
+        if isinstance(value, str):
+            return [value] if value else []
+        return []
+
+    @staticmethod
     def _asset_dict_to_candidate(
-        asset: dict[str, Any], fallback_level: str, default_type: str,
+        asset: dict[str, Any],
+        fallback_level: str,
+        default_type: str,
+        source: str = "project_pack",
     ) -> CandidateAsset:
-        """Convert a raw asset dict (from project_asset_pack) to CandidateAsset."""
+        """Convert a raw asset dict to CandidateAsset."""
+        asset_id = str(asset.get("asset_id") or asset.get("id") or "").strip()
+        asset_ref = str(
+            asset.get("path_or_ref")
+            or asset.get("asset_ref")
+            or asset.get("uri")
+            or asset.get("path")
+            or ""
+        ).strip()
         return CandidateAsset(
-            asset_id=asset.get("asset_id", ""),
-            asset_type=asset.get("asset_type", default_type),
-            source="project_pack",
-            path_or_ref=asset.get("path_or_ref", ""),
-            culture_pack=asset.get("culture_pack", ""),
-            style_tags=asset.get("style_tags", []),
-            era_tags=asset.get("era_tags", []),
-            genre_tags=asset.get("genre_tags", []),
-            visual_tags=asset.get("visual_tags", []),
-            backend_compatibility=asset.get("backend_compatibility", ["prompt_only"]),
-            quality_tier=asset.get("quality_tier", "standard"),
+            asset_id=asset_id,
+            asset_type=str(asset.get("asset_type") or asset.get("type") or default_type),
+            source=source,
+            path_or_ref=asset_ref,
+            culture_pack=str(asset.get("culture_pack") or asset.get("culture") or ""),
+            style_tags=AssetMatcherService._as_list(
+                asset.get("style_tags") or asset.get("styles")
+            ),
+            era_tags=AssetMatcherService._as_list(
+                asset.get("era_tags") or asset.get("era")
+            ),
+            genre_tags=AssetMatcherService._as_list(
+                asset.get("genre_tags") or asset.get("genres")
+            ),
+            visual_tags=AssetMatcherService._as_list(
+                asset.get("visual_tags") or asset.get("tags")
+            ),
+            backend_compatibility=AssetMatcherService._as_list(
+                asset.get("backend_compatibility")
+                or asset.get("supported_backends")
+            ) or ["prompt_only"],
+            quality_tier=str(asset.get("quality_tier") or asset.get("quality") or "standard"),
             fallback_level=fallback_level,
         )
 

@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session
 from ainern2d_shared.schemas.skills.skill_04 import (
     AliasGroup,
     AudioEventCandidate,
+    ContinuityExtractedEntity,
+    ContinuityHandoff,
+    ContinuityShotPlanRef,
     EntitySceneShotLink,
     EntitySummary,
     RawEntity,
@@ -184,6 +187,12 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
         # ── [E5] Scene/Shot Linking ────────────────────────────────────────────
         self._record_state(ctx, "MERGING_ALIASES", "LINKING_TO_SCENES_SHOTS")
         links = self._link_to_scenes_shots(entities, input_dto)
+        continuity_handoff = self._build_continuity_handoff(
+            entities=entities,
+            links=links,
+            alias_groups=alias_groups,
+            input_dto=input_dto,
+        )
 
         # ── Summary ───────────────────────────────────────────────────────────
         type_counts: dict[str, int] = defaultdict(int)
@@ -220,6 +229,7 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
             entity_aliases=alias_groups,
             entity_scene_shot_links=links,
             audio_event_candidates=audio_candidates,
+            continuity_handoff=continuity_handoff,
             warnings=warnings,
             review_required_items=review_items,
             status=status,
@@ -442,15 +452,26 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
         input_dto: Skill04Input,
     ) -> list[EntitySceneShotLink]:
         """Link each entity to scenes/shots where its source segments appear."""
-        # Build seg_id → scene_ids / shot_ids index from shot_plan
+        # Build lightweight indices from shot_plan:
+        # - seg_id -> shot_ids (if shot carries source_segment_ids/segment_ids)
+        # - normalized entity hint -> shot_ids
         seg_to_shots: dict[str, list[str]] = defaultdict(list)
+        hint_to_shots: dict[str, list[str]] = defaultdict(list)
         shot_to_scene: dict[str, str] = {}
         for shot in input_dto.shot_plan:
             shot_id = shot.get("shot_id", "")
             scene_id = shot.get("scene_id", "")
             shot_to_scene[shot_id] = scene_id
+
+            for seg_id in shot.get("source_segment_ids", []) or shot.get("segment_ids", []):
+                sid = str(seg_id).strip()
+                if sid:
+                    seg_to_shots[sid].append(shot_id)
+
             for hint in shot.get("entity_hints", []):
-                seg_to_shots[hint].append(shot_id)
+                norm_hint = EntityExtractionService._norm_text(hint)
+                if norm_hint:
+                    hint_to_shots[norm_hint].append(shot_id)
 
         links: list[EntitySceneShotLink] = []
         for entity in entities:
@@ -465,6 +486,23 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
                     sc = shot_to_scene.get(sh_id, "")
                     if sc:
                         scene_ids.add(sc)
+
+            # Fallback: map by entity surface against shot entity_hints.
+            norm_surface = EntityExtractionService._norm_text(entity.surface_form)
+            for norm_hint, candidate_shots in hint_to_shots.items():
+                if (
+                    norm_surface
+                    and (
+                        norm_surface in norm_hint
+                        or norm_hint in norm_surface
+                    )
+                ):
+                    for sh_id in candidate_shots:
+                        if sh_id not in shot_ids:
+                            shot_ids.append(sh_id)
+                        sc = shot_to_scene.get(sh_id, "")
+                        if sc:
+                            scene_ids.add(sc)
 
             # If no link found via shot plan, attach to first scene
             if not scene_ids and input_dto.scene_plan:
@@ -489,3 +527,60 @@ class EntityExtractionService(BaseSkillService[Skill04Input, Skill04Output]):
             )
 
         return links
+
+    @staticmethod
+    def _build_continuity_handoff(
+        *,
+        entities: list[RawEntity],
+        links: list[EntitySceneShotLink],
+        alias_groups: list[AliasGroup],
+        input_dto: Skill04Input,
+    ) -> ContinuityHandoff:
+        link_index = {item.entity_uid: item for item in links}
+        alias_map: dict[str, set[str]] = defaultdict(set)
+        for group in alias_groups:
+            all_members = set(group.members) | set(group.cross_language_aliases)
+            for member in group.members:
+                alias_map[member].update(all_members)
+                alias_map[member].discard(member)
+
+        extracted_entities: list[ContinuityExtractedEntity] = []
+        for ent in entities:
+            link = link_index.get(ent.entity_uid)
+            aliases = sorted(alias_map.get(ent.surface_form, set()))
+            traits = {
+                "confidence": ent.confidence,
+                "occurrence_count": ent.attributes.get("occurrence_count", 1),
+                "criticality": getattr(link, "criticality", "normal") if link else "normal",
+            }
+            extracted_entities.append(
+                ContinuityExtractedEntity(
+                    source_entity_uid=ent.entity_uid,
+                    entity_type=ent.entity_type,
+                    label=ent.surface_form,
+                    aliases=aliases,
+                    world_model_id="",
+                    traits=traits,
+                    shot_ids=list(link.shot_ids) if link else [],
+                    scene_ids=list(link.scene_ids) if link else [],
+                )
+            )
+
+        shot_plan_refs: list[ContinuityShotPlanRef] = []
+        for shot in input_dto.shot_plan:
+            shot_plan_refs.append(
+                ContinuityShotPlanRef(
+                    shot_id=str(shot.get("shot_id", "")),
+                    scene_id=str(shot.get("scene_id", "")),
+                    entity_refs=[str(v) for v in shot.get("entity_hints", [])],
+                )
+            )
+
+        return ContinuityHandoff(
+            extracted_entities=extracted_entities,
+            shot_plan_refs=shot_plan_refs,
+        )
+
+    @staticmethod
+    def _norm_text(value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())

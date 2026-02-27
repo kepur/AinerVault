@@ -26,6 +26,7 @@ from ainern2d_shared.schemas.skills.skill_19 import (
     RenderPriority,
     SLAConfig,
     SLATier,
+    HistoricalRenderStat,
     Skill19FeatureFlags,
     Skill19Input,
     Skill19Output,
@@ -207,6 +208,78 @@ def _estimate_shot_cost(
     )
 
 
+def _build_history_index(
+    history_stats: list[HistoricalRenderStat],
+) -> dict[tuple[str, str], HistoricalRenderStat]:
+    idx: dict[tuple[str, str], HistoricalRenderStat] = {}
+    for stat in history_stats:
+        shot_type = (stat.shot_type or "*").strip().lower() or "*"
+        if isinstance(stat.complexity, Complexity):
+            complexity = stat.complexity.value
+        elif stat.complexity:
+            complexity = str(stat.complexity).strip().lower()
+        else:
+            complexity = "*"
+        idx[(shot_type, complexity)] = stat
+    return idx
+
+
+def _resolve_history_stat(
+    shot: ShotInputDetail,
+    complexity: Complexity,
+    history_idx: dict[tuple[str, str], HistoricalRenderStat],
+) -> HistoricalRenderStat | None:
+    shot_type = (shot.shot_type or "").strip().lower()
+    candidates = [
+        (shot_type, complexity.value),
+        (shot_type, "*"),
+        ("*", complexity.value),
+        ("*", "*"),
+    ]
+    for key in candidates:
+        if key in history_idx:
+            return history_idx[key]
+    return None
+
+
+def _apply_historical_feedback(
+    cost: CostEstimate,
+    duration_seconds: float,
+    stat: HistoricalRenderStat | None,
+) -> CostEstimate:
+    """Blend model estimate with historical rendering stats.
+
+    sample_count drives confidence; overrun_rate adds conservative headroom.
+    """
+    if (
+        stat is None
+        or stat.sample_count < 3
+        or duration_seconds <= 0.0
+        or stat.avg_gpu_sec_per_second <= 0.0
+    ):
+        return cost
+
+    base_gpu_sec = float(cost.gpu_sec)
+    hist_gpu_sec = stat.avg_gpu_sec_per_second * duration_seconds
+    if stat.p95_gpu_sec_per_second and stat.p95_gpu_sec_per_second > 0:
+        hist_gpu_sec = max(hist_gpu_sec, stat.p95_gpu_sec_per_second * duration_seconds * 0.8)
+
+    confidence = min(max(stat.sample_count / 20.0, 0.0), 1.0)
+    blended_gpu_sec = base_gpu_sec * (1.0 - confidence) + hist_gpu_sec * confidence
+
+    overrun_rate = min(max(stat.overrun_rate, -0.5), 1.0)
+    adjusted_gpu_sec = max(blended_gpu_sec * (1.0 + overrun_rate * 0.35), 0.01)
+    factor = adjusted_gpu_sec / max(base_gpu_sec, 0.001)
+
+    return cost.model_copy(update={
+        "gpu_sec": round(adjusted_gpu_sec, 2),
+        "gpu_minutes": round(adjusted_gpu_sec / 60.0, 4),
+        "cost_usd": round(adjusted_gpu_sec * 0.0001, 6),
+        "historical_factor": round(factor, 4),
+        "history_confidence": round(confidence, 4),
+    })
+
+
 def _build_degradation_profile(
     complexity: Complexity, criticality: str, sla_max_level: int,
 ) -> DegradationLadderProfile:
@@ -311,6 +384,7 @@ class ComputeBudgetService(BaseSkillService[Skill19Input, Skill19Output]):
         backends = cluster.backends or _DEFAULT_BACKENDS
         global_profile = input_dto.global_load_profile.upper()
         baseline_fps = _LOAD_BASELINE_FPS.get(global_profile, 12)
+        history_idx = _build_history_index(input_dto.historical_render_stats)
 
         # ── INIT → ESTIMATING ────────────────────────────────────────────────
         self._record_state(ctx, BudgeterState.INIT, BudgeterState.ESTIMATING)
@@ -349,6 +423,11 @@ class ComputeBudgetService(BaseSkillService[Skill19Input, Skill19Output]):
             cost = _estimate_shot_cost(
                 shot.duration_seconds, target_fps, target_resolution,
                 backend_rate, quality_mult,
+            )
+            cost = _apply_historical_feedback(
+                cost,
+                shot.duration_seconds,
+                _resolve_history_stat(shot, complexity_enum, history_idx),
             )
 
             # Segment policy for long high-complexity shots
@@ -494,14 +573,23 @@ class ComputeBudgetService(BaseSkillService[Skill19Input, Skill19Output]):
         self, plans: list[ShotComputePlan],
         total_budget: float, total_estimated: float,
     ) -> None:
-        """Proportionally allocate budget to shots by priority."""
+        """Allocate budget with a blended loop:
+        priority score + estimated demand + historical risk feedback.
+        """
         if total_estimated <= 0:
             return
 
         total_priority = sum(p.priority_score.composite_score for p in plans) or 1.0
-
+        raw_weights: list[float] = []
         for plan in plans:
-            weight = plan.priority_score.composite_score / total_priority
+            priority_norm = plan.priority_score.composite_score / total_priority
+            demand_norm = plan.estimated_cost.gpu_sec / total_estimated
+            history_factor = min(max(plan.estimated_cost.historical_factor, 0.75), 1.35)
+            raw_weights.append((0.6 * priority_norm + 0.4 * demand_norm) * history_factor)
+
+        total_raw = sum(raw_weights) or 1.0
+        for i, plan in enumerate(plans):
+            weight = raw_weights[i] / total_raw
             plan.allocated_budget_gpu_sec = round(total_budget * weight, 2)
 
     # ── Dynamic reallocation ─────────────────────────────────────────────────
@@ -510,31 +598,75 @@ class ComputeBudgetService(BaseSkillService[Skill19Input, Skill19Output]):
         self, plans: list[ShotComputePlan],
         total_budget: float, total_estimated: float,
     ) -> list[dict[str, Any]]:
-        """When total estimated < budget, redistribute surplus to high-priority
-        pending shots proportionally to their priority score."""
+        """Budget feedback loop for under-budget scenarios.
+
+        Phase-1: fill high-priority deficit shots first (allocated < estimated).
+        Phase-2: distribute leftover surplus by priority score.
+        """
         log: list[dict[str, Any]] = []
         surplus = total_budget - total_estimated
         if surplus <= 0:
             return log
 
-        high_plans = [p for p in plans if p.priority_score.composite_score >= 0.5]
-        if not high_plans:
+        target_plans = [p for p in plans if p.priority_score.composite_score >= 0.3]
+        if not target_plans:
             return log
 
-        total_score = sum(p.priority_score.composite_score for p in high_plans) or 1.0
+        remaining = surplus
+        deficit_plans = [
+            p for p in target_plans
+            if p.estimated_cost.gpu_sec > p.allocated_budget_gpu_sec + 0.01
+        ]
 
-        for plan in high_plans:
-            share = surplus * (plan.priority_score.composite_score / total_score)
-            old_alloc = plan.allocated_budget_gpu_sec
-            plan.allocated_budget_gpu_sec = round(old_alloc + share, 2)
-            if share > 0.01:
+        if deficit_plans:
+            weighted_gap: dict[str, float] = {}
+            for plan in deficit_plans:
+                gap = plan.estimated_cost.gpu_sec - plan.allocated_budget_gpu_sec
+                weighted_gap[plan.shot_id] = gap * (0.5 + plan.priority_score.composite_score)
+            total_gap_weight = sum(weighted_gap.values()) or 1.0
+
+            distributed = 0.0
+            for plan in deficit_plans:
+                gap = max(plan.estimated_cost.gpu_sec - plan.allocated_budget_gpu_sec, 0.0)
+                if gap <= 0:
+                    continue
+                share = min(
+                    remaining * (weighted_gap[plan.shot_id] / total_gap_weight),
+                    gap,
+                )
+                if share <= 0.01:
+                    continue
+                old_alloc = plan.allocated_budget_gpu_sec
+                new_alloc = round(old_alloc + share, 2)
+                plan.allocated_budget_gpu_sec = new_alloc
+                distributed += float(new_alloc - old_alloc)
                 log.append({
                     "shot_id": plan.shot_id,
-                    "action": "surplus_reallocation",
+                    "action": "deficit_fill",
                     "old_budget_gpu_sec": old_alloc,
-                    "new_budget_gpu_sec": plan.allocated_budget_gpu_sec,
-                    "surplus_share": round(share, 2),
+                    "new_budget_gpu_sec": new_alloc,
+                    "added_gpu_sec": round(new_alloc - old_alloc, 2),
                 })
+            remaining = max(0.0, remaining - distributed)
+
+        if remaining <= 0.01:
+            return log
+
+        total_score = sum(p.priority_score.composite_score for p in target_plans) or 1.0
+        for plan in target_plans:
+            share = remaining * (plan.priority_score.composite_score / total_score)
+            if share <= 0.01:
+                continue
+            old_alloc = plan.allocated_budget_gpu_sec
+            new_alloc = round(old_alloc + share, 2)
+            plan.allocated_budget_gpu_sec = new_alloc
+            log.append({
+                "shot_id": plan.shot_id,
+                "action": "surplus_reallocation",
+                "old_budget_gpu_sec": old_alloc,
+                "new_budget_gpu_sec": new_alloc,
+                "surplus_share": round(new_alloc - old_alloc, 2),
+            })
 
         return log
 

@@ -67,7 +67,11 @@ class TestSkill06:
         )
         out = svc.execute(inp, ctx)
         assert out.status == "ready_for_visual_render_planning"
-        assert len(out.tracks) == 3
+        assert len(out.track_layers) == 3
+        assert len(out.tracks.dialogue) == 1
+        assert len(out.tracks.bgm) == 1
+        assert len(out.tracks.sfx) == 1
+        assert out.tracks.ambience == []
 
     def test_shot_timeline_matches_shots(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
@@ -80,6 +84,23 @@ class TestSkill06:
         out = svc.execute(inp, ctx)
         assert len(out.shot_timeline) == 2
         assert out.shot_timeline[0].shot_id == "sh_001"
+
+    def test_timing_is_monotonic_and_matches_duration(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill06Input(
+                audio_results=self._audio_results(),
+                shot_plan=self._shot_plan(),
+                audio_plan={"status": "ready"},
+            ),
+            ctx,
+        )
+        for idx, shot in enumerate(out.shot_timeline):
+            assert shot.end_ms >= shot.start_ms
+            if idx > 0:
+                assert shot.start_ms >= out.shot_timeline[idx - 1].end_ms
+        assert out.final_duration_ms == max(s.end_ms for s in out.shot_timeline)
 
     def test_final_duration_positive(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_06 import Skill06Input
@@ -106,9 +127,8 @@ class TestSkill06:
             audio_plan={"status": "ready"},
         )
         out = svc.execute(inp, ctx)
-        bgm_tracks = [t for t in out.tracks if t.track_type == "bgm"]
-        assert bgm_tracks[0].events[0].fade_in_ms > 0
-        assert bgm_tracks[0].events[0].fade_out_ms > 0
+        assert out.tracks.bgm[0].fade_in_ms > 0
+        assert out.tracks.bgm[0].fade_out_ms > 0
 
     def test_review_when_no_tts(self, mock_db, ctx):
         """§8: TTS missing → REVIEW_REQUIRED."""
@@ -224,3 +244,39 @@ class TestSkill20:
         out = svc.execute(inp, ctx)
         assert len(out.compiler_traces) == 2
         assert out.compiler_traces[0].shot_id == "sh_001"
+
+    def test_output_uses_backend_target_field(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_20 import Skill20Input
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill20Input(
+                shot_prompt_plans=[
+                    {"shot_id": "sh_backend", "positive_prompt": "test", "model_backend": "wan"}
+                ]
+            ),
+            ctx,
+        )
+        shot_dump = out.compiled_shots[0].model_dump(mode="json")
+        assert out.compiled_shots[0].backend_target == "wan"
+        assert "backend_target" in shot_dump
+        assert "backend" not in shot_dump
+
+    def test_unknown_backend_warning_uses_plan_domain(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_20 import Skill20Input
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill20Input(
+                shot_prompt_plans=[
+                    {"shot_id": "sh_unknown", "positive_prompt": "test", "model_backend": "unknown_backend"}
+                ]
+            ),
+            ctx,
+        )
+        assert any(w.startswith("PLAN-VALIDATION-020:") for w in out.warnings)
+
+    def test_empty_input_failed_error_uses_plan_domain(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_20 import Skill20Input
+        svc = self._make_service(mock_db)
+        out = svc.execute(Skill20Input(), ctx)
+        assert out.status == "failed"
+        assert any(w.startswith("PLAN-PARSE-001:") for w in out.warnings)

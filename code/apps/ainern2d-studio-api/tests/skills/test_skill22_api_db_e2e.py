@@ -34,7 +34,7 @@ from app.services.skills.skill_15_creative_control import CreativeControlService
 from ainern2d_shared.schemas.skills.skill_15 import Skill15Input
 
 from app.services.skills.skill_17_experiment import ExperimentService
-from ainern2d_shared.schemas.skills.skill_17 import Skill17Input
+from ainern2d_shared.schemas.skills.skill_17 import Skill17Input, VariantConfig
 
 
 @pytest.mark.skipif(
@@ -152,6 +152,7 @@ def test_persona_lineage_rollback_e2e():
 
         # Check downstream V1 consumption
         s10 = PromptPlannerService(db)
+        s17 = ExperimentService(db)
         out10_v1 = s10.execute(Skill10Input(
             active_persona_ref="director_A@1.0",
             persona_dataset_index_result=out22_v1.model_dump(mode="json"),
@@ -178,7 +179,14 @@ def test_persona_lineage_rollback_e2e():
         ]
         assert "policy_v1" in policy_refs_v1
 
-        # Note: Skill 17 consumption test skipped as it requires complex benchmark_cases setup to pass validations
+        out17_v1 = s17.execute(Skill17Input(
+            control_variant=VariantConfig(variant_id="ctrl_v1"),
+            test_variants=[VariantConfig(variant_id="test_v1")],
+            active_persona_ref="director_A@1.0",
+            persona_dataset_index_result=out22_v1.model_dump(mode="json"),
+        ), ctx_v1)
+        assert out17_v1.status in ("concluded", "analyzing")
+        assert all(v.persona_version == "director_A@1.0" for v in out17_v1.variants)
 
         # -------------------------------------------------------------------------------------------------
         # STEP 2: Execute SKILL_22 for Version 2.0 (Upgrade)
@@ -228,6 +236,15 @@ def test_persona_lineage_rollback_e2e():
         ]
         assert "policy_v2" in policy_refs_v2
 
+        out17_v2 = s17.execute(Skill17Input(
+            control_variant=VariantConfig(variant_id="ctrl_v2"),
+            test_variants=[VariantConfig(variant_id="test_v2")],
+            active_persona_ref="director_A@2.0",
+            persona_dataset_index_result=out22_v2.model_dump(mode="json"),
+        ), ctx_v2)
+        assert out17_v2.status in ("concluded", "analyzing")
+        assert all(v.persona_version == "director_A@2.0" for v in out17_v2.variants)
+
         # -------------------------------------------------------------------------------------------------
         # STEP 3: Verification of Lineage Rollback (consuming V1 despite V2 existing)
         # -------------------------------------------------------------------------------------------------
@@ -263,6 +280,20 @@ def test_persona_lineage_rollback_e2e():
             if c.parameter == "persona_policy_override_ref"
         ]
         assert "policy_v1" in policy_refs_rb
+
+        out17_rb = s17.execute(Skill17Input(
+            control_variant=VariantConfig(variant_id="ctrl_rb"),
+            test_variants=[VariantConfig(variant_id="test_rb")],
+            active_persona_ref="director_A@1.0",
+            persona_dataset_index_result={
+                "runtime_manifests": (
+                    out22_v1.model_dump(mode="json")["runtime_manifests"]
+                    + out22_v2.model_dump(mode="json")["runtime_manifests"]
+                )
+            },
+        ), ctx_rollback)
+        assert out17_rb.status in ("concluded", "analyzing")
+        assert all(v.persona_version == "director_A@1.0" for v in out17_rb.variants)
 
     finally:
         db.rollback()

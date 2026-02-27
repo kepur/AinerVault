@@ -21,6 +21,7 @@ from ainern2d_shared.telemetry.logging import get_logger
 router = APIRouter(prefix="/internal", tags=["worker-hub"])
 
 _logger = get_logger("worker-hub")
+DISPATCH_JOBS: dict[str, dict[str, object]] = {}
 
 
 class DispatchRequest(BaseSchema):

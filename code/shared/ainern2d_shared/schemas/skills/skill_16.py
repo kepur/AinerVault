@@ -38,6 +38,10 @@ DECISION_RETRY = "retry_partial"
 DECISION_DEGRADE = "degrade"
 DECISION_MANUAL_REVIEW = "manual_review"
 
+# ── Score scale values ───────────────────────────────────────────
+SCORE_SCALE_0_100 = "0-100"
+SCORE_SCALE_0_1 = "0-1"
+
 # ── State machine stages ───────────────────────────────────────
 SM_INIT = "INIT"
 SM_LOADING_ARTIFACTS = "LOADING_ARTIFACTS"
@@ -173,7 +177,9 @@ class Skill16FeatureFlags(BaseSchema):
     """Feature flags controlling SKILL 16 behaviour."""
     evaluation_depth: str = "standard"  # quick | standard | deep
     enable_cross_shot_check: bool = True
+    # Accepts either 0-100 or 0-1 based on score_scale.
     auto_fail_threshold: float = 60.0
+    score_scale: str = SCORE_SCALE_0_100
     dimension_weights: dict[str, float] = {}
     enable_visual_critic: bool = True
     enable_audio_visual_sync_critic: bool = True
@@ -240,9 +246,12 @@ class Skill16Output(BaseSchema):
     version: str = "1.0"
     status: str = "completed"
     # Overall
+    score_scale: str = SCORE_SCALE_0_100
     overall_decision: str = DECISION_PASS
     composite_score: float = 0.0
+    normalized_composite_score: float = 0.0
     dimension_scores: list[DimensionScore] = []
+    summary_scores: dict[str, float] = {}
     # Issues
     issues: list[CriticIssue] = []
     # Fix queue
@@ -256,6 +265,7 @@ class Skill16Output(BaseSchema):
     benchmark_comparisons: list[BenchmarkComparison] = []
     # Gate
     auto_fail_threshold: float = 60.0
+    normalized_auto_fail_threshold: float = 0.6
     passed: bool = False
     human_review_required: bool = False
     # Auto-fix

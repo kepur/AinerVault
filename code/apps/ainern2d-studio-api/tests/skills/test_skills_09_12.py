@@ -86,6 +86,33 @@ class TestSkill09:
         out = svc.execute(inp, ctx)
         assert out.total_gpu_hours_estimate >= 0
 
+    def test_state_machine_uses_spec_state_names(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_09 import Skill09Input
+
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            Skill09Input(
+                shots=self._shots(),
+                compute_budget={"global_render_profile": "MEDIUM_LOAD"},
+            ),
+            ctx,
+        )
+        assert out.status == "ready_for_render_execution"
+
+        event_types = [
+            call.args[0].event_type
+            for call in mock_db.add.call_args_list
+            if call.args and hasattr(call.args[0], "event_type")
+        ]
+        assert "skill_09.state.audio_features_aggregating" in event_types
+        assert "skill_09.state.motion_scoring" in event_types
+        assert "skill_09.state.strategy_mapping" in event_types
+        assert "skill_09.state.microshot_splitting" in event_types
+        assert "skill_09.state.aggregating_audio" not in event_types
+        assert "skill_09.state.scoring_motion" not in event_types
+        assert "skill_09.state.assigning_render" not in event_types
+        assert "skill_09.state.splitting_micro" not in event_types
+
 
 # ── SKILL 10: PromptPlannerService ───────────────────────────────────────────
 

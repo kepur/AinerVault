@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 
 from ainern2d_shared.config.setting import settings
@@ -20,15 +21,18 @@ class JobLoop:
 
     def __init__(self, worker: BaseWorker) -> None:
         self.worker = worker
-        self._consumer = RabbitMQConsumer(settings)
+        self._consumer = RabbitMQConsumer(settings.rabbitmq_url)
 
-    async def start(self) -> None:
+    def start(self) -> None:
         """Begin consuming from the JOB_DISPATCH topic, filtering by worker_type."""
         logger.info("JobLoop starting for worker_type=%s", self.worker.worker_type)
-        await self._consumer.consume(
+        self._consumer.consume(
             topic=SYSTEM_TOPICS.JOB_DISPATCH,
-            callback=self._handle_message,
+            handler=self._on_message,
         )
+
+    def _on_message(self, payload: dict) -> None:
+        asyncio.run(self._handle_message(payload))
 
     async def _handle_message(self, payload: dict) -> None:
         """Deserialize an incoming job message, execute, and report the outcome."""

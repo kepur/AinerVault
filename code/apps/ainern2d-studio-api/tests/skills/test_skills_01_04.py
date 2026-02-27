@@ -46,6 +46,12 @@ class TestSkill01:
         assert out.status in ("ready_for_routing", "review_required")
         assert out.language_detection.primary_language != ""
         assert out.normalized_text != ""
+        assert out.tenant_id == ctx.tenant_id
+        assert out.project_id == ctx.project_id
+        assert out.trace_id == ctx.trace_id
+        assert out.correlation_id == ctx.correlation_id
+        assert out.idempotency_key == ctx.idempotency_key
+        assert out.schema_version == ctx.schema_version
 
     def test_execute_empty_text_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_01 import Skill01Input
@@ -113,7 +119,7 @@ class TestSkill02:
         from ainern2d_shared.schemas.skills.skill_02 import Skill02Input
         svc = self._make_service(mock_db)
         inp = Skill02Input(primary_language="", normalized_text="some text")
-        with pytest.raises(ValueError, match="LANG-VALIDATION"):
+        with pytest.raises(ValueError, match="REQ-VALIDATION-001"):
             svc.execute(inp, ctx)
 
 
@@ -179,6 +185,8 @@ class TestSkill04:
         out = svc.execute(inp, ctx)
         assert out.status in ("ready_for_canonicalization", "review_required")
         assert out.entity_summary.total_entities >= 0
+        assert out.continuity_handoff is not None
+        assert out.continuity_handoff.shot_plan_refs
 
     def test_execute_en_text(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_04 import Skill04Input

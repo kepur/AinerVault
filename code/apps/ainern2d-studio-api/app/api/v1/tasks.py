@@ -5,14 +5,17 @@ from time import perf_counter
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import PromptPlan
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
+from ainern2d_shared.ainer_db_models.provider_models import ModelProfile, ModelProvider
+from ainern2d_shared.ainer_db_models.rag_models import KbVersion
+from ainern2d_shared.ainer_db_models.governance_models import PersonaPackVersion
 from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
-from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
+from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, RunCheckpoint, WorkflowEvent
 from ainern2d_shared.db.repositories.pipeline import RenderRunRepository, WorkflowEventRepository
 from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.schemas.events import EventEnvelope
@@ -57,6 +60,11 @@ class PolicyStackReplayItem(BaseModel):
 	audit_entries: int = 0
 
 
+class RunSnapshotResponse(BaseModel):
+	run_id: str
+	snapshot: dict = Field(default_factory=dict)
+
+
 def _percentile_ms(values: list[int], p: float) -> int:
 	if not values:
 		return 0
@@ -65,10 +73,149 @@ def _percentile_ms(values: list[int], p: float) -> int:
 	return ordered[idx]
 
 
+def _sanitize_profile_params(params_json: dict | None) -> dict:
+	if not params_json:
+		return {}
+	masked = dict(params_json)
+	for key in ("api_key", "token", "secret", "password"):
+		if key in masked and masked[key]:
+			masked[key] = "***"
+	return masked
+
+
+def _freeze_run_snapshot(
+	db: Session,
+	tenant_id: str,
+	project_id: str,
+	payload: dict,
+) -> dict:
+	providers = db.execute(
+		select(ModelProvider).where(
+			ModelProvider.tenant_id == tenant_id,
+			ModelProvider.project_id == project_id,
+			ModelProvider.deleted_at.is_(None),
+		)
+	).scalars().all()
+	profiles = db.execute(
+		select(ModelProfile).where(
+			ModelProfile.tenant_id == tenant_id,
+			ModelProfile.project_id == project_id,
+			ModelProfile.deleted_at.is_(None),
+		)
+	).scalars().all()
+	kb_versions = db.execute(
+		select(KbVersion).where(
+			KbVersion.tenant_id == tenant_id,
+			KbVersion.project_id == project_id,
+			KbVersion.deleted_at.is_(None),
+		)
+	).scalars().all()
+	persona_versions = db.execute(
+		select(PersonaPackVersion).where(
+			PersonaPackVersion.tenant_id == tenant_id,
+			PersonaPackVersion.project_id == project_id,
+			PersonaPackVersion.deleted_at.is_(None),
+		).order_by(PersonaPackVersion.created_at.desc())
+	).scalars().all()
+	router_policy = db.execute(
+		select(CreativePolicyStack).where(
+			CreativePolicyStack.tenant_id == tenant_id,
+			CreativePolicyStack.project_id == project_id,
+			CreativePolicyStack.name == "stage_router_policy_default",
+			CreativePolicyStack.deleted_at.is_(None),
+		)
+	).scalars().first()
+	language_policy = db.execute(
+		select(CreativePolicyStack).where(
+			CreativePolicyStack.tenant_id == tenant_id,
+			CreativePolicyStack.project_id == project_id,
+			CreativePolicyStack.name == "language_policy_default",
+			CreativePolicyStack.deleted_at.is_(None),
+		)
+	).scalars().first()
+	telegram_policy = db.execute(
+		select(CreativePolicyStack).where(
+			CreativePolicyStack.tenant_id == tenant_id,
+			CreativePolicyStack.project_id == project_id,
+			CreativePolicyStack.name == "telegram_notify_default",
+			CreativePolicyStack.deleted_at.is_(None),
+		)
+	).scalars().first()
+	culture_pack_id = str(payload.get("culture_pack_id") or "").strip()
+	culture_packs = db.execute(
+		select(CreativePolicyStack).where(
+			CreativePolicyStack.tenant_id == tenant_id,
+			CreativePolicyStack.project_id == project_id,
+			CreativePolicyStack.deleted_at.is_(None),
+		).order_by(CreativePolicyStack.updated_at.desc())
+	).scalars().all()
+
+	selected_culture = None
+	for row in culture_packs:
+		stack_json = row.stack_json or {}
+		if stack_json.get("type") != "culture_pack":
+			continue
+		if culture_pack_id and stack_json.get("culture_pack_id") != culture_pack_id:
+			continue
+		selected_culture = stack_json
+		break
+
+	return {
+		"frozen_at": datetime.now(timezone.utc).isoformat(),
+		"providers": [
+			{
+				"id": item.id,
+				"name": item.name,
+				"endpoint": item.endpoint,
+				"auth_mode": item.auth_mode,
+			}
+			for item in providers
+		],
+		"model_profiles": [
+			{
+				"id": item.id,
+				"provider_id": item.provider_id,
+				"purpose": item.purpose,
+				"name": item.name,
+				"params_json": _sanitize_profile_params(item.params_json),
+			}
+			for item in profiles
+		],
+		"router_policy": (router_policy.stack_json or {}) if router_policy else {},
+		"language_settings": (language_policy.stack_json or {}) if language_policy else {},
+		"telegram_settings": (telegram_policy.stack_json or {}) if telegram_policy else {},
+		"kb_versions": [
+			{
+				"id": item.id,
+				"collection_id": item.collection_id,
+				"version_name": item.version_name,
+				"status": item.status,
+			}
+			for item in kb_versions
+		],
+		"persona_versions": [
+			{
+				"id": item.id,
+				"persona_pack_id": item.persona_pack_id,
+				"version_name": item.version_name,
+			}
+			for item in persona_versions[:20]
+		],
+		"selected_culture_pack": selected_culture or {},
+		"requested_payload": payload,
+	}
+
+
 @router.post("/tasks", response_model=TaskSubmitAccepted, status_code=202)
 def create_task(body: TaskSubmitRequest, db: Session = Depends(get_db)) -> TaskSubmitAccepted:
 	run_id = f"run_{uuid4().hex}"
 	now = datetime.now(timezone.utc)
+	snapshot = _freeze_run_snapshot(
+		db=db,
+		tenant_id=body.tenant_id,
+		project_id=body.project_id,
+		payload=body.payload or {},
+	)
 
 	run = RenderRun(
 		id=run_id,
@@ -81,9 +228,25 @@ def create_task(body: TaskSubmitRequest, db: Session = Depends(get_db)) -> TaskS
 		status=RunStatus.queued,
 		stage=RenderStage.ingest,
 		progress=0,
+		kb_version_id=(body.payload or {}).get("kb_version_id"),
+		config_json=snapshot,
 	)
 	run_repo = RenderRunRepository(db)
 	run_repo.create(run)
+	db.add(
+		RunCheckpoint(
+			id=f"cp_{uuid4().hex}",
+			tenant_id=body.tenant_id,
+			project_id=body.project_id,
+			trace_id=body.trace_id,
+			correlation_id=body.correlation_id,
+			idempotency_key=f"idem_snapshot_{run_id}",
+			run_id=run_id,
+			stage=RenderStage.ingest,
+			checkpoint_name="run_snapshot_frozen",
+			snapshot_json=snapshot,
+		)
+	)
 
 	envelope = EventEnvelope(
 		event_type="task.submitted",
@@ -144,6 +307,14 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRespo
 		latest_error=latest_error,
 		final_artifact_uri=None,
 	)
+
+
+@router.get("/runs/{run_id}/snapshot", response_model=RunSnapshotResponse)
+def get_run_snapshot(run_id: str, db: Session = Depends(get_db)) -> RunSnapshotResponse:
+	run = RenderRunRepository(db).get(run_id)
+	if run is None:
+		raise HTTPException(status_code=404, detail="run not found")
+	return RunSnapshotResponse(run_id=run_id, snapshot=run.config_json or {})
 
 
 @router.get("/runs/{run_id}/prompt-plans", response_model=list[PromptPlanReplayItem])

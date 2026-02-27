@@ -77,6 +77,23 @@ _QUALITY_TIERS: list[dict[str, Any]] = [
 _REQUIRED_DSL_FIELDS = {"shot_id"}
 _ESTIMATED_TOKENS_PER_WORD = 1.3
 
+# ── Error codes (align to ainer_error_code.md domain naming) ────────────────
+ERR_PARSE_NO_SHOTS = "PLAN-PARSE-001"
+ERR_PARSE_PLAN_FAILED = "PLAN-PARSE-002"
+ERR_PARSE_NO_VALID_SHOTS = "PLAN-PARSE-003"
+ERR_VALIDATION_STRICT_FAILED = "PLAN-VALIDATION-001"
+ERR_VALIDATION_MISSING_SHOT_ID = "PLAN-VALIDATION-010"
+ERR_VALIDATION_DUP_SHOT_ID = "PLAN-VALIDATION-011"
+ERR_VALIDATION_UNKNOWN_BACKEND = "PLAN-VALIDATION-020"
+ERR_VALIDATION_INVALID_ENTITY_REF = "PLAN-VALIDATION-030"
+ERR_VALIDATION_INVALID_ASSET_REF = "PLAN-VALIDATION-031"
+ERR_VALIDATION_STRICT_PROMPT_OR_INTENT = "PLAN-VALIDATION-040"
+ERR_REFERENCE_LORA_MISSING = "PLAN-REFERENCE-010"
+ERR_REFERENCE_EMBEDDING_MISSING = "PLAN-REFERENCE-011"
+ERR_TIMING_ANCHOR_NOT_FOUND = "PLAN-TIMING-010"
+ERR_TIMING_ANCHOR_SHOT_MISMATCH = "PLAN-TIMING-020"
+ERR_TIMING_OVERLAP = "PLAN-TIMING-030"
+
 
 class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
     """SKILL 20 — Shot DSL Compiler & Prompt Backend.
@@ -107,7 +124,10 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
 
         if not shots_dsl:
             self._record_state(ctx, "PARSING_DSL", "FAILED")
-            return self._build_failed_output(warnings, "DSL-PARSE-001: no shots to compile")
+            return self._build_failed_output(
+                warnings,
+                f"{ERR_PARSE_NO_SHOTS}: no shots to compile",
+            )
 
         # ── [S2] VALIDATING ──────────────────────────────────────────
         self._record_state(ctx, "PARSING_DSL", "VALIDATING")
@@ -117,7 +137,8 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
         if val_errors and ff.strict_validation:
             self._record_state(ctx, "VALIDATING", "FAILED")
             return self._build_failed_output(
-                warnings + val_errors, "DSL-VAL-001: strict validation failed",
+                warnings + val_errors,
+                f"{ERR_VALIDATION_STRICT_FAILED}: strict validation failed",
             )
 
         # ── [S3] INJECTING_RAG ───────────────────────────────────────
@@ -246,8 +267,9 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                         asset_refs=plan.get("asset_refs", []),
                         positive_prompt=plan.get("positive_prompt", ""),
                         negative_prompt=plan.get("negative_prompt", ""),
-                        model_backend=plan.get(
-                            "model_backend", plan.get("backend", "comfyui"),
+                        backend_target=plan.get(
+                            "backend_target",
+                            plan.get("model_backend", plan.get("backend", "comfyui")),
                         ),
                         seed=plan.get("seed", -1),
                         lora_refs=plan.get("lora_refs", []),
@@ -257,10 +279,10 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                         asset_bindings=plan.get("asset_bindings", {}),
                     ))
                 except Exception as exc:
-                    warnings.append(f"DSL-PARSE-002: failed to parse plan: {exc}")
+                    warnings.append(f"{ERR_PARSE_PLAN_FAILED}: failed to parse plan: {exc}")
 
         if not result:
-            warnings.append("DSL-PARSE-003: no valid shots parsed")
+            warnings.append(f"{ERR_PARSE_NO_VALID_SHOTS}: no valid shots parsed")
 
         return result, warnings
 
@@ -281,41 +303,43 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
         for shot in shots:
             # Required field: shot_id
             if not shot.shot_id:
-                errors.append("DSL-VAL-010: shot missing shot_id")
+                errors.append(f"{ERR_VALIDATION_MISSING_SHOT_ID}: shot missing shot_id")
                 continue
 
             if shot.shot_id in seen_ids:
-                errors.append(f"DSL-VAL-011: duplicate shot_id={shot.shot_id}")
+                errors.append(f"{ERR_VALIDATION_DUP_SHOT_ID}: duplicate shot_id={shot.shot_id}")
                 continue
             seen_ids.add(shot.shot_id)
 
             # Validate backend
-            if shot.model_backend not in _BACKEND_SUFFIX:
+            if shot.backend_target not in _BACKEND_SUFFIX:
                 warnings.append(
-                    f"DSL-VAL-020: shot={shot.shot_id} unknown backend "
-                    f"'{shot.model_backend}', defaulting to comfyui"
+                    f"{ERR_VALIDATION_UNKNOWN_BACKEND}: shot={shot.shot_id} unknown backend "
+                    f"'{shot.backend_target}', defaulting to comfyui"
                 )
-                shot = shot.model_copy(update={"model_backend": "comfyui"})
+                shot = shot.model_copy(update={"backend_target": "comfyui"})
 
             # Check entity_refs format (expect entity IDs like "ENT_xxx")
             for ref in shot.entity_refs:
                 if not isinstance(ref, str) or not ref.strip():
                     warnings.append(
-                        f"DSL-VAL-030: shot={shot.shot_id} invalid entity_ref='{ref}'"
+                        f"{ERR_VALIDATION_INVALID_ENTITY_REF}: "
+                        f"shot={shot.shot_id} invalid entity_ref='{ref}'"
                     )
 
             # Check asset_refs format
             for ref in shot.asset_refs:
                 if not isinstance(ref, str) or not ref.strip():
                     warnings.append(
-                        f"DSL-VAL-031: shot={shot.shot_id} invalid asset_ref='{ref}'"
+                        f"{ERR_VALIDATION_INVALID_ASSET_REF}: "
+                        f"shot={shot.shot_id} invalid asset_ref='{ref}'"
                     )
 
             # Strict mode: require positive_prompt or shot_intent
             if ff.strict_validation:
                 if not shot.positive_prompt and not shot.shot_intent:
                     errors.append(
-                        f"DSL-VAL-040: shot={shot.shot_id} "
+                        f"{ERR_VALIDATION_STRICT_PROMPT_OR_INTENT}: shot={shot.shot_id} "
                         f"requires positive_prompt or shot_intent in strict mode"
                     )
                     continue
@@ -416,7 +440,8 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                         ref_id=ref, status="missing",
                     ))
                     warnings.append(
-                        f"DSL-REF-010: shot={shot.shot_id} LoRA '{ref}' not in registry"
+                        f"{ERR_REFERENCE_LORA_MISSING}: "
+                        f"shot={shot.shot_id} LoRA '{ref}' not in registry"
                     )
             lora_map[shot.shot_id] = resolved_loras
 
@@ -435,7 +460,8 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                         ref_id=ref, status="missing",
                     ))
                     warnings.append(
-                        f"DSL-REF-011: shot={shot.shot_id} embedding '{ref}' not in registry"
+                        f"{ERR_REFERENCE_EMBEDDING_MISSING}: "
+                        f"shot={shot.shot_id} embedding '{ref}' not in registry"
                     )
             emb_map[shot.shot_id] = resolved_embs
 
@@ -462,7 +488,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
         warnings: list[str] = []
 
         for shot in shots:
-            backend = shot.model_backend
+            backend = shot.backend_target
             if backend not in _BACKEND_SUFFIX:
                 backend = "comfyui"
 
@@ -518,7 +544,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
 
             compiled.append(CompiledShot(
                 shot_id=shot.shot_id,
-                backend=backend,
+                backend_target=backend,
                 candidate_id="C0",
                 quality_tier="primary",
                 positive_prompt=compiled_positive,
@@ -597,7 +623,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
             # Check that the referenced anchor exists
             if shot.timing_anchor not in anchor_index:
                 warnings.append(
-                    f"DSL-TIME-010: shot={shot.shot_id} timing_anchor "
+                    f"{ERR_TIMING_ANCHOR_NOT_FOUND}: shot={shot.shot_id} timing_anchor "
                     f"'{shot.timing_anchor}' not found in audio_event_manifest"
                 )
                 continue
@@ -607,7 +633,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
             # Check for timing overlap with other shots referencing same anchor
             if anchor.shot_id and anchor.shot_id != shot.shot_id:
                 warnings.append(
-                    f"DSL-TIME-020: shot={shot.shot_id} timing_anchor "
+                    f"{ERR_TIMING_ANCHOR_SHOT_MISMATCH}: shot={shot.shot_id} timing_anchor "
                     f"'{shot.timing_anchor}' belongs to different shot "
                     f"'{anchor.shot_id}'"
                 )
@@ -628,7 +654,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
             cur_id, cur_start, _ = shot_anchors_sorted[i]
             if cur_start < prev_end:
                 warnings.append(
-                    f"DSL-TIME-030: timing overlap between shot={prev_id} "
+                    f"{ERR_TIMING_OVERLAP}: timing overlap between shot={prev_id} "
                     f"and shot={cur_id} (overlap {prev_end - cur_start}ms)"
                 )
 
@@ -682,12 +708,12 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                     if dsl and dsl.fallback_class and tier_idx >= 2:
                         degraded_prompt = (
                             f"{dsl.fallback_class}{tier['suffix']}"
-                            + _BACKEND_SUFFIX.get(shot.backend, "")
+                            + _BACKEND_SUFFIX.get(shot.backend_target, "")
                         )
 
                     all_compiled.append(CompiledShot(
                         shot_id=shot.shot_id,
-                        backend=shot.backend,
+                        backend_target=shot.backend_target,
                         candidate_id=candidate_id,
                         quality_tier=tier["tier"],
                         positive_prompt=degraded_prompt,
@@ -756,7 +782,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
                     ))
 
             # Format compliance per backend
-            if shot.backend == "comfyui" and shot.backend_payload:
+            if shot.backend_target == "comfyui" and shot.backend_payload:
                 if "workflow" not in shot.backend_payload:
                     format_errors += 1
                     entries.append(ValidationEntry(
@@ -800,7 +826,7 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
         for shot in compiled:
             if shot.quality_tier != "primary":
                 continue
-            backends_used.add(shot.backend)
+            backends_used.add(shot.backend_target)
             res = shot.parameters.get("resolution", "")
             if res:
                 resolutions_used.add(str(res))
@@ -936,6 +962,8 @@ class DslCompilerService(BaseSkillService[Skill20Input, Skill20Output]):
         """Build parameter dict from defaults + overrides + compute budget."""
         params: dict[str, Any] = dict(_BACKEND_DEFAULTS.get(backend, {}))
         params["seed"] = shot.seed
+        params["backend_target"] = backend
+        # Backward-compatible shadow key for existing consumers.
         params["backend"] = backend
 
         # Apply render params from SKILL 09

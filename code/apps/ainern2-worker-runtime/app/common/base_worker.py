@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
@@ -22,7 +21,7 @@ class BaseWorker(ABC):
     def __init__(self, worker_type: str, settings=settings) -> None:
         self.worker_type = worker_type
         self.settings = settings
-        self._publisher = RabbitMQPublisher(settings)
+        self._publisher = RabbitMQPublisher(settings.rabbitmq_url)
 
     # ------------------------------------------------------------------
     # Abstract – each worker implements its own execution logic
@@ -36,42 +35,27 @@ class BaseWorker(ABC):
     # Result / heartbeat reporting
     # ------------------------------------------------------------------
     async def report_result(self, result: WorkerResult) -> None:
-        """Publish a worker callback result to the hub."""
-        envelope = self._build_envelope(
-            event_type="worker.callback",
-            job_id=result.job_id,
-            run_id=result.run_id,
-            result_payload=result.model_dump(),
+        """Publish a worker result payload to the hub callback stream."""
+        self._publisher.publish(
+            SYSTEM_TOPICS.WORKER_DETAIL,
+            result.model_dump(mode="json"),
         )
-        await self._publisher.publish(SYSTEM_TOPICS.WORKER_CALLBACK, envelope.model_dump())
         logger.info("reported result for job %s", result.job_id)
 
     async def report_heartbeat(self, job_id: str) -> None:
-        """Publish a lightweight heartbeat event for the running job."""
-        envelope = self._build_envelope(
-            event_type="worker.heartbeat",
-            job_id=job_id,
+        """Publish a lightweight job heartbeat event."""
+        now = datetime.now(timezone.utc)
+        envelope = EventEnvelope(
+            event_type="job.heartbeat",
+            producer=self.worker_type,
+            occurred_at=now,
+            tenant_id="t_unknown",
+            project_id="p_unknown",
+            idempotency_key=f"idem_hb_{job_id}",
             run_id=None,
-            result_payload={"worker_type": self.worker_type},
-        )
-        await self._publisher.publish(SYSTEM_TOPICS.WORKER_CALLBACK, envelope.model_dump())
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-    def _build_envelope(
-        self,
-        event_type: str,
-        job_id: str,
-        run_id: str | None,
-        result_payload: dict,
-    ) -> EventEnvelope:
-        return EventEnvelope(
-            event_id=str(uuid.uuid4()),
-            event_type=event_type,
             job_id=job_id,
-            run_id=run_id,
-            payload=result_payload,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            source=self.worker_type,
+            trace_id=f"tr_{job_id}",
+            correlation_id=f"cr_{job_id}",
+            payload={"worker_type": self.worker_type},
         )
+        self._publisher.publish(SYSTEM_TOPICS.JOB_STATUS, envelope.model_dump(mode="json"))

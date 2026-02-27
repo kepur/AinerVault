@@ -6,6 +6,8 @@ class SYSTEM_TOPICS:
 	JOB_DISPATCH = "job.dispatch"
 	JOB_STATUS = "job.status"
 	WORKER_DETAIL = "worker.detail"
+	# Backward-compatible alias for legacy worker callback publisher paths.
+	WORKER_CALLBACK = WORKER_DETAIL
 	COMPOSE_DISPATCH = "compose.dispatch"
 	COMPOSE_STATUS = "compose.status"
 	SKILL_EVENTS = "skill.events"

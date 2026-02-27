@@ -9,7 +9,6 @@ State machine:
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import uuid
 
@@ -51,10 +50,9 @@ def _history(stage: str, action: str, detail: str = "") -> ExperimentHistoryEntr
     )
 
 
-def _deterministic_seed(variant_id: str, case_id: str, dim: str) -> int:
-    """Repeatable hash seed for simulated scoring."""
-    raw = f"{variant_id}:{case_id}:{dim}"
-    return int(hashlib.sha256(raw.encode()).hexdigest()[:8], 16)
+def _clamp01(value: float) -> float:
+    """Clamp score into normalized [0, 1] range."""
+    return round(min(max(value, 0.0), 1.0), 4)
 
 
 # ── Module-level math helpers ──────────────────────────────────────────────────
@@ -81,13 +79,13 @@ def _identify_improvements(
     control_m: VariantMetrics | None,
     test_m: VariantMetrics,
 ) -> list[str]:
-    """Find dimensions where test outperforms control by ≥ 0.5 points."""
+    """Find dimensions where test outperforms control by ≥ 0.05 points."""
     if not control_m:
         return []
     improvements: list[str] = []
     for td in test_m.dimension_scores:
         cd = next((d for d in control_m.dimension_scores if d.dimension == td.dimension), None)
-        if cd and td.mean > cd.mean + 0.5:
+        if cd and td.mean > cd.mean + 0.05:
             improvements.append(f"{td.dimension}: +{round(td.mean - cd.mean, 3)}")
     return improvements
 
@@ -135,7 +133,7 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
         if issues:
             self._record_state(ctx, "DESIGNING", "FAILED")
             history.append(_history("DESIGNING", "validation_failed", "; ".join(issues)))
-            raise ValueError(f"EXP-VALIDATION-001: {'; '.join(issues)}")
+            raise ValueError(f"PLAN-VALIDATION-010: {'; '.join(issues)}")
         history.append(_history("DESIGNING", "validation_passed"))
 
         # ── [AB1] Design experiment — lock versions ──────────────────────────
@@ -166,7 +164,7 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
             f"strategy={allocation.strategy} weights={allocation.variant_weights}",
         ))
 
-        # ── [AB2] Execute benchmark variants (simulated) ─────────────────────
+        # ── [AB2] Execute benchmark variants ─────────────────────────────────
         self._record_state(ctx, "ALLOCATING", "EXECUTING")
         benchmark_cases = input_dto.benchmark_cases
         if not benchmark_cases:
@@ -180,10 +178,11 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
             f"cases={len(benchmark_cases)} variants={len(all_variants)}",
         ))
 
-        raw_scores = self._execute_variants(
+        raw_scores, execution_warnings = self._execute_variants(
             all_variants, benchmark_cases, criteria,
             input_dto.critic_reports, sample_size,
         )
+        warnings.extend(execution_warnings)
         history.append(_history("EXECUTING", "execution_completed"))
 
         # ── [AB3] Collect & aggregate metrics ────────────────────────────────
@@ -222,17 +221,36 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
         )
         history.append(_history("RECOMMENDING", "recommendations_generated"))
 
-        # Determine winner
-        winner_id = ""
-        for rec in recommendations:
-            if rec.decision == "promote_to_default":
-                winner_id = rec.variant_id
-                break
-        if not winner_id and overall_ranking:
-            winner_id = overall_ranking[0]
+        promotion_gate_passed, promotion_candidate_id, promotion_block_reason = self._apply_promotion_gate(
+            control.variant_id,
+            recommendations,
+            variant_metrics,
+            ff,
+            criteria,
+        )
+        if promotion_candidate_id:
+            gate_detail = (
+                f"candidate={promotion_candidate_id} pass={promotion_gate_passed}"
+                + (f" reason={promotion_block_reason}" if promotion_block_reason else "")
+            )
+            history.append(_history("RECOMMENDING", "promotion_gate_evaluated", gate_detail))
+            if not promotion_gate_passed and promotion_block_reason:
+                warnings.append(f"promotion_gate_blocked:{promotion_block_reason}")
+
+        # Winner defaults to control variant unless promotion gate passes.
+        default_winner = control.variant_id
+        if default_winner not in overall_ranking and overall_ranking:
+            default_winner = overall_ranking[0]
+        winner_id = promotion_candidate_id if promotion_gate_passed and promotion_candidate_id else default_winner
 
         # ── Final state ──────────────────────────────────────────────────────
         needs_review = any(r.decision == "needs_more_data" for r in recommendations)
+        gate_requires_review = (
+            bool(promotion_candidate_id)
+            and not promotion_gate_passed
+            and promotion_block_reason != "enable_auto_promote_disabled"
+        )
+        needs_review = needs_review or gate_requires_review
         if needs_review:
             final_stage = "REVIEW_REQUIRED"
             status = "analyzing"
@@ -248,7 +266,8 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
 
         logger.info(
             f"[{self.skill_id}] completed | run={ctx.run_id} "
-            f"experiment={experiment_id} winner={winner_id} status={status}"
+            f"experiment={experiment_id} winner={winner_id} status={status} "
+            f"promotion_gate={promotion_gate_passed}"
         )
 
         return Skill17Output(
@@ -264,6 +283,9 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
             statistical_results=statistical_results,
             recommendations=recommendations,
             winner_variant_id=winner_id,
+            promotion_gate_passed=promotion_gate_passed,
+            promotion_candidate_id=promotion_candidate_id,
+            promotion_block_reason=promotion_block_reason,
             traffic_allocation=allocation,
             history=history,
             warnings=warnings,
@@ -415,7 +437,7 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
             alloc = alloc.model_copy(update={"variant_weights": weights})
         return alloc
 
-    # ── [AB2] Execute variants (simulated benchmark) ───────────────────────────
+    # ── [AB2] Execute variants ────────────────────────────────────────────────
 
     @staticmethod
     def _execute_variants(
@@ -424,40 +446,74 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
         criteria: EvaluationCriteria,
         external_critic_reports: dict[str, list[dict]],
         sample_size: int,
-    ) -> dict[str, list[dict[str, float]]]:
+    ) -> tuple[dict[str, list[dict[str, float]]], list[str]]:
         """Run each variant × case and collect per-dimension scores.
 
-        Uses externally supplied SKILL 16 critic reports when available,
-        otherwise produces deterministic simulated scores.
+        Uses externally supplied SKILL 16 critic reports only.
         """
+        _ = benchmark_cases
         dims = criteria.dimensions or CRITIC_DIMENSIONS
         results: dict[str, list[dict[str, float]]] = {}
+        warnings: list[str] = []
 
         for variant in variants:
             vid = variant.variant_id
             case_scores: list[dict[str, float]] = []
+            reports = external_critic_reports.get(vid, [])
+            if not isinstance(reports, list) or not reports:
+                warnings.append(f"missing_critic_reports:{vid}")
+                results[vid] = case_scores
+                continue
 
-            if vid in external_critic_reports:
-                for report in external_critic_reports[vid][:sample_size]:
-                    dim_map: dict[str, float] = {}
-                    for ds in report.get("dimension_scores", []):
-                        dim_map[ds.get("dimension", "")] = float(ds.get("score", 0.0))
-                    for d in dims:
-                        dim_map.setdefault(d, 0.0)
-                    case_scores.append(dim_map)
-            else:
-                for case in benchmark_cases[:sample_size]:
-                    scores: dict[str, float] = {}
-                    for dim in dims:
-                        seed = _deterministic_seed(vid, case.case_id, dim)
-                        base = 4.0 + (seed % 5500) / 1000.0
-                        override_boost = len(variant.param_overrides) * 0.05
-                        scores[dim] = round(min(10.0, base + override_boost), 3)
-                    case_scores.append(scores)
+            for report in reports[:sample_size]:
+                dim_map = ExperimentService._extract_dimension_scores_from_report(report, dims)
+                if dim_map is None:
+                    continue
+                case_scores.append(dim_map)
+
+            if not case_scores:
+                warnings.append(f"unusable_critic_reports:{vid}")
 
             results[vid] = case_scores
 
-        return results
+        return results, warnings
+
+    @staticmethod
+    def _extract_dimension_scores_from_report(
+        report: dict,
+        dims: list[str],
+    ) -> dict[str, float] | None:
+        if not isinstance(report, dict):
+            return None
+
+        scores_from_summary: dict[str, float] = {}
+        summary_scores = report.get("summary_scores")
+        if isinstance(summary_scores, dict) and summary_scores:
+            for dim in dims:
+                raw = summary_scores.get(dim, 0.0)
+                scores_from_summary[dim] = _clamp01(float(raw or 0.0))
+            return scores_from_summary
+
+        raw_dim_scores = report.get("dimension_scores")
+        if not isinstance(raw_dim_scores, list):
+            return None
+
+        normalized_by_dim: dict[str, float] = {}
+        for ds in raw_dim_scores:
+            if not isinstance(ds, dict):
+                continue
+            dim = str(ds.get("dimension") or "")
+            if not dim:
+                continue
+            raw_score = float(ds.get("score", 0.0) or 0.0)
+            max_score = float(ds.get("max_score", 100.0) or 100.0)
+            if max_score > 1.0:
+                normalized = raw_score / max_score
+            else:
+                normalized = raw_score
+            normalized_by_dim[dim] = _clamp01(normalized)
+
+        return {dim: normalized_by_dim.get(dim, 0.0) for dim in dims}
 
     # ── [AB3] Aggregate metrics ────────────────────────────────────────────────
 
@@ -746,3 +802,37 @@ class ExperimentService(BaseSkillService[Skill17Input, Skill17Output]):
                 ))
 
         return recommendations
+
+    @staticmethod
+    def _apply_promotion_gate(
+        control_id: str,
+        recommendations: list[PromotionRecommendation],
+        metrics: list[VariantMetrics],
+        ff: FeatureFlags,
+        criteria: EvaluationCriteria,
+    ) -> tuple[bool, str, str]:
+        candidate = next(
+            (rec for rec in recommendations if rec.decision == "promote_to_default"),
+            None,
+        )
+        if candidate is None:
+            return False, "", "no_promotion_candidate"
+
+        if not ff.enable_auto_promote:
+            return False, candidate.variant_id, "enable_auto_promote_disabled"
+
+        vm = next((m for m in metrics if m.variant_id == candidate.variant_id), None)
+        if vm is None:
+            return False, candidate.variant_id, "candidate_metrics_missing"
+
+        if vm.sample_count < ff.min_sample_size:
+            return False, candidate.variant_id, "sample_size_below_minimum"
+        if vm.quality_score < criteria.pass_threshold:
+            return False, candidate.variant_id, "quality_below_pass_threshold"
+        if vm.failure_rate > 0.15:
+            return False, candidate.variant_id, "failure_rate_too_high"
+        if vm.retry_rate > 0.25:
+            return False, candidate.variant_id, "retry_rate_too_high"
+        if candidate.variant_id == control_id:
+            return False, candidate.variant_id, "candidate_is_control"
+        return True, candidate.variant_id, ""
