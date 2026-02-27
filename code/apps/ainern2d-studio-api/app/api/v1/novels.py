@@ -3,8 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import requests
-from urllib.error import HTTPError as UrlLibHTTPError, URLError as UrlLibURLError
-from urllib.request import Request as UrlLibRequest, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -126,6 +124,14 @@ class ChapterAssistExpandRequest(BaseModel):
     style_hint: str = "影视化叙事，保留可分镜细节。"
     target_language: str | None = None
     max_tokens: int = Field(default=900, ge=200, le=2500)
+
+
+class ModelProviderResponse(BaseModel):
+    id: str
+    name: str
+    provider_type: str
+    endpoint: str | None = None
+    is_default: bool = False
 
 
 class ChapterAssistExpandResponse(BaseModel):
@@ -303,6 +309,31 @@ def get_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterRespon
     if row is None:
         raise HTTPException(status_code=404, detail="chapter not found")
     return _chapter_to_response(row)
+
+
+@router.get("/chapters/available-models", response_model=list[ModelProviderResponse])
+def list_available_models(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> list[ModelProviderResponse]:
+    rows = db.execute(
+        select(ModelProvider).where(
+            ModelProvider.tenant_id == tenant_id,
+            ModelProvider.project_id == project_id,
+            ModelProvider.deleted_at.is_(None),
+        )
+    ).scalars().all()
+    return [
+        ModelProviderResponse(
+            id=row.id,
+            name=row.name,
+            provider_type=row.provider_type,
+            endpoint=row.endpoint,
+            is_default=row.is_default or False,
+        )
+        for row in rows
+    ]
 
 
 @router.put("/chapters/{chapter_id}", response_model=ChapterResponse)
@@ -553,33 +584,33 @@ def _expand_with_provider(
         "temperature": 0.7,
         "max_tokens": max_tokens,
     }
-    request = UrlLibRequest(
-        url=f"{endpoint}/chat/completions",
-        method="POST",
+
+    response = requests.post(
+        f"{endpoint}/chat/completions",
+        json=payload,
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        data=json.dumps(payload).encode("utf-8"),
+        timeout=16.0,
     )
-    with urlopen(request, timeout=16.0) as response:
-        status = int(getattr(response, "status", 0) or 0)
-        raw = response.read().decode("utf-8")
-        parsed = json.loads(raw or "{}")
-        if status < 200 or status >= 300:
-            raise ValueError(f"provider_http_status_{status}")
-        choices = parsed.get("choices") or []
-        if not choices:
-            raise ValueError("provider_response_missing_choices")
-        content = str((choices[0].get("message") or {}).get("content") or "").strip()
-        if not content:
-            raise ValueError("provider_response_empty_content")
-        return content, provider.name, model_name
+
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ValueError(f"provider_http_status_{response.status_code}")
+
+    parsed = response.json() if response.text else {}
+    choices = parsed.get("choices") or []
+    if not choices:
+        raise ValueError("provider_response_missing_choices")
+    content = str((choices[0].get("message") or {}).get("content") or "").strip()
+    if not content:
+        raise ValueError("provider_response_empty_content")
+    return content, provider.name, model_name
 
 
-@router.post("/chapters/{chapter_id}/assist-expand", response_model=ChapterAssistExpandResponse)
-def assist_expand_chapter(
+@router.post("/chapters/{chapter_id}/ai-expand", response_model=ChapterAssistExpandResponse)
+def ai_expand_chapter(
     chapter_id: str,
     body: ChapterAssistExpandRequest,
     db: Session = Depends(get_db),
@@ -628,7 +659,7 @@ def assist_expand_chapter(
             )
             mode = "provider_llm"
             break
-        except (UrlLibHTTPError, UrlLibURLError, ValueError, json.JSONDecodeError):
+        except (requests.RequestException, ValueError, json.JSONDecodeError):
             continue
 
     if not expanded:

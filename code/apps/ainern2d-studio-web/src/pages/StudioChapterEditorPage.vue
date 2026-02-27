@@ -220,7 +220,7 @@ const updateSelectedText = () => {
 
 const onModelChanged = () => {
   // 模型切换时的回调
-  console.log('Model changed:', selectedModel.value)
+  console.log('Model changed:', selectedModelId.value)
 }
 
 const openAIAssistantDialog = () => {
