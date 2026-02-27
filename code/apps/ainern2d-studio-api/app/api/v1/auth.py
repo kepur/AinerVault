@@ -148,6 +148,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     if not _verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="AUTH-VALIDATION-001: invalid credentials")
 
+    # Resolve the user's actual role in default project from ACL
+    # Default users seed their role; other users query from ProjectMember
     if role == "viewer":
         member = db.execute(
             select(ProjectMember).where(

@@ -1,10 +1,12 @@
 # README_23_30_PRODUCT_GAP_PLAN.md
 # Studio 产品层（SKILL 23~30）缺口审计与优化规划
 
+> 对话需求完整清单请同步参考：`SKILL_23_30_PRODUCT_REQUIREMENTS_MASTER.md`
+
 ## 1. 审计结论（2026-02-27）
 - 已完成：23~30 主干可用，支持登录守卫、章节管理、Task/Run 创建、Provider+Profile 配置、RAG/Culture 管理、素材库、时间线 patch、素材绑定一致性页面。
 - 部分完成：任务运行中心、配置中心健康检查、权限体系、时间线工业级编辑体验。
-- 未完成：强 RBAC/ACL 中间件细粒度校验、真实 provider 连通健康检查、Worker 状态看板、rerun-stage 操作面板、patch 版本树/回滚。
+- 未完成：真实 provider 连通健康检查、Worker 状态看板、rerun-stage 操作面板。
 
 ## 2. 后端 -> 前端落地差距（接口对账）
 当前后端存在但前端未形成统一封装/页面能力的关键接口：
@@ -21,9 +23,9 @@
 11. `/api/v1/projects/{project_id}/entities/{entity_id}/continuity-profile`（一致性详情抽屉）
 
 ## 3. SKILL DoD 达成度评估
-- SKILL_23：80%
-  - 已达成：登录/登出、ACL、审计日志。
-  - 缺口：缺少“项目级细粒度 ACL 强制中间件”，目前以角色门禁为主。
+- SKILL_23：90%
+  - 已达成：登录/登出、ACL、审计日志、项目级 ACL 强制中间件（非 admin 角色）。
+  - 缺口：ACL 决策可视化审计与策略配置台。
 - SKILL_24：85%
   - 已达成：Project/Novel/Chapter CRUD、修订历史、01~03 预览、发起任务。
   - 缺口：章节发布态（draft/released）与审批流未落地。
@@ -42,9 +44,9 @@
 - SKILL_29：85%
   - 已达成：素材归档检索、anchor 回流、一致性绑定独立页面。
   - 缺口：资产血缘图与跨 run 复用推荐。
-- SKILL_30：70%
-  - 已达成：多轨展示、拖拽保存、PR patch + rerun-shot。
-  - 缺口：patch 版本树、可视化回滚、真正 NLE 级多轨吸附/裁切/分组。
+- SKILL_30：82%
+  - 已达成：多轨展示、拖拽保存、PR patch + rerun-shot、patch 版本历史、回滚重跑入口。
+  - 缺口：真正 NLE 级多轨吸附/裁切/分组。
 
 ## 4. 优化规划（建议排期）
 ### Phase A（P0，1~2 周）：可运维可上线

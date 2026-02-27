@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,7 +13,9 @@ from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import Chapter, Novel
 from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
+from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
+from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 from ainern2d_shared.schemas.skills.skill_01 import Skill01Input
 from ainern2d_shared.schemas.skills.skill_02 import Skill02Input
 from ainern2d_shared.schemas.skills.skill_03 import Skill03Input
@@ -19,6 +24,7 @@ from ainern2d_shared.services.base_skill import SkillContext
 from app.api.deps import get_db
 from app.api.v1.tasks import TaskSubmitAccepted, TaskSubmitRequest, create_task
 from app.services.skill_registry import SkillRegistry
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/api/v1", tags=["novels"])
 
@@ -109,6 +115,28 @@ class ChapterTaskRequest(BaseModel):
     trace_id: str | None = None
     correlation_id: str | None = None
     idempotency_key: str | None = None
+
+
+class ChapterAssistExpandRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    instruction: str = "扩展剧情，增强冲突、节奏与情绪转折，保持人物一致性。"
+    style_hint: str = "影视化叙事，保留可分镜细节。"
+    target_language: str | None = None
+    max_tokens: int = Field(default=900, ge=200, le=2500)
+
+
+class ChapterAssistExpandResponse(BaseModel):
+    chapter_id: str
+    original_length: int
+    expanded_length: int
+    expanded_markdown: str
+    appended_excerpt: str
+    provider_used: str
+    model_name: str
+    mode: str
+    prompt_tokens_estimate: int
+    completion_tokens_estimate: int
 
 
 @router.post("/novels", response_model=NovelResponse, status_code=201)
@@ -400,6 +428,202 @@ def preview_chapter_plan(
         scene_plan=[item.model_dump() for item in out_03.scene_plan],
         shot_plan=[item.model_dump() for item in out_03.shot_plan],
     )
+
+
+def _build_assist_prompt(
+    *,
+    chapter_title: str,
+    markdown_text: str,
+    instruction: str,
+    style_hint: str,
+    target_language: str,
+) -> str:
+    return (
+        "你是小说编剧协作助手。请基于现有章节进行扩写，保留原剧情与人物设定。"
+        "\n要求："
+        "\n1) 在不改动核心剧情的情况下增加冲突和反转。"
+        "\n2) 增加环境、动作和情绪细节，便于后续分镜。"
+        "\n3) 输出为 Markdown，段落清晰。"
+        f"\n4) 输出语言：{target_language}。"
+        f"\n5) 风格提示：{style_hint or '影视化叙事'}。"
+        f"\n6) 额外指令：{instruction}。"
+        f"\n\n章节标题：{chapter_title or 'Untitled'}"
+        "\n\n原文：\n"
+        f"{markdown_text}"
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, int(len(text) / 4))
+
+
+def _load_provider_settings(
+    db: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    provider_id: str,
+) -> dict:
+    row = db.execute(
+        select(CreativePolicyStack).where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name == f"provider_settings:{provider_id}",
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if row is None:
+        return {}
+    return dict(row.stack_json or {})
+
+
+def _template_expand(markdown_text: str, instruction: str) -> str:
+    appendix = (
+        "\n\n## AI 扩写片段\n"
+        "夜色压低了街巷的回声，主角在门前停顿半秒，确认每一道视线的方向。"
+        "他推门而入时，灯火在盔甲边缘折出冷光，桌边的对话突然安静。"
+        "最先开口的人没有提名字，只把一枚旧徽章推到木桌中央。"
+        "主角看见那道刻痕，意识到这不是普通交易，而是对旧案的公开试探。"
+        "冲突从言语升温到动作，三步之内就必须作出选择：妥协、对峙，或反制。"
+        f"\n\n> 扩写方向：{instruction}"
+    )
+    return f"{markdown_text.rstrip()}{appendix}"
+
+
+def _expand_with_provider(
+    *,
+    provider: ModelProvider,
+    provider_settings: dict,
+    prompt: str,
+    max_tokens: int,
+) -> tuple[str, str, str]:
+    endpoint = (provider.endpoint or "").strip().rstrip("/")
+    token = str(provider_settings.get("access_token") or "").strip()
+    model_catalog = list(provider_settings.get("model_catalog") or [])
+    model_name = model_catalog[0] if model_catalog else "gpt-4o-mini"
+    if not endpoint or not token:
+        raise ValueError("missing provider endpoint/token")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "你是专业编剧助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": max_tokens,
+    }
+    request = Request(
+        url=f"{endpoint}/chat/completions",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        data=json.dumps(payload).encode("utf-8"),
+    )
+    with urlopen(request, timeout=16.0) as response:
+        status = int(getattr(response, "status", 0) or 0)
+        raw = response.read().decode("utf-8")
+        parsed = json.loads(raw or "{}")
+        if status < 200 or status >= 300:
+            raise ValueError(f"provider_http_status_{status}")
+        choices = parsed.get("choices") or []
+        if not choices:
+            raise ValueError("provider_response_missing_choices")
+        content = str((choices[0].get("message") or {}).get("content") or "").strip()
+        if not content:
+            raise ValueError("provider_response_empty_content")
+        return content, provider.name, model_name
+
+
+@router.post("/chapters/{chapter_id}/assist-expand", response_model=ChapterAssistExpandResponse)
+def assist_expand_chapter(
+    chapter_id: str,
+    body: ChapterAssistExpandRequest,
+    db: Session = Depends(get_db),
+) -> ChapterAssistExpandResponse:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    markdown_text = chapter.raw_text or ""
+    prompt = _build_assist_prompt(
+        chapter_title=chapter.title or "",
+        markdown_text=markdown_text,
+        instruction=body.instruction,
+        style_hint=body.style_hint,
+        target_language=body.target_language or chapter.language_code or "zh-CN",
+    )
+
+    expanded = ""
+    provider_used = "template_fallback"
+    model_name = "template_v1"
+    mode = "template"
+
+    providers = db.execute(
+        select(ModelProvider).where(
+            ModelProvider.tenant_id == body.tenant_id,
+            ModelProvider.project_id == body.project_id,
+            ModelProvider.deleted_at.is_(None),
+        )
+    ).scalars().all()
+
+    for provider in providers:
+        settings = _load_provider_settings(
+            db,
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            provider_id=provider.id,
+        )
+        if not settings.get("enabled", True):
+            continue
+        try:
+            expanded, provider_used, model_name = _expand_with_provider(
+                provider=provider,
+                provider_settings=settings,
+                prompt=prompt,
+                max_tokens=body.max_tokens,
+            )
+            mode = "provider_llm"
+            break
+        except (HTTPError, URLError, ValueError, json.JSONDecodeError):
+            continue
+
+    if not expanded:
+        expanded = _template_expand(markdown_text, body.instruction)
+
+    appended_excerpt = expanded[len(markdown_text):].strip() if expanded.startswith(markdown_text) else expanded[-320:]
+    response = ChapterAssistExpandResponse(
+        chapter_id=chapter_id,
+        original_length=len(markdown_text),
+        expanded_length=len(expanded),
+        expanded_markdown=expanded,
+        appended_excerpt=appended_excerpt,
+        provider_used=provider_used,
+        model_name=model_name,
+        mode=mode,
+        prompt_tokens_estimate=_estimate_tokens(prompt),
+        completion_tokens_estimate=_estimate_tokens(expanded),
+    )
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="plan.prompt.generated",
+        summary="Chapter assist expansion completed",
+        trace_id=chapter.trace_id,
+        correlation_id=chapter.correlation_id,
+        extra={
+            "chapter_id": chapter_id,
+            "mode": mode,
+            "provider_used": provider_used,
+            "model_name": model_name,
+            "expanded_length": response.expanded_length,
+        },
+    )
+    return response
 
 
 @router.post("/chapters/{chapter_id}/tasks", response_model=TaskSubmitAccepted, status_code=202)

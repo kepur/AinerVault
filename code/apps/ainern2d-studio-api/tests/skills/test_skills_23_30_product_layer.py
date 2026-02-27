@@ -158,6 +158,21 @@ def test_skill_23_24_28_auth_chapter_task_snapshot_flow():
             )
             assert chapter_update.status_code == 200
 
+            chapter_assist = client.post(
+                f"/api/v1/chapters/{chapter_id}/assist-expand",
+                json={
+                    "tenant_id": tenant_id,
+                    "project_id": created_project_id,
+                    "instruction": "增加冲突与反转",
+                    "style_hint": "电影化叙事",
+                    "target_language": "zh-CN",
+                    "max_tokens": 600,
+                },
+            )
+            assert chapter_assist.status_code == 200
+            assert chapter_assist.json()["expanded_length"] >= chapter_assist.json()["original_length"]
+            assert chapter_assist.json()["expanded_markdown"]
+
             revisions = client.get(f"/api/v1/chapters/{chapter_id}/revisions")
             assert revisions.status_code == 200
             assert len(revisions.json()) >= 1
@@ -579,6 +594,60 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 assert "director_basic" in resolved.json()["resolved_knowledge_scopes"]
                 assert any(item["route_id"] == "route_scene_board" for item in resolved.json()["visible_routes"])
 
+                run_simulated = client.post(
+                    "/api/v1/config/role-studio/run-skill",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "role_id": "director",
+                        "skill_id": "shot_planner",
+                        "input_payload": {"chapter_id": chapter_id},
+                        "context": {"mode": "preview"},
+                    },
+                )
+                assert run_simulated.status_code == 200
+                assert run_simulated.json()["execution_mode"] == "simulated"
+                assert run_simulated.json()["status"] == "simulated"
+                assert run_simulated.json()["output"]["ui_renderer"] == "timeline"
+
+                skill_registry_real = client.put(
+                    "/api/v1/config/skill-registry/skill_11",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "skill_id": "skill_11",
+                        "input_schema": {"type": "object"},
+                        "output_schema": {"type": "object"},
+                        "required_knowledge_scopes": ["director_basic"],
+                        "default_model_profile": profile_id,
+                        "tools_required": ["rag"],
+                        "ui_renderer": "config",
+                        "enabled": True,
+                        "schema_version": "1.0",
+                    },
+                )
+                assert skill_registry_real.status_code == 200
+
+                run_real_skill = client.post(
+                    "/api/v1/config/role-studio/run-skill",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "role_id": "director",
+                        "skill_id": "skill_11",
+                        "input_payload": {
+                            "kb_id": f"kb_runtime_{suffix}",
+                            "action": "sync",
+                            "entries": [],
+                        },
+                        "context": {"mode": "runtime"},
+                    },
+                )
+                assert run_real_skill.status_code == 200
+                assert run_real_skill.json()["execution_mode"] == "skill_registry"
+                assert run_real_skill.json()["status"] in {"READY", "REVIEW_REQUIRED"}
+                assert isinstance(run_real_skill.json()["logs"], list)
+
                 routing = client.put(
                     "/api/v1/config/stage-routing",
                     json={
@@ -667,6 +736,56 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 assert tg_get.json()["enabled"] is True
                 assert tg_get.json()["chat_id"] == "-1001001"
 
+                class _FakeTelegramResponse:
+                    status = 200
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+
+                    def read(self):
+                        return b'{\"ok\": true, \"result\": {\"message_id\": 1001}}'
+
+                with mock_patch("app.api.v1.config_center.urlopen", return_value=_FakeTelegramResponse()):
+                    tg_test = client.post(
+                        "/api/v1/config/telegram-settings/test",
+                        json={
+                            "tenant_id": tenant_id,
+                            "project_id": project_id,
+                            "message_text": "test from pytest",
+                            "timeout_ms": 2000,
+                        },
+                    )
+                assert tg_test.status_code == 200
+                assert tg_test.json()["delivered"] is True
+                assert tg_test.json()["telegram_ok"] is True
+
+                bootstrap_defaults = client.post(
+                    "/api/v1/config/bootstrap-defaults",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "seed_mode": "llm_template",
+                        "model_profile_id": profile_id,
+                        "role_ids": ["director", "art"],
+                        "enrich_rounds": 3,
+                        "session_id": f"session_{suffix}",
+                        "include_roles": True,
+                        "include_skills": True,
+                        "include_routes": True,
+                        "include_language_settings": True,
+                        "include_stage_routing": True,
+                    },
+                )
+                assert bootstrap_defaults.status_code == 200
+                assert bootstrap_defaults.json()["roles_upserted"] >= 2
+                assert bootstrap_defaults.json()["skills_upserted"] >= 2
+                assert bootstrap_defaults.json()["routes_upserted"] >= 2
+                assert bootstrap_defaults.json()["summary"]["orchestration_engine"] == "langgraph_stategraph"
+                assert set(bootstrap_defaults.json()["summary"]["roles_seeded"]) == {"director", "art"}
+
                 health = client.get(
                     "/api/v1/config/health",
                     params={"tenant_id": tenant_id, "project_id": project_id},
@@ -713,6 +832,57 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 )
                 assert kb_list.status_code == 200
                 assert any(item["id"] == kb_version_id for item in kb_list.json())
+
+                bootstrap_pack = client.post(
+                    "/api/v1/rag/knowledge-packs/bootstrap",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "role_id": "director",
+                        "pack_name": f"director_bootstrap_{suffix}",
+                        "template_key": "director",
+                        "language_code": "zh",
+                        "default_knowledge_scope": "style_rule",
+                    },
+                )
+                assert bootstrap_pack.status_code == 201
+                bootstrap_pack_id = bootstrap_pack.json()["pack_id"]
+                bootstrap_collection_id = bootstrap_pack.json()["collection_id"]
+                bootstrap_kb_version_id = bootstrap_pack.json()["kb_version_id"]
+
+                list_packs = client.get(
+                    "/api/v1/rag/knowledge-packs",
+                    params={"tenant_id": tenant_id, "project_id": project_id, "role_id": "director"},
+                )
+                assert list_packs.status_code == 200
+                assert any(item["pack_id"] == bootstrap_pack_id for item in list_packs.json())
+
+                import_job = client.post(
+                    "/api/v1/rag/import-jobs",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "collection_id": bootstrap_collection_id,
+                        "kb_version_id": bootstrap_kb_version_id,
+                        "source_format": "excel",
+                        "source_name": "director_notes.xlsx",
+                        "content_text": "term,rule\ncontinuity,keep axis\nlighting,key ratio 2:1",
+                        "role_ids": ["director", "script_supervisor"],
+                        "language_code": "zh",
+                        "scope": "chapter",
+                    },
+                )
+                assert import_job.status_code == 201
+                import_job_id = import_job.json()["import_job_id"]
+                assert import_job.json()["created_documents"] >= 1
+                assert "new_terms" in import_job.json()["knowledge_change_report"]
+
+                import_jobs = client.get(
+                    "/api/v1/rag/import-jobs",
+                    params={"tenant_id": tenant_id, "project_id": project_id, "role_id": "director"},
+                )
+                assert import_jobs.status_code == 200
+                assert any(item["import_job_id"] == import_job_id for item in import_jobs.json())
 
                 persona_pack = client.post(
                     "/api/v1/rag/persona-packs",
@@ -895,6 +1065,26 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 )
                 assert patch.status_code == 200
                 assert patch.json()["status"] == "queued"
+                patch_id = patch.json()["patch_id"]
+
+                patch_history = client.get(f"/api/v1/runs/{run_id}/timeline/patches")
+                assert patch_history.status_code == 200
+                assert any(item["patch_id"] == patch_id for item in patch_history.json())
+
+                rollback = client.post(
+                    f"/api/v1/runs/{run_id}/timeline/patches/{patch_id}/rollback",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "requested_by": "test",
+                    },
+                )
+                assert rollback.status_code == 200
+                assert rollback.json()["status"] == "queued"
+                rollback_patch_id = rollback.json()["rollback_patch_id"]
+                patch_history_after = client.get(f"/api/v1/runs/{run_id}/timeline/patches")
+                assert patch_history_after.status_code == 200
+                assert any(item["patch_id"] == rollback_patch_id for item in patch_history_after.json())
 
                 delete_persona = client.delete(
                     f"/api/v1/rag/persona-packs/{persona_pack_id}",

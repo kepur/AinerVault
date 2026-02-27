@@ -120,6 +120,9 @@
       <NSpace>
         <NButton type="warning" :disabled="!shotId || !runId" @click="onPatchTimeline">Patch + Rerun Shot</NButton>
       </NSpace>
+      <NDivider />
+      <NText depth="3">Patch Version History</NText>
+      <NDataTable :columns="patchHistoryColumns" :data="patchHistoryItems" :pagination="{ pageSize: 6 }" />
       <pre class="json-panel">{{ patchResultText }}</pre>
       <pre class="json-panel">{{ timelineText }}</pre>
     </NCard>
@@ -136,6 +139,7 @@ import {
   NButton,
   NCard,
   NDataTable,
+  NDivider,
   NFormItem,
   NGrid,
   NGridItem,
@@ -149,7 +153,10 @@ import {
 
 import {
   getRunTimeline,
+  listRunTimelinePatches,
   patchRunTimeline,
+  rollbackRunTimelinePatch,
+  type TimelinePatchHistoryItem,
   type TimelinePlan,
   updateRunTimeline,
 } from "@/api/product";
@@ -192,6 +199,7 @@ const promptTrackItems = ref<PromptTrackItem[]>([]);
 const originalPromptText = ref("");
 const modifiedPromptText = ref("");
 const patchText = ref("");
+const patchHistoryItems = ref<TimelinePatchHistoryItem[]>([]);
 
 const timelineText = ref("{}");
 const patchResultText = ref("{}");
@@ -221,6 +229,31 @@ const promptColumns: DataTableColumns<PromptTrackItem> = [
     key: "action",
     render: (row) =>
       h(NButton, { size: "small", type: "info", onClick: () => openPatchEditor(row) }, { default: () => "Edit" }),
+  },
+];
+const patchHistoryColumns: DataTableColumns<TimelinePatchHistoryItem> = [
+  { title: "Patch", key: "patch_id" },
+  { title: "Type", key: "patch_type" },
+  { title: "Shot", key: "shot_id" },
+  {
+    title: "Patch Text",
+    key: "patch_text",
+    render: (row) => h("span", { style: "font-size: 12px;" }, String(row.patch_text || "").slice(0, 80)),
+  },
+  {
+    title: "Action",
+    key: "action",
+    render: (row) =>
+      h(
+        NButton,
+        {
+          size: "small",
+          type: "warning",
+          disabled: !runId.value || !row.patch_id,
+          onClick: () => onRollbackPatch(row),
+        },
+        { default: () => "Rollback" }
+      ),
   },
 ];
 
@@ -511,6 +544,7 @@ async function onLoadTimeline(): Promise<void> {
     if (promptTrackItems.value.length > 0) {
       openPatchEditor(promptTrackItems.value[0]);
     }
+    patchHistoryItems.value = await listRunTimelinePatches(runId.value);
   } catch (error) {
     errorMessage.value = `load timeline failed: ${stringifyError(error)}`;
   }
@@ -551,8 +585,29 @@ async function onPatchTimeline(): Promise<void> {
     });
     patchResultText.value = toPrettyJson(result);
     message.value = `patch queued: ${result.job_id}`;
+    patchHistoryItems.value = await listRunTimelinePatches(runId.value);
   } catch (error) {
     errorMessage.value = `patch failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onRollbackPatch(item: TimelinePatchHistoryItem): Promise<void> {
+  clearNotice();
+  if (!runId.value || !item.patch_id) {
+    errorMessage.value = "run_id and patch_id are required";
+    return;
+  }
+  try {
+    const result = await rollbackRunTimelinePatch(runId.value, item.patch_id, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      requested_by: "studio-web",
+    });
+    patchResultText.value = toPrettyJson(result);
+    message.value = `rollback queued: ${result.job_id}`;
+    patchHistoryItems.value = await listRunTimelinePatches(runId.value);
+  } catch (error) {
+    errorMessage.value = `rollback failed: ${stringifyError(error)}`;
   }
 }
 </script>

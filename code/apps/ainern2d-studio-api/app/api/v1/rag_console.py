@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import re
 from uuid import uuid4
 
@@ -9,11 +10,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.enum_models import RagScope, RagSourceType
+from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.governance_models import PersonaPack, PersonaPackVersion
 from ainern2d_shared.ainer_db_models.preview_models import PersonaDatasetBinding, PersonaIndexBinding
 from ainern2d_shared.ainer_db_models.rag_models import KbVersion, RagCollection, RagDocument
 
 from app.api.deps import get_db
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag"])
 
@@ -131,6 +135,303 @@ class PersonaPreviewResponse(BaseModel):
     query: str
     top_k: int
     chunks: list[PersonaPreviewChunk] = Field(default_factory=list)
+
+
+class KnowledgePackBootstrapRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    role_id: str
+    pack_name: str | None = None
+    template_key: str | None = None
+    language_code: str = "zh"
+    default_knowledge_scope: str = "style_rule"
+
+
+class KnowledgePackBootstrapResponse(BaseModel):
+    pack_id: str
+    tenant_id: str
+    project_id: str
+    role_id: str
+    pack_name: str
+    collection_id: str
+    kb_version_id: str
+    scope: str
+    created_documents: int
+    chunk_count: int
+    extracted_terms: list[str] = Field(default_factory=list)
+    updated_at: str | None = None
+
+
+class KnowledgePackItemResponse(BaseModel):
+    pack_id: str
+    tenant_id: str
+    project_id: str
+    role_id: str
+    pack_name: str
+    collection_id: str
+    kb_version_id: str
+    scope: str
+    status: str
+    created_documents: int
+    extracted_terms: list[str] = Field(default_factory=list)
+    updated_at: str | None = None
+
+
+class KnowledgeImportRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    collection_id: str
+    kb_version_id: str | None = None
+    source_format: str = "txt"
+    source_name: str
+    content_text: str
+    role_ids: list[str] = Field(default_factory=list)
+    language_code: str = "zh"
+    scope: str = "chapter"
+
+
+class KnowledgeImportJobResponse(BaseModel):
+    import_job_id: str
+    tenant_id: str
+    project_id: str
+    collection_id: str
+    kb_version_id: str | None = None
+    source_name: str
+    source_format: str
+    status: str
+    created_documents: int
+    deduplicated_documents: int
+    chunk_count: int
+    extracted_terms: list[str] = Field(default_factory=list)
+    affected_roles: list[str] = Field(default_factory=list)
+    knowledge_change_report: dict = Field(default_factory=dict)
+    updated_at: str | None = None
+
+
+def _knowledge_pack_stack_name(pack_id: str) -> str:
+    return f"knowledge_pack:{pack_id}"
+
+
+def _import_job_stack_name(import_job_id: str) -> str:
+    return f"rag_import_job:{import_job_id}"
+
+
+def _upsert_stack(
+    db: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    stack_name: str,
+    payload: dict,
+    trace_prefix: str,
+) -> None:
+    row = db.execute(
+        select(CreativePolicyStack).where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name == stack_name,
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if row is None:
+        row = CreativePolicyStack(
+            id=f"policy_{uuid4().hex}",
+            tenant_id=tenant_id,
+            project_id=project_id,
+            trace_id=f"tr_{trace_prefix}_{uuid4().hex[:12]}",
+            correlation_id=f"cr_{trace_prefix}_{uuid4().hex[:12]}",
+            idempotency_key=f"idem_{trace_prefix}_{uuid4().hex[:8]}",
+            name=stack_name,
+            status="active",
+            stack_json=payload,
+        )
+        db.add(row)
+    else:
+        row.status = "active"
+        row.stack_json = payload
+
+
+def _chunk_text(content: str, chunk_size: int = 480) -> list[str]:
+    paragraphs = [item.strip() for item in re.split(r"\n{2,}", content) if item.strip()]
+    chunks: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= chunk_size:
+            chunks.append(paragraph)
+            continue
+        start = 0
+        while start < len(paragraph):
+            end = min(len(paragraph), start + chunk_size)
+            chunks.append(paragraph[start:end].strip())
+            start = end
+    return [item for item in chunks if item]
+
+
+def _extract_terms(content: str, limit: int = 16) -> list[str]:
+    latin_terms = [item.lower() for item in re.findall(r"[A-Za-z][A-Za-z0-9_\-]{2,30}", content)]
+    cjk_terms = re.findall(r"[\u4e00-\u9fff]{2,6}", content)
+    scores: dict[str, int] = {}
+    for term in latin_terms + cjk_terms:
+        scores[term] = scores.get(term, 0) + 1
+    sorted_items = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return [item[0] for item in sorted_items[:limit]]
+
+
+def _knowledge_template_sections(role_id: str, template_key: str | None) -> list[dict]:
+    role = (role_id or "").strip().lower()
+    template = (template_key or "").strip().lower()
+    if template:
+        role = template
+
+    default_sections = [
+        {
+            "title": "通用制作流程",
+            "content": "输出必须先给结论再给依据，结构化列出风险、假设和下一步，默认返回可执行清单。",
+            "source_type": RagSourceType.policy,
+        },
+        {
+            "title": "质量检查清单",
+            "content": "检查角色一致性、时序连续性、资产命名规范、文化约束冲突、提示词可执行性。",
+            "source_type": RagSourceType.rule,
+        },
+    ]
+    sections_by_role: dict[str, list[dict]] = {
+        "director": [
+            {
+                "title": "导演镜头语法",
+                "content": "镜头设计遵循建立镜头-关系镜头-动作镜头三段式，优先保持人物方位、轴线与情绪曲线一致。",
+                "source_type": RagSourceType.rule,
+            },
+            {
+                "title": "导演输出格式",
+                "content": "输出分镜时必须包含 shot_id、时长、机位、主体、动作、转场与风险注记，支持 patch 重生成。",
+                "source_type": RagSourceType.policy,
+            },
+        ],
+        "script_supervisor": [
+            {
+                "title": "场记连续性规则",
+                "content": "记录每镜服化道状态、台词改动和出入场时间，任何变化必须写入 continuity notes。",
+                "source_type": RagSourceType.rule,
+            },
+        ],
+        "art": [
+            {
+                "title": "美术设定基线",
+                "content": "场景道具需与世界观时间线一致，避免时代错位元素，输出包含材质、色板与风格参考。",
+                "source_type": RagSourceType.rule,
+            },
+        ],
+        "lighting": [
+            {
+                "title": "灯光计划模板",
+                "content": "每镜给出主光/辅光/轮廓光方案，明确色温区间、布光方向与对比度目标。",
+                "source_type": RagSourceType.rule,
+            },
+        ],
+        "stunt": [
+            {
+                "title": "动作分解SOP",
+                "content": "按预备动作-冲突动作-收势动作分解，并标注安全边界、替身需求和慢动作节点。",
+                "source_type": RagSourceType.rule,
+            },
+        ],
+        "translator": [
+            {
+                "title": "翻译术语基准",
+                "content": "先维护术语一致性，再处理语气与语域；输出中保留人名实体映射与文化注释。",
+                "source_type": RagSourceType.rule,
+            },
+        ],
+    }
+    return sections_by_role.get(role, []) + default_sections
+
+
+def _scope_from_text(scope: str) -> RagScope:
+    try:
+        return RagScope(scope)
+    except ValueError:
+        return RagScope.chapter
+
+
+def _source_type_from_format(source_format: str) -> RagSourceType:
+    mapping = {
+        "txt": RagSourceType.note,
+        "text": RagSourceType.note,
+        "md": RagSourceType.note,
+        "markdown": RagSourceType.note,
+        "pdf": RagSourceType.policy,
+        "excel": RagSourceType.rule,
+        "xlsx": RagSourceType.rule,
+        "csv": RagSourceType.rule,
+        "tsv": RagSourceType.rule,
+    }
+    return mapping.get(source_format.strip().lower(), RagSourceType.note)
+
+
+def _normalize_import_content(content_text: str, source_format: str) -> str:
+    fmt = source_format.strip().lower()
+    if fmt in {"excel", "xlsx", "csv", "tsv"}:
+        rows = [item.strip() for item in content_text.splitlines() if item.strip()]
+        rendered_rows: list[str] = []
+        for row in rows:
+            if "\t" in row:
+                cells = [cell.strip() for cell in row.split("\t")]
+            elif "," in row:
+                cells = [cell.strip() for cell in row.split(",")]
+            else:
+                cells = [row]
+            rendered_rows.append(" | ".join([cell for cell in cells if cell]))
+        return "\n".join(rendered_rows)
+    return content_text
+
+
+def _build_knowledge_pack_item(
+    payload: dict,
+    *,
+    pack_id: str,
+    tenant_id: str,
+    project_id: str,
+) -> KnowledgePackItemResponse:
+    return KnowledgePackItemResponse(
+        pack_id=pack_id,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        role_id=str(payload.get("role_id") or ""),
+        pack_name=str(payload.get("pack_name") or ""),
+        collection_id=str(payload.get("collection_id") or ""),
+        kb_version_id=str(payload.get("kb_version_id") or ""),
+        scope=str(payload.get("scope") or "style_rule"),
+        status=str(payload.get("status") or "ready"),
+        created_documents=int(payload.get("created_documents") or 0),
+        extracted_terms=list(payload.get("extracted_terms") or []),
+        updated_at=payload.get("updated_at"),
+    )
+
+
+def _build_import_job_item(
+    payload: dict,
+    *,
+    import_job_id: str,
+    tenant_id: str,
+    project_id: str,
+) -> KnowledgeImportJobResponse:
+    return KnowledgeImportJobResponse(
+        import_job_id=import_job_id,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        collection_id=str(payload.get("collection_id") or ""),
+        kb_version_id=payload.get("kb_version_id"),
+        source_name=str(payload.get("source_name") or ""),
+        source_format=str(payload.get("source_format") or "txt"),
+        status=str(payload.get("status") or "completed"),
+        created_documents=int(payload.get("created_documents") or 0),
+        deduplicated_documents=int(payload.get("deduplicated_documents") or 0),
+        chunk_count=int(payload.get("chunk_count") or 0),
+        extracted_terms=list(payload.get("extracted_terms") or []),
+        affected_roles=list(payload.get("affected_roles") or []),
+        knowledge_change_report=dict(payload.get("knowledge_change_report") or {}),
+        updated_at=payload.get("updated_at"),
+    )
 
 
 @router.post("/collections", response_model=RagCollectionResponse, status_code=201)
@@ -520,6 +821,385 @@ def persona_preview(body: PersonaPreviewRequest, db: Session = Depends(get_db)) 
         top_k=body.top_k,
         chunks=chunks,
     )
+
+
+@router.post("/knowledge-packs/bootstrap", response_model=KnowledgePackBootstrapResponse, status_code=201)
+def bootstrap_knowledge_pack(
+    body: KnowledgePackBootstrapRequest,
+    db: Session = Depends(get_db),
+) -> KnowledgePackBootstrapResponse:
+    role_id = body.role_id.strip().lower()
+    if not role_id:
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: role_id required")
+
+    pack_name = (body.pack_name or f"{role_id}_bootstrap_pack").strip()
+    if not pack_name:
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: pack_name required")
+
+    collection = db.execute(
+        select(RagCollection).where(
+            RagCollection.tenant_id == body.tenant_id,
+            RagCollection.project_id == body.project_id,
+            RagCollection.name == pack_name,
+            RagCollection.language_code == body.language_code,
+            RagCollection.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if collection is None:
+        collection = RagCollection(
+            id=f"rag_collection_{uuid4().hex}",
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            trace_id=f"tr_bootstrap_collection_{uuid4().hex[:12]}",
+            correlation_id=f"cr_bootstrap_collection_{uuid4().hex[:12]}",
+            idempotency_key=f"idem_bootstrap_collection_{pack_name}_{uuid4().hex[:8]}",
+            novel_id=None,
+            name=pack_name,
+            version="v1",
+            language_code=body.language_code,
+            description=f"bootstrap knowledge pack for {role_id}",
+            tags_json=["bootstrap", role_id],
+        )
+        db.add(collection)
+        db.flush()
+
+    kb_version = KbVersion(
+        id=f"kb_version_{uuid4().hex}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=f"tr_bootstrap_kb_{uuid4().hex[:12]}",
+        correlation_id=f"cr_bootstrap_kb_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_bootstrap_kb_{collection.id}_{uuid4().hex[:8]}",
+        collection_id=collection.id,
+        version_name=f"bootstrap_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        status="released",
+        recipe_id=f"bootstrap_{role_id}",
+        embedding_model_profile_id=None,
+        release_note=f"bootstrap knowledge template for {role_id}",
+    )
+    db.add(kb_version)
+    db.flush()
+
+    sections = _knowledge_template_sections(role_id, body.template_key)
+    scope = _scope_from_text(body.default_knowledge_scope)
+    created_documents = 0
+    chunk_count = 0
+    all_text_parts: list[str] = []
+    pack_id = f"kp_{uuid4().hex}"
+    for section in sections:
+        section_title = str(section.get("title") or "knowledge")
+        section_source_type = section.get("source_type") or RagSourceType.rule
+        section_content = str(section.get("content") or "")
+        chunks = _chunk_text(section_content)
+        chunk_count += len(chunks)
+        for idx, chunk in enumerate(chunks):
+            fingerprint = hashlib.sha1(chunk.encode("utf-8")).hexdigest()
+            db.add(
+                RagDocument(
+                    id=f"rag_doc_{uuid4().hex}",
+                    tenant_id=body.tenant_id,
+                    project_id=body.project_id,
+                    trace_id=f"tr_bootstrap_doc_{uuid4().hex[:12]}",
+                    correlation_id=f"cr_bootstrap_doc_{uuid4().hex[:12]}",
+                    idempotency_key=f"idem_bootstrap_doc_{pack_id}_{section_title}_{idx}_{fingerprint[:8]}",
+                    collection_id=collection.id,
+                    kb_version_id=kb_version.id,
+                    novel_id=None,
+                    scope=scope,
+                    source_type=section_source_type,
+                    source_id=pack_id,
+                    language_code=body.language_code,
+                    title=section_title,
+                    content_text=chunk,
+                    metadata_json={
+                        "pack_id": pack_id,
+                        "role_id": role_id,
+                        "template_key": body.template_key or "",
+                        "section_title": section_title,
+                        "chunk_index": idx,
+                        "fingerprint": fingerprint,
+                    },
+                )
+            )
+            created_documents += 1
+            all_text_parts.append(chunk)
+
+    extracted_terms = _extract_terms("\n".join(all_text_parts))
+    updated_at = datetime.now(timezone.utc).isoformat()
+    stack_payload = {
+        "type": "knowledge_pack",
+        "pack_id": pack_id,
+        "role_id": role_id,
+        "pack_name": pack_name,
+        "collection_id": collection.id,
+        "kb_version_id": kb_version.id,
+        "scope": scope.value,
+        "status": "ready",
+        "created_documents": created_documents,
+        "chunk_count": chunk_count,
+        "extracted_terms": extracted_terms,
+        "schema_version": "1.0",
+        "updated_at": updated_at,
+    }
+    _upsert_stack(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        stack_name=_knowledge_pack_stack_name(pack_id),
+        payload=stack_payload,
+        trace_prefix="knowledge_pack",
+    )
+    db.commit()
+
+    return KnowledgePackBootstrapResponse(
+        pack_id=pack_id,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        role_id=role_id,
+        pack_name=pack_name,
+        collection_id=collection.id,
+        kb_version_id=kb_version.id,
+        scope=scope.value,
+        created_documents=created_documents,
+        chunk_count=chunk_count,
+        extracted_terms=extracted_terms,
+        updated_at=updated_at,
+    )
+
+
+@router.get("/knowledge-packs", response_model=list[KnowledgePackItemResponse])
+def list_knowledge_packs(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    role_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[KnowledgePackItemResponse]:
+    rows = db.execute(
+        select(CreativePolicyStack)
+        .where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name.like("knowledge_pack:%"),
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+        .order_by(CreativePolicyStack.created_at.desc())
+    ).scalars().all()
+    result: list[KnowledgePackItemResponse] = []
+    for row in rows:
+        pack_id = row.name.split(":", 1)[1]
+        payload = dict(row.stack_json or {})
+        if role_id and str(payload.get("role_id") or "").strip().lower() != role_id.strip().lower():
+            continue
+        result.append(
+            _build_knowledge_pack_item(
+                payload,
+                pack_id=pack_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
+        )
+    return result
+
+
+@router.post("/import-jobs", response_model=KnowledgeImportJobResponse, status_code=201)
+def create_import_job(
+    body: KnowledgeImportRequest,
+    db: Session = Depends(get_db),
+) -> KnowledgeImportJobResponse:
+    source_name = body.source_name.strip()
+    if not source_name:
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: source_name required")
+    if not body.content_text.strip():
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: content_text required")
+
+    collection = db.execute(
+        select(RagCollection).where(
+            RagCollection.id == body.collection_id,
+            RagCollection.tenant_id == body.tenant_id,
+            RagCollection.project_id == body.project_id,
+            RagCollection.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if collection is None:
+        raise HTTPException(status_code=404, detail="REQ-VALIDATION-001: collection not found")
+
+    kb_version_id = body.kb_version_id
+    kb_version = None
+    if kb_version_id:
+        kb_version = db.execute(
+            select(KbVersion).where(
+                KbVersion.id == kb_version_id,
+                KbVersion.collection_id == body.collection_id,
+                KbVersion.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if kb_version is None:
+            raise HTTPException(status_code=404, detail="REQ-VALIDATION-001: kb_version not found")
+    else:
+        kb_version = db.execute(
+            select(KbVersion)
+            .where(
+                KbVersion.collection_id == body.collection_id,
+                KbVersion.deleted_at.is_(None),
+            )
+            .order_by(KbVersion.created_at.desc())
+        ).scalars().first()
+        if kb_version is not None:
+            kb_version_id = kb_version.id
+
+    normalized_text = _normalize_import_content(body.content_text, body.source_format)
+    chunks = _chunk_text(normalized_text)
+    scope = _scope_from_text(body.scope)
+    source_type = _source_type_from_format(body.source_format)
+    import_job_id = f"import_{uuid4().hex}"
+
+    existing_docs = db.execute(
+        select(RagDocument).where(
+            RagDocument.tenant_id == body.tenant_id,
+            RagDocument.project_id == body.project_id,
+            RagDocument.collection_id == body.collection_id,
+            RagDocument.deleted_at.is_(None),
+        )
+    ).scalars().all()
+    existing_fingerprints = {
+        hashlib.sha1((doc.content_text or "").strip().encode("utf-8")).hexdigest()
+        for doc in existing_docs
+    }
+
+    created_documents = 0
+    deduplicated_documents = 0
+    for idx, chunk in enumerate(chunks):
+        fingerprint = hashlib.sha1(chunk.encode("utf-8")).hexdigest()
+        if fingerprint in existing_fingerprints:
+            deduplicated_documents += 1
+            continue
+        existing_fingerprints.add(fingerprint)
+        db.add(
+            RagDocument(
+                id=f"rag_doc_{uuid4().hex}",
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                trace_id=f"tr_rag_import_{uuid4().hex[:12]}",
+                correlation_id=f"cr_rag_import_{uuid4().hex[:12]}",
+                idempotency_key=f"idem_rag_import_{import_job_id}_{idx}_{fingerprint[:8]}",
+                collection_id=body.collection_id,
+                kb_version_id=kb_version_id,
+                novel_id=collection.novel_id,
+                scope=scope,
+                source_type=source_type,
+                source_id=f"{source_name}:{idx}",
+                language_code=body.language_code,
+                title=source_name,
+                content_text=chunk,
+                metadata_json={
+                    "import_job_id": import_job_id,
+                    "source_format": body.source_format.strip().lower(),
+                    "chunk_index": idx,
+                    "fingerprint": fingerprint,
+                    "role_ids": body.role_ids,
+                },
+            )
+        )
+        created_documents += 1
+
+    extracted_terms = _extract_terms(normalized_text)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    knowledge_change_report = {
+        "added_documents": created_documents,
+        "deduplicated_documents": deduplicated_documents,
+        "total_chunks": len(chunks),
+        "affected_roles": body.role_ids,
+        "source_name": source_name,
+        "source_format": body.source_format.strip().lower(),
+        "new_terms": extracted_terms,
+    }
+    stack_payload = {
+        "type": "rag_import_job",
+        "import_job_id": import_job_id,
+        "collection_id": body.collection_id,
+        "kb_version_id": kb_version_id,
+        "source_name": source_name,
+        "source_format": body.source_format.strip().lower(),
+        "status": "completed",
+        "created_documents": created_documents,
+        "deduplicated_documents": deduplicated_documents,
+        "chunk_count": len(chunks),
+        "extracted_terms": extracted_terms,
+        "affected_roles": body.role_ids,
+        "knowledge_change_report": knowledge_change_report,
+        "schema_version": "1.0",
+        "updated_at": updated_at,
+    }
+    _upsert_stack(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        stack_name=_import_job_stack_name(import_job_id),
+        payload=stack_payload,
+        trace_prefix="rag_import_job",
+    )
+    db.commit()
+    response = _build_import_job_item(
+        stack_payload,
+        import_job_id=import_job_id,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+    )
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="rag.embedding.completed",
+        summary="RAG import completed",
+        extra={
+            "import_job_id": import_job_id,
+            "collection_id": body.collection_id,
+            "kb_version_id": kb_version_id,
+            "source_name": source_name,
+            "source_format": body.source_format.strip().lower(),
+            "created_documents": response.created_documents,
+            "deduplicated_documents": response.deduplicated_documents,
+            "chunk_count": response.chunk_count,
+        },
+    )
+    return response
+
+
+@router.get("/import-jobs", response_model=list[KnowledgeImportJobResponse])
+def list_import_jobs(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    role_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[KnowledgeImportJobResponse]:
+    rows = db.execute(
+        select(CreativePolicyStack)
+        .where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name.like("rag_import_job:%"),
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+        .order_by(CreativePolicyStack.created_at.desc())
+    ).scalars().all()
+    result: list[KnowledgeImportJobResponse] = []
+    role_filter = role_id.strip().lower() if role_id else None
+    for row in rows:
+        import_job_id = row.name.split(":", 1)[1]
+        payload = dict(row.stack_json or {})
+        if role_filter:
+            affected_roles = [str(item).strip().lower() for item in list(payload.get("affected_roles") or [])]
+            if role_filter not in affected_roles:
+                continue
+        result.append(
+            _build_import_job_item(
+                payload,
+                import_job_id=import_job_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
+        )
+    return result
 
 
 @router.delete("/collections/{collection_id}")

@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib
+import json
+import re
 from time import perf_counter
+from typing import Any, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from langgraph.graph import END, StateGraph
 
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.provider_models import ModelProfile, ModelProvider
+from ainern2d_shared.services.base_skill import SkillContext
 
 from app.api.deps import get_db
+from app.services.skill_registry import SkillRegistry
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/api/v1/config", tags=["config"])
+_BOOTSTRAP_WS_CLIENTS: dict[str, set[WebSocket]] = {}
 
 
 class ProviderUpsertRequest(BaseModel):
@@ -201,6 +210,34 @@ class RoleStudioResolveResponse(BaseModel):
     skill_profile: SkillRegistryResponse
 
 
+class RoleStudioRunSkillRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    role_id: str
+    skill_id: str
+    input_payload: dict = Field(default_factory=dict)
+    context: dict = Field(default_factory=dict)
+    run_id: str | None = None
+    trace_id: str | None = None
+    correlation_id: str | None = None
+    idempotency_key: str | None = None
+    schema_version: str = "1.0"
+
+
+class RoleStudioRunSkillResponse(BaseModel):
+    tenant_id: str
+    project_id: str
+    role_id: str
+    skill_id: str
+    run_id: str
+    execution_mode: str
+    status: str
+    resolved_model_profile: dict = Field(default_factory=dict)
+    resolved_knowledge_scopes: list[str] = Field(default_factory=list)
+    output: dict = Field(default_factory=dict)
+    logs: list[dict] = Field(default_factory=list)
+
+
 class StageRoutingRequest(BaseModel):
     tenant_id: str
     project_id: str
@@ -311,7 +348,20 @@ class TelegramSettingsRequest(BaseModel):
     thread_id: str | None = None
     parse_mode: str = "Markdown"
     notify_events: list[str] = Field(
-        default_factory=lambda: ["run.failed", "run.succeeded", "job.failed"]
+        default_factory=lambda: [
+            "run.failed",
+            "run.succeeded",
+            "job.failed",
+            "job.created",
+            "task.submitted",
+            "bootstrap.started",
+            "bootstrap.completed",
+            "bootstrap.failed",
+            "role.skill.run.completed",
+            "role.skill.run.failed",
+            "plan.prompt.generated",
+            "rag.embedding.completed",
+        ]
     )
     schema_version: str = "1.0"
 
@@ -327,6 +377,74 @@ class TelegramSettingsResponse(BaseModel):
     notify_events: list[str] = Field(default_factory=list)
     schema_version: str = "1.0"
     updated_at: str | None = None
+
+
+class TelegramSettingsTestRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    message_text: str | None = None
+    bot_token: str | None = None
+    chat_id: str | None = None
+    thread_id: str | None = None
+    parse_mode: str | None = None
+    timeout_ms: int = 5000
+
+
+class TelegramSettingsTestResponse(BaseModel):
+    delivered: bool
+    status_code: int | None = None
+    latency_ms: int | None = None
+    message: str
+    telegram_ok: bool | None = None
+
+
+class BootstrapDefaultsRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    seed_mode: str = "llm_template"
+    model_profile_id: str | None = None
+    role_ids: list[str] = Field(default_factory=list)
+    enrich_rounds: int = Field(default=2, ge=1, le=6)
+    session_id: str | None = None
+    include_roles: bool = True
+    include_skills: bool = True
+    include_routes: bool = True
+    include_language_settings: bool = True
+    include_stage_routing: bool = True
+
+
+class BootstrapDefaultsResponse(BaseModel):
+    tenant_id: str
+    project_id: str
+    seed_mode: str
+    roles_upserted: int
+    skills_upserted: int
+    routes_upserted: int
+    language_settings_applied: bool
+    stage_routing_applied: bool
+    summary: dict = Field(default_factory=dict)
+
+
+class BootstrapGraphState(TypedDict):
+    tenant_id: str
+    project_id: str
+    seed_mode: str
+    session_id: str | None
+    default_model_profile: str | None
+    enrich_rounds: int
+    include_roles: bool
+    include_skills: bool
+    include_routes: bool
+    include_language_settings: bool
+    include_stage_routing: bool
+    role_templates: list[dict[str, Any]]
+    skills_templates: list[dict[str, Any]]
+    route_templates: list[dict[str, Any]]
+    roles_upserted: int
+    skills_upserted: int
+    routes_upserted: int
+    language_settings_applied: bool
+    stage_routing_applied: bool
 
 
 def _mask_secret(secret: str | None) -> str | None:
@@ -346,7 +464,20 @@ def _default_telegram_settings(tenant_id: str, project_id: str) -> TelegramSetti
         chat_id=None,
         thread_id=None,
         parse_mode="Markdown",
-        notify_events=["run.failed", "run.succeeded", "job.failed"],
+        notify_events=[
+            "run.failed",
+            "run.succeeded",
+            "job.failed",
+            "job.created",
+            "task.submitted",
+            "bootstrap.started",
+            "bootstrap.completed",
+            "bootstrap.failed",
+            "role.skill.run.completed",
+            "role.skill.run.failed",
+            "plan.prompt.generated",
+            "rag.embedding.completed",
+        ],
         schema_version="1.0",
         updated_at=None,
     )
@@ -1137,6 +1268,299 @@ def _build_feature_route_response(
     )
 
 
+def _resolve_role_and_skill_profiles(
+    db: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    role_id: str,
+    skill_id: str,
+) -> tuple[RoleProfileResponse, SkillRegistryResponse, dict, list[str], list[FeatureRouteMapResponse]]:
+    role_payload = _load_config_stack_payload(
+        db,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        stack_name=_config_stack_name(_ROLE_PROFILE_PREFIX, role_id),
+    )
+    if role_payload is None:
+        raise HTTPException(status_code=404, detail="role profile not found")
+    skill_payload = _load_config_stack_payload(
+        db,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        stack_name=_config_stack_name(_SKILL_REGISTRY_PREFIX, skill_id),
+    )
+    if skill_payload is None:
+        raise HTTPException(status_code=404, detail="skill profile not found")
+
+    role_profile = _build_role_profile_response(
+        role_payload,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        role_id=role_id,
+    )
+    skill_profile = _build_skill_registry_response(
+        skill_payload,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        skill_id=skill_id,
+    )
+
+    model_profile_id = skill_profile.default_model_profile or role_profile.default_model_profile
+    resolved_model_profile: dict = {}
+    if model_profile_id:
+        model_row = db.get(ModelProfile, model_profile_id)
+        if model_row is not None and model_row.deleted_at is None:
+            resolved_model_profile = _build_model_profile_response(model_row).model_dump(mode="json")
+
+    resolved_scopes: list[str] = []
+    for scope in role_profile.default_knowledge_scopes + skill_profile.required_knowledge_scopes:
+        if scope and scope not in resolved_scopes:
+            resolved_scopes.append(scope)
+
+    route_rows = _list_config_stacks(
+        db,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        prefix=_FEATURE_ROUTE_MAP_PREFIX,
+    )
+    visible_routes: list[FeatureRouteMapResponse] = []
+    for row in route_rows:
+        item_route_id = row.name.split(":", 1)[1]
+        payload = dict(row.stack_json or {})
+        allowed_roles = list(payload.get("allowed_roles") or [])
+        if allowed_roles and role_id not in allowed_roles:
+            continue
+        visible_routes.append(
+            _build_feature_route_response(
+                payload,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                route_id=item_route_id,
+            )
+        )
+
+    return role_profile, skill_profile, resolved_model_profile, resolved_scopes, visible_routes
+
+
+def _to_skill_input_dto(skill_id: str, payload: dict):
+    match = skill_id.strip().lower()
+    pattern = r"^skill_(\d{2})$"
+
+    token_match = re.match(pattern, match)
+    if token_match is None:
+        return payload
+    skill_token = token_match.group(1)
+    module_path = f"ainern2d_shared.schemas.skills.skill_{skill_token}"
+    class_name = f"Skill{skill_token}Input"
+    try:
+        module = importlib.import_module(module_path)
+    except Exception:
+        return payload
+    input_cls = getattr(module, class_name, None)
+    if input_cls is None or not hasattr(input_cls, "model_validate"):
+        return payload
+    return input_cls.model_validate(payload)
+
+
+def _extract_skill_logs(result: object) -> list[dict]:
+    logs: list[dict] = []
+    event_envelopes = getattr(result, "event_envelopes", None)
+    if event_envelopes:
+        for item in event_envelopes:
+            if hasattr(item, "model_dump"):
+                logs.append(item.model_dump(mode="json"))
+            elif isinstance(item, dict):
+                logs.append(item)
+    events = getattr(result, "events_emitted", None)
+    if events:
+        for event_name in list(events):
+            logs.append({"event_type": str(event_name)})
+    return logs
+
+
+def _llm_template_roles() -> list[dict]:
+    return [
+        {
+            "role_id": "director",
+            "prompt_style": "以导演视角输出镜头决策，先结论后依据，结构化列风险与下一步。",
+            "default_skills": ["skill_03", "skill_10", "shot_planner", "dialogue_director"],
+            "default_knowledge_scopes": ["director_basic", "project_novel", "culture_constraints"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": True,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+        {
+            "role_id": "script_supervisor",
+            "prompt_style": "以场记视角追踪连续性，输出差异点与修复建议。",
+            "default_skills": ["continuity_checker", "asset_consistency_review"],
+            "default_knowledge_scopes": ["continuity_rules", "project_novel"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": False,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+        {
+            "role_id": "art",
+            "prompt_style": "以美术总监视角输出场景/道具/色板规范。",
+            "default_skills": ["art_style_guide", "prop_norms_check"],
+            "default_knowledge_scopes": ["art_direction", "culture_constraints"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": False,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+        {
+            "role_id": "lighting",
+            "prompt_style": "以灯光指导视角输出布光方案、色温范围与风险。",
+            "default_skills": ["lighting_setup", "mood_lighting_balance"],
+            "default_knowledge_scopes": ["lighting_baseline", "scene_constraints"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": False,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+        {
+            "role_id": "stunt",
+            "prompt_style": "以武术指导视角拆分动作节奏并标记安全边界。",
+            "default_skills": ["stunt_breakdown", "action_safety_review"],
+            "default_knowledge_scopes": ["stunt_sop", "safety_rules"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": False,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+        {
+            "role_id": "translator",
+            "prompt_style": "以本地化译者视角保证术语一致与语气一致。",
+            "default_skills": ["translator_zh_en", "subtitle_localization"],
+            "default_knowledge_scopes": ["translation_glossary", "culture_constraints"],
+            "permissions": {
+                "can_import_data": True,
+                "can_publish_task": False,
+                "can_edit_global_knowledge": False,
+                "can_manage_model_router": False,
+            },
+        },
+    ]
+
+
+def _llm_template_skills() -> list[dict]:
+    return [
+        {
+            "skill_id": "shot_planner",
+            "input_schema": {"type": "object", "properties": {"chapter_id": {"type": "string"}}},
+            "output_schema": {"type": "object", "properties": {"shot_plan": {"type": "array"}}},
+            "required_knowledge_scopes": ["director_basic", "visual_grammar"],
+            "tools_required": ["search", "embedding"],
+            "ui_renderer": "timeline",
+            "init_template": "director_bootstrap_v1",
+        },
+        {
+            "skill_id": "translator_zh_en",
+            "input_schema": {"type": "object", "properties": {"markdown": {"type": "string"}}},
+            "output_schema": {"type": "object", "properties": {"translated_markdown": {"type": "string"}}},
+            "required_knowledge_scopes": ["translation_glossary", "culture_constraints"],
+            "tools_required": ["search"],
+            "ui_renderer": "form",
+            "init_template": "translator_bootstrap_v1",
+        },
+        {
+            "skill_id": "lighting_setup",
+            "input_schema": {"type": "object", "properties": {"scene_id": {"type": "string"}}},
+            "output_schema": {"type": "object", "properties": {"lighting_plan": {"type": "array"}}},
+            "required_knowledge_scopes": ["lighting_baseline"],
+            "tools_required": ["search"],
+            "ui_renderer": "table",
+            "init_template": "lighting_bootstrap_v1",
+        },
+    ]
+
+
+def _llm_template_routes() -> list[dict]:
+    return [
+        {
+            "route_id": "route_novel_chapter_workspace",
+            "path": "/studio/chapters",
+            "component": "StudioChapterManagerPage",
+            "feature_id": "chapter_workspace",
+            "allowed_roles": ["director", "script_supervisor", "translator"],
+            "ui_mode": "editor",
+            "depends_on": ["rag", "embedding"],
+        },
+        {
+            "route_id": "route_role_studio",
+            "path": "/studio/roles",
+            "component": "StudioRoleStudioPage",
+            "feature_id": "role_studio",
+            "allowed_roles": ["admin", "director"],
+            "ui_mode": "config",
+            "depends_on": ["rag", "embedding", "worker_hub"],
+        },
+        {
+            "route_id": "route_timeline_patch",
+            "path": "/studio/timeline",
+            "component": "StudioTimelinePatchPage",
+            "feature_id": "timeline_patch",
+            "allowed_roles": ["director", "editor", "script_supervisor"],
+            "ui_mode": "timeline",
+            "depends_on": ["worker_hub", "minio"],
+        },
+    ]
+
+
+def _enrich_role_template(role_template: dict, round_index: int) -> dict:
+    role_id = str(role_template.get("role_id") or "")
+    enriched = dict(role_template)
+    scopes = list(enriched.get("default_knowledge_scopes") or [])
+    skills = list(enriched.get("default_skills") or [])
+    scope_token = f"{role_id}_insight_round_{round_index}"
+    skill_token = f"{role_id}_workstep_round_{round_index}"
+    if scope_token not in scopes:
+        scopes.append(scope_token)
+    if skill_token not in skills:
+        skills.append(skill_token)
+    enriched["default_knowledge_scopes"] = scopes
+    enriched["default_skills"] = skills
+    base_prompt = str(enriched.get("prompt_style") or "")
+    enriched["prompt_style"] = (
+        f"{base_prompt} | Round {round_index}: 继续补充行业细则、例外处理和复核清单。"
+    ).strip()
+    return enriched
+
+
+async def _broadcast_bootstrap_event(session_id: str | None, payload: dict) -> None:
+    sid = (session_id or "").strip()
+    if not sid:
+        return
+    clients = _BOOTSTRAP_WS_CLIENTS.get(sid)
+    if not clients:
+        return
+    dead_clients: list[WebSocket] = []
+    message = dict(payload)
+    message.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    for ws in list(clients):
+        try:
+            await ws.send_json(message)
+        except Exception:
+            dead_clients.append(ws)
+    for dead in dead_clients:
+        clients.discard(dead)
+    if not clients:
+        _BOOTSTRAP_WS_CLIENTS.pop(sid, None)
+
+
 @router.put("/role-profiles/{role_id}", response_model=RoleProfileResponse)
 def upsert_role_profile(
     role_id: str,
@@ -1420,69 +1844,13 @@ def resolve_role_studio_runtime(
     body: RoleStudioResolveRequest,
     db: Session = Depends(get_db),
 ) -> RoleStudioResolveResponse:
-    role_payload = _load_config_stack_payload(
+    role_profile, skill_profile, resolved_model_profile, resolved_scopes, visible_routes = _resolve_role_and_skill_profiles(
         db,
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
-        stack_name=_config_stack_name(_ROLE_PROFILE_PREFIX, body.role_id),
-    )
-    if role_payload is None:
-        raise HTTPException(status_code=404, detail="role profile not found")
-    skill_payload = _load_config_stack_payload(
-        db,
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
-        stack_name=_config_stack_name(_SKILL_REGISTRY_PREFIX, body.skill_id),
-    )
-    if skill_payload is None:
-        raise HTTPException(status_code=404, detail="skill profile not found")
-
-    role_profile = _build_role_profile_response(
-        role_payload,
         tenant_id=body.tenant_id,
         project_id=body.project_id,
         role_id=body.role_id,
-    )
-    skill_profile = _build_skill_registry_response(
-        skill_payload,
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
         skill_id=body.skill_id,
     )
-
-    model_profile_id = skill_profile.default_model_profile or role_profile.default_model_profile
-    resolved_model_profile: dict = {}
-    if model_profile_id:
-        model_row = db.get(ModelProfile, model_profile_id)
-        if model_row is not None and model_row.deleted_at is None:
-            resolved_model_profile = _build_model_profile_response(model_row).model_dump(mode="json")
-
-    resolved_scopes: list[str] = []
-    for scope in role_profile.default_knowledge_scopes + skill_profile.required_knowledge_scopes:
-        if scope and scope not in resolved_scopes:
-            resolved_scopes.append(scope)
-
-    route_rows = _list_config_stacks(
-        db,
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
-        prefix=_FEATURE_ROUTE_MAP_PREFIX,
-    )
-    visible_routes: list[FeatureRouteMapResponse] = []
-    for row in route_rows:
-        item_route_id = row.name.split(":", 1)[1]
-        payload = dict(row.stack_json or {})
-        allowed_roles = list(payload.get("allowed_roles") or [])
-        if allowed_roles and body.role_id not in allowed_roles:
-            continue
-        visible_routes.append(
-            _build_feature_route_response(
-                payload,
-                tenant_id=body.tenant_id,
-                project_id=body.project_id,
-                route_id=item_route_id,
-            )
-        )
 
     return RoleStudioResolveResponse(
         tenant_id=body.tenant_id,
@@ -1495,6 +1863,134 @@ def resolve_role_studio_runtime(
         role_profile=role_profile,
         skill_profile=skill_profile,
     )
+
+
+@router.post("/role-studio/run-skill", response_model=RoleStudioRunSkillResponse)
+def run_role_studio_skill(
+    body: RoleStudioRunSkillRequest,
+    db: Session = Depends(get_db),
+) -> RoleStudioRunSkillResponse:
+    role_profile, skill_profile, resolved_model_profile, resolved_scopes, _ = _resolve_role_and_skill_profiles(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        role_id=body.role_id,
+        skill_id=body.skill_id,
+    )
+    run_id = body.run_id or f"run_role_studio_{uuid4().hex[:12]}"
+    trace_id = body.trace_id or f"tr_role_skill_{uuid4().hex[:12]}"
+    correlation_id = body.correlation_id or f"cr_role_skill_{uuid4().hex[:12]}"
+    idempotency_key = body.idempotency_key or f"idem_role_skill_{body.skill_id}_{uuid4().hex[:8]}"
+    try:
+        if SkillRegistry.is_registered(body.skill_id):
+            ctx = SkillContext(
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                correlation_id=correlation_id,
+                idempotency_key=idempotency_key,
+                schema_version=body.schema_version,
+                extra={
+                    "role_id": role_profile.role_id,
+                    "resolved_model_profile": resolved_model_profile,
+                    "resolved_knowledge_scopes": resolved_scopes,
+                    "runtime_context": body.context,
+                },
+            )
+            input_dto = _to_skill_input_dto(body.skill_id, dict(body.input_payload or {}))
+            result = SkillRegistry(db).dispatch(body.skill_id, input_dto, ctx)
+            if hasattr(result, "model_dump"):
+                output = result.model_dump(mode="json")
+            elif isinstance(result, dict):
+                output = result
+            else:
+                output = {"result": str(result)}
+            logs = _extract_skill_logs(result)
+            status = str(getattr(result, "status", "completed"))
+            response = RoleStudioRunSkillResponse(
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                role_id=body.role_id,
+                skill_id=body.skill_id,
+                run_id=run_id,
+                execution_mode="skill_registry",
+                status=status,
+                resolved_model_profile=resolved_model_profile,
+                resolved_knowledge_scopes=resolved_scopes,
+                output=output,
+                logs=logs,
+            )
+        else:
+            output = {
+                "message": "skill not registered in backend registry; fallback to configuration simulation",
+                "input_echo": body.input_payload,
+                "resolved_model_profile": resolved_model_profile,
+                "resolved_knowledge_scopes": resolved_scopes,
+                "role_prompt_style": role_profile.prompt_style,
+                "ui_renderer": skill_profile.ui_renderer,
+                "tools_required": skill_profile.tools_required,
+            }
+            logs = [
+                {
+                    "event_type": "role.skill.simulated",
+                    "producer": "role_studio",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    "details": {
+                        "role_id": body.role_id,
+                        "skill_id": body.skill_id,
+                        "reason": "skill_not_registered",
+                    },
+                }
+            ]
+            response = RoleStudioRunSkillResponse(
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                role_id=body.role_id,
+                skill_id=body.skill_id,
+                run_id=run_id,
+                execution_mode="simulated",
+                status="simulated",
+                resolved_model_profile=resolved_model_profile,
+                resolved_knowledge_scopes=resolved_scopes,
+                output=output,
+                logs=logs,
+            )
+
+        notify_telegram_event(
+            db=db,
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            event_type="role.skill.run.completed",
+            summary="Role skill run completed",
+            run_id=run_id,
+            trace_id=trace_id,
+            correlation_id=correlation_id,
+            extra={
+                "role_id": body.role_id,
+                "skill_id": body.skill_id,
+                "status": response.status,
+                "execution_mode": response.execution_mode,
+            },
+        )
+        return response
+    except Exception as exc:
+        notify_telegram_event(
+            db=db,
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            event_type="role.skill.run.failed",
+            summary="Role skill run failed",
+            run_id=run_id,
+            trace_id=trace_id,
+            correlation_id=correlation_id,
+            extra={
+                "role_id": body.role_id,
+                "skill_id": body.skill_id,
+                "error": str(exc),
+            },
+        )
+        raise
 
 
 def _default_language_settings(tenant_id: str, project_id: str) -> LanguageSettingsResponse:
@@ -1710,6 +2206,495 @@ def get_telegram_settings(
         schema_version=payload.get("schema_version") or "1.0",
         updated_at=payload.get("updated_at"),
     )
+
+
+@router.post("/telegram-settings/test", response_model=TelegramSettingsTestResponse)
+def test_telegram_settings(
+    body: TelegramSettingsTestRequest,
+    db: Session = Depends(get_db),
+) -> TelegramSettingsTestResponse:
+    row = db.execute(
+        select(CreativePolicyStack).where(
+            CreativePolicyStack.tenant_id == body.tenant_id,
+            CreativePolicyStack.project_id == body.project_id,
+            CreativePolicyStack.name == "telegram_notify_default",
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    payload = dict(row.stack_json or {}) if row is not None else {}
+
+    bot_token = (body.bot_token or payload.get("bot_token") or "").strip()
+    chat_id = (body.chat_id or payload.get("chat_id") or "").strip()
+    thread_id = (body.thread_id or payload.get("thread_id") or "").strip()
+    parse_mode = (body.parse_mode or payload.get("parse_mode") or "Markdown").strip()
+    if not bot_token:
+        return TelegramSettingsTestResponse(
+            delivered=False,
+            status_code=None,
+            latency_ms=0,
+            message="missing bot token",
+            telegram_ok=None,
+        )
+    if not chat_id:
+        return TelegramSettingsTestResponse(
+            delivered=False,
+            status_code=None,
+            latency_ms=0,
+            message="missing chat id",
+            telegram_ok=None,
+        )
+
+    text = (body.message_text or "").strip() or (
+        f"[Ainer Studio] Telegram test at {datetime.now(timezone.utc).isoformat()} (tenant={body.tenant_id}, project={body.project_id})"
+    )
+    req_payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": parse_mode,
+        "disable_web_page_preview": True,
+    }
+    if thread_id:
+        req_payload["message_thread_id"] = thread_id
+
+    request = Request(
+        url=f"https://api.telegram.org/bot{bot_token}/sendMessage",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        data=json.dumps(req_payload).encode("utf-8"),
+    )
+    timeout_seconds = max(0.5, min(20.0, body.timeout_ms / 1000.0))
+    started = perf_counter()
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            latency = int((perf_counter() - started) * 1000)
+            status_code = int(getattr(response, "status", 0) or 0)
+            parsed = {}
+            try:
+                parsed = json.loads(response.read().decode("utf-8") or "{}")
+            except Exception:
+                parsed = {}
+            telegram_ok = bool(parsed.get("ok", 200 <= status_code < 300))
+            return TelegramSettingsTestResponse(
+                delivered=(200 <= status_code < 300) and telegram_ok,
+                status_code=status_code,
+                latency_ms=latency,
+                message="delivered" if telegram_ok else "telegram api returned not-ok",
+                telegram_ok=telegram_ok,
+            )
+    except HTTPError as exc:
+        latency = int((perf_counter() - started) * 1000)
+        return TelegramSettingsTestResponse(
+            delivered=False,
+            status_code=exc.code,
+            latency_ms=latency,
+            message=f"http_error:{exc.code}",
+            telegram_ok=False,
+        )
+    except URLError as exc:
+        latency = int((perf_counter() - started) * 1000)
+        return TelegramSettingsTestResponse(
+            delivered=False,
+            status_code=None,
+            latency_ms=latency,
+            message=f"network_error:{exc.reason}",
+            telegram_ok=False,
+        )
+    except Exception as exc:  # pragma: no cover
+        latency = int((perf_counter() - started) * 1000)
+        return TelegramSettingsTestResponse(
+            delivered=False,
+            status_code=None,
+            latency_ms=latency,
+            message=f"probe_error:{str(exc)}",
+            telegram_ok=False,
+        )
+
+
+@router.post("/bootstrap-defaults", response_model=BootstrapDefaultsResponse)
+async def bootstrap_defaults(
+    body: BootstrapDefaultsRequest,
+    db: Session = Depends(get_db),
+) -> BootstrapDefaultsResponse:
+    target_role_ids = {item.strip().lower() for item in body.role_ids if item.strip()}
+    role_templates = _llm_template_roles()
+    if target_role_ids:
+        role_templates = [
+            item for item in role_templates if str(item.get("role_id") or "").strip().lower() in target_role_ids
+        ]
+    if body.include_roles and not role_templates:
+        raise HTTPException(status_code=400, detail="no matching role templates for role_ids")
+
+    skills_templates = _llm_template_skills()
+    route_templates = _llm_template_routes()
+    await _broadcast_bootstrap_event(
+        body.session_id,
+        {
+            "event": "bootstrap.started",
+            "seed_mode": body.seed_mode,
+            "role_count": len(role_templates),
+            "enrich_rounds": body.enrich_rounds,
+            "model_profile_id": body.model_profile_id,
+            "engine": "langgraph",
+        },
+    )
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="bootstrap.started",
+        summary="Bootstrap started",
+        extra={
+            "seed_mode": body.seed_mode,
+            "role_count": len(role_templates),
+            "enrich_rounds": body.enrich_rounds,
+        },
+    )
+
+    initial_state: BootstrapGraphState = {
+        "tenant_id": body.tenant_id,
+        "project_id": body.project_id,
+        "seed_mode": body.seed_mode,
+        "session_id": body.session_id,
+        "default_model_profile": body.model_profile_id,
+        "enrich_rounds": body.enrich_rounds,
+        "include_roles": body.include_roles,
+        "include_skills": body.include_skills,
+        "include_routes": body.include_routes,
+        "include_language_settings": body.include_language_settings,
+        "include_stage_routing": body.include_stage_routing,
+        "role_templates": role_templates,
+        "skills_templates": skills_templates,
+        "route_templates": route_templates,
+        "roles_upserted": 0,
+        "skills_upserted": 0,
+        "routes_upserted": 0,
+        "language_settings_applied": False,
+        "stage_routing_applied": False,
+    }
+
+    async def _resolve_model_profile_node(state: BootstrapGraphState) -> dict[str, Any]:
+        default_model_profile = state.get("default_model_profile")
+        if default_model_profile:
+            profile_row = db.execute(
+                select(ModelProfile).where(
+                    ModelProfile.id == default_model_profile,
+                    ModelProfile.tenant_id == state["tenant_id"],
+                    ModelProfile.project_id == state["project_id"],
+                    ModelProfile.deleted_at.is_(None),
+                )
+            ).scalars().first()
+            if profile_row is None:
+                raise HTTPException(status_code=404, detail="model profile not found")
+            return {"default_model_profile": profile_row.id}
+        default_profile = db.execute(
+            select(ModelProfile).where(
+                ModelProfile.tenant_id == state["tenant_id"],
+                ModelProfile.project_id == state["project_id"],
+                ModelProfile.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if default_profile is None:
+            return {"default_model_profile": None}
+        return {"default_model_profile": default_profile.id}
+
+    async def _seed_roles_node(state: BootstrapGraphState) -> dict[str, Any]:
+        if not bool(state.get("include_roles", False)):
+            return {}
+        count = int(state.get("roles_upserted") or 0)
+        for template in list(state.get("role_templates") or []):
+            enriched_template = dict(template)
+            for round_index in range(1, int(state.get("enrich_rounds") or 1) + 1):
+                enriched_template = _enrich_role_template(enriched_template, round_index)
+                await _broadcast_bootstrap_event(
+                    state.get("session_id"),
+                    {
+                        "event": "bootstrap.role.enriching",
+                        "role_id": enriched_template["role_id"],
+                        "round": round_index,
+                    },
+                )
+            role_id = str(template["role_id"])
+            role_payload = {
+                "type": "role_profile",
+                "role_id": role_id,
+                "prompt_style": enriched_template["prompt_style"],
+                "default_skills": list(enriched_template.get("default_skills") or []),
+                "default_knowledge_scopes": list(enriched_template.get("default_knowledge_scopes") or []),
+                "default_model_profile": state.get("default_model_profile"),
+                "permissions": dict(enriched_template.get("permissions") or {}),
+                "enabled": True,
+                "schema_version": "1.0",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _upsert_config_stack(
+                db,
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                stack_name=_config_stack_name(_ROLE_PROFILE_PREFIX, role_id),
+                payload=role_payload,
+                trace_prefix="bootstrap_role",
+            )
+            count += 1
+            await _broadcast_bootstrap_event(
+                state.get("session_id"),
+                {
+                    "event": "bootstrap.role.inserted",
+                    "role_id": role_id,
+                    "default_skills": role_payload["default_skills"],
+                    "default_knowledge_scopes": role_payload["default_knowledge_scopes"],
+                },
+            )
+        return {"roles_upserted": count}
+
+    async def _seed_skills_node(state: BootstrapGraphState) -> dict[str, Any]:
+        if not bool(state.get("include_skills", False)):
+            return {}
+        count = int(state.get("skills_upserted") or 0)
+        for template in list(state.get("skills_templates") or []):
+            skill_id = str(template["skill_id"])
+            skill_payload = {
+                "type": "skill_registry",
+                "skill_id": skill_id,
+                "input_schema": dict(template.get("input_schema") or {}),
+                "output_schema": dict(template.get("output_schema") or {}),
+                "required_knowledge_scopes": list(template.get("required_knowledge_scopes") or []),
+                "default_model_profile": state.get("default_model_profile"),
+                "tools_required": list(template.get("tools_required") or []),
+                "ui_renderer": str(template.get("ui_renderer") or "form"),
+                "init_template": template.get("init_template"),
+                "enabled": True,
+                "schema_version": "1.0",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _upsert_config_stack(
+                db,
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                stack_name=_config_stack_name(_SKILL_REGISTRY_PREFIX, skill_id),
+                payload=skill_payload,
+                trace_prefix="bootstrap_skill",
+            )
+            count += 1
+            await _broadcast_bootstrap_event(
+                state.get("session_id"),
+                {
+                    "event": "bootstrap.skill.inserted",
+                    "skill_id": skill_id,
+                    "ui_renderer": skill_payload["ui_renderer"],
+                },
+            )
+        return {"skills_upserted": count}
+
+    async def _seed_routes_node(state: BootstrapGraphState) -> dict[str, Any]:
+        if not bool(state.get("include_routes", False)):
+            return {}
+        count = int(state.get("routes_upserted") or 0)
+        for template in list(state.get("route_templates") or []):
+            route_id = str(template["route_id"])
+            route_payload = {
+                "type": "feature_route_map",
+                "route_id": route_id,
+                "path": str(template["path"]),
+                "component": str(template["component"]),
+                "feature_id": str(template["feature_id"]),
+                "allowed_roles": list(template.get("allowed_roles") or []),
+                "ui_mode": str(template.get("ui_mode") or "list"),
+                "depends_on": list(template.get("depends_on") or []),
+                "enabled": True,
+                "schema_version": "1.0",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _upsert_config_stack(
+                db,
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                stack_name=_config_stack_name(_FEATURE_ROUTE_MAP_PREFIX, route_id),
+                payload=route_payload,
+                trace_prefix="bootstrap_route",
+            )
+            count += 1
+            await _broadcast_bootstrap_event(
+                state.get("session_id"),
+                {
+                    "event": "bootstrap.route.inserted",
+                    "route_id": route_id,
+                    "path": route_payload["path"],
+                },
+            )
+        return {"routes_upserted": count}
+
+    async def _apply_language_node(state: BootstrapGraphState) -> dict[str, Any]:
+        if not bool(state.get("include_language_settings", False)):
+            return {"language_settings_applied": False}
+        defaults = _default_language_settings(tenant_id=state["tenant_id"], project_id=state["project_id"])
+        _upsert_config_stack(
+            db,
+            tenant_id=state["tenant_id"],
+            project_id=state["project_id"],
+            stack_name="language_policy_default",
+            payload={
+                "type": "language_settings",
+                "default_source_language": defaults.default_source_language,
+                "default_target_languages": defaults.default_target_languages,
+                "enabled_languages": [item.model_dump(mode="json") for item in defaults.enabled_languages],
+                "translation_notes": "bootstrap llm template",
+                "glossary": {},
+                "schema_version": "1.0",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            trace_prefix="bootstrap_language",
+        )
+        await _broadcast_bootstrap_event(
+            state.get("session_id"),
+            {"event": "bootstrap.language.applied"},
+        )
+        return {"language_settings_applied": True}
+
+    async def _apply_stage_routing_node(state: BootstrapGraphState) -> dict[str, Any]:
+        if not bool(state.get("include_stage_routing", False)):
+            return {"stage_routing_applied": False}
+        _upsert_config_stack(
+            db,
+            tenant_id=state["tenant_id"],
+            project_id=state["project_id"],
+            stack_name="stage_router_policy_default",
+            payload={
+                "type": "stage_routing",
+                "routes": {
+                    "skill_01": "text_generation",
+                    "skill_03": "text_generation",
+                    "skill_10": "text_generation",
+                    "skill_12": "embedding",
+                    "skill_16": "critic",
+                },
+                "fallback_chain": {
+                    "text_generation": ["planner_fallback"],
+                    "embedding": ["embedding_fallback"],
+                },
+                "feature_routes": {
+                    "text_generation": state.get("default_model_profile") or "",
+                    "embedding": state.get("default_model_profile") or "",
+                },
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            trace_prefix="bootstrap_routing",
+        )
+        await _broadcast_bootstrap_event(
+            state.get("session_id"),
+            {"event": "bootstrap.routing.applied"},
+        )
+        return {"stage_routing_applied": True}
+
+    graph = StateGraph(BootstrapGraphState)
+    graph.add_node("resolve_model_profile", _resolve_model_profile_node)
+    graph.add_node("seed_roles", _seed_roles_node)
+    graph.add_node("seed_skills", _seed_skills_node)
+    graph.add_node("seed_routes", _seed_routes_node)
+    graph.add_node("apply_language", _apply_language_node)
+    graph.add_node("apply_stage_routing", _apply_stage_routing_node)
+    graph.set_entry_point("resolve_model_profile")
+    graph.add_edge("resolve_model_profile", "seed_roles")
+    graph.add_edge("seed_roles", "seed_skills")
+    graph.add_edge("seed_skills", "seed_routes")
+    graph.add_edge("seed_routes", "apply_language")
+    graph.add_edge("apply_language", "apply_stage_routing")
+    graph.add_edge("apply_stage_routing", END)
+
+    try:
+        final_state = await graph.compile().ainvoke(initial_state)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        await _broadcast_bootstrap_event(
+            body.session_id,
+            {
+                "event": "bootstrap.failed",
+                "error": str(exc),
+            },
+        )
+        notify_telegram_event(
+            db=db,
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            event_type="bootstrap.failed",
+            summary="Bootstrap failed",
+            extra={"error": str(exc)},
+        )
+        raise
+
+    summary = {
+        "seed_mode": body.seed_mode,
+        "default_model_profile": final_state.get("default_model_profile"),
+        "roles_seeded": [item["role_id"] for item in role_templates] if body.include_roles else [],
+        "skills_seeded": [item["skill_id"] for item in skills_templates] if body.include_skills else [],
+        "routes_seeded": [item["route_id"] for item in route_templates] if body.include_routes else [],
+        "enrich_rounds": body.enrich_rounds,
+        "orchestration_engine": "langgraph_stategraph",
+    }
+    await _broadcast_bootstrap_event(
+        body.session_id,
+        {
+            "event": "bootstrap.completed",
+            "roles_upserted": int(final_state.get("roles_upserted") or 0),
+            "skills_upserted": int(final_state.get("skills_upserted") or 0),
+            "routes_upserted": int(final_state.get("routes_upserted") or 0),
+            "summary": summary,
+        },
+    )
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="bootstrap.completed",
+        summary="Bootstrap completed",
+        extra={
+            "roles_upserted": int(final_state.get("roles_upserted") or 0),
+            "skills_upserted": int(final_state.get("skills_upserted") or 0),
+            "routes_upserted": int(final_state.get("routes_upserted") or 0),
+            "engine": "langgraph_stategraph",
+        },
+    )
+    return BootstrapDefaultsResponse(
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        seed_mode=body.seed_mode,
+        roles_upserted=int(final_state.get("roles_upserted") or 0),
+        skills_upserted=int(final_state.get("skills_upserted") or 0),
+        routes_upserted=int(final_state.get("routes_upserted") or 0),
+        language_settings_applied=bool(final_state.get("language_settings_applied")),
+        stage_routing_applied=bool(final_state.get("stage_routing_applied")),
+        summary=summary,
+    )
+
+
+@router.websocket("/ws/bootstrap/{session_id}")
+async def bootstrap_progress_ws(websocket: WebSocket, session_id: str) -> None:
+    await websocket.accept()
+    sid = session_id.strip()
+    if not sid:
+        await websocket.send_json({"event": "error", "message": "missing session id"})
+        await websocket.close()
+        return
+    clients = _BOOTSTRAP_WS_CLIENTS.setdefault(sid, set())
+    clients.add(websocket)
+    await websocket.send_json({"event": "ws.connected", "session_id": sid})
+    try:
+        while True:
+            # keepalive/read loop; client may send ping
+            msg = await websocket.receive_text()
+            if msg.strip().lower() == "ping":
+                await websocket.send_json({"event": "ws.pong", "session_id": sid})
+    except WebSocketDisconnect:
+        clients.discard(websocket)
+        if not clients:
+            _BOOTSTRAP_WS_CLIENTS.pop(sid, None)
+    except Exception:
+        clients.discard(websocket)
+        if not clients:
+            _BOOTSTRAP_WS_CLIENTS.pop(sid, None)
 
 
 @router.get("/health", response_model=ConfigHealthResponse)

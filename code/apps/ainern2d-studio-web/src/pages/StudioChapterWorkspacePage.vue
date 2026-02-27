@@ -1,130 +1,76 @@
 <template>
   <div class="chapter-workbench">
-    <NCard title="SKILL 24 · Novel / Chapter Workspace" class="toolbar-card">
+    <NCard title="SKILL 24 · 章节工作区（Chapter Workspace）">
       <NGrid :cols="4" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
-        <NGridItem span="0:4 900:1">
-          <NFormItem label="Tenant ID"><NInput v-model:value="tenantId" /></NFormItem>
-        </NGridItem>
-        <NGridItem span="0:4 900:1">
-          <NFormItem label="Project ID"><NInput v-model:value="projectId" /></NFormItem>
-        </NGridItem>
-        <NGridItem span="0:4 900:1">
-          <NFormItem label="Output Language"><NSelect v-model:value="targetLanguage" :options="languageOptions" filterable /></NFormItem>
-        </NGridItem>
-        <NGridItem span="0:4 900:1">
-          <NSpace>
-            <NButton @click="onLoadLanguagePolicy">加载语言策略</NButton>
-            <NButton @click="onListNovels">刷新小说</NButton>
-            <NButton v-if="selectedNovelId" @click="onListChapters">刷新章节</NButton>
-          </NSpace>
-        </NGridItem>
+        <NGridItem span="0:4 900:1"><NFormItem label="Tenant ID"><NInput v-model:value="tenantId" /></NFormItem></NGridItem>
+        <NGridItem span="0:4 900:1"><NFormItem label="Project ID"><NInput v-model:value="projectId" /></NFormItem></NGridItem>
+        <NGridItem span="0:4 900:1"><NFormItem label="小说"><NSelect v-model:value="selectedNovelId" :options="novelOptions" filterable @update:value="onNovelChanged" /></NFormItem></NGridItem>
+        <NGridItem span="0:4 900:1"><NFormItem label="Output Language"><NSelect v-model:value="targetLanguage" :options="languageOptions" filterable /></NFormItem></NGridItem>
       </NGrid>
       <NSpace>
-        <NTag type="info" :bordered="false">Novel: {{ selectedNovelTitle || "(未选择)" }}</NTag>
-        <NTag type="warning" :bordered="false">Chapter: {{ selectedChapterTitle || "(未选择)" }}</NTag>
+        <NButton @click="onLoadLanguagePolicy">语言策略</NButton>
+        <NButton @click="onLoadNovels">刷新小说</NButton>
+        <NButton v-if="selectedNovelId" @click="onListChapters">刷新章节</NButton>
+        <NButton @click="goNovelLibrary">返回小说库</NButton>
       </NSpace>
     </NCard>
 
-    <NGrid :cols="24" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
-      <NGridItem span="0:24 1200:6">
-        <NCard title="小说列表" class="panel-card">
-          <NSpace justify="space-between" align="center">
-            <NInput v-model:value="novelKeyword" placeholder="按小说名过滤" />
-            <NButton type="primary" @click="showNovelCreate = !showNovelCreate">新建小说</NButton>
+    <NCard v-if="!selectedNovelId" title="章节列表">
+      <NEmpty description="未选择小说，请先从小说库选择。" />
+    </NCard>
+
+    <template v-else>
+      <NCard :title="`章节列表 · ${selectedNovelTitle}`">
+        <NSpace justify="space-between" align="center">
+          <NInput v-model:value="chapterKeyword" placeholder="按章节标题或编号过滤" />
+          <NButton type="primary" @click="showCreate = !showCreate">新建章节</NButton>
+        </NSpace>
+
+        <div v-if="showCreate" class="inline-form">
+          <NGrid :cols="3" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+            <NGridItem span="0:3 900:1"><NFormItem label="Chapter No"><NInputNumber v-model:value="newChapterNo" :min="1" style="width: 100%" /></NFormItem></NGridItem>
+            <NGridItem span="0:3 900:1"><NFormItem label="Language"><NSelect v-model:value="newChapterLang" :options="languageOptions" filterable /></NFormItem></NGridItem>
+            <NGridItem span="0:3 900:1"><NFormItem label="Title"><NInput v-model:value="newChapterTitle" /></NFormItem></NGridItem>
+          </NGrid>
+          <NFormItem label="Markdown"><NInput v-model:value="newChapterMarkdown" type="textarea" :autosize="{ minRows: 8, maxRows: 12 }" /></NFormItem>
+          <NSpace>
+            <NButton type="primary" @click="onCreateChapter">创建并编辑</NButton>
+            <NButton @click="showCreate = false">收起</NButton>
           </NSpace>
+        </div>
 
-          <div v-if="showNovelCreate" class="inline-form">
-            <NFormItem label="Title"><NInput v-model:value="novelTitle" /></NFormItem>
-            <NFormItem label="Default Language"><NInput v-model:value="novelLang" /></NFormItem>
-            <NFormItem label="Summary">
-              <NInput v-model:value="novelSummary" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" />
-            </NFormItem>
-            <NSpace>
-              <NButton type="primary" @click="onCreateNovel">创建</NButton>
-              <NButton @click="showNovelCreate = false">收起</NButton>
-            </NSpace>
+        <NDataTable :columns="chapterColumns" :data="filteredChapters" :pagination="{ pageSize: 12 }" />
+      </NCard>
+
+      <NCard v-if="selectedChapterId" :title="`编辑章节 · ${selectedChapterTitle}`" class="editor-card">
+        <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+          <NGridItem span="0:2 900:1"><NFormItem label="Language"><NSelect v-model:value="editChapterLang" :options="languageOptions" filterable /></NFormItem></NGridItem>
+          <NGridItem span="0:2 900:1"><NFormItem label="Title"><NInput v-model:value="editChapterTitle" /></NFormItem></NGridItem>
+        </NGrid>
+
+        <NSpace>
+          <NButton type="warning" @click="onUpdateChapter">保存</NButton>
+          <NButton type="info" @click="onPreview(selectedChapterId)">预览 01~03</NButton>
+          <NButton @click="onLoadRevisions(selectedChapterId)">修订历史</NButton>
+          <NButton type="primary" @click="onAssistExpandChapter">一键 AI 扩写剧情</NButton>
+        </NSpace>
+
+        <div class="editor-split">
+          <div class="editor-pane">
+            <NFormItem label="Markdown 编辑"><NInput v-model:value="editChapterMarkdown" type="textarea" :autosize="{ minRows: 30, maxRows: 60 }" /></NFormItem>
           </div>
+          <div class="preview-pane">
+            <div class="markdown-preview" v-html="markdownPreviewHtml" />
+          </div>
+        </div>
 
-          <NDataTable :columns="novelColumns" :data="filteredNovels" :pagination="{ pageSize: 10 }" />
-        </NCard>
-      </NGridItem>
-
-      <NGridItem span="0:24 1200:18">
-        <NCard v-if="!selectedNovelId" title="章节管理" class="panel-card">
-          <NEmpty description="请先在左侧选择小说，再显示章节列表和编辑工作区。" />
-        </NCard>
-
-        <template v-else>
-          <NCard :title="`章节列表 · ${selectedNovelTitle}`" class="panel-card">
-            <NSpace justify="space-between" align="center">
-              <NInput v-model:value="chapterKeyword" placeholder="按章节名或编号过滤" />
-              <NSpace>
-                <NButton @click="onListChapters">刷新</NButton>
-                <NButton type="primary" @click="showChapterCreate = !showChapterCreate">新建章节</NButton>
-              </NSpace>
-            </NSpace>
-
-            <div v-if="showChapterCreate" class="inline-form">
-              <NGrid :cols="3" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-                <NGridItem span="0:3 900:1">
-                  <NFormItem label="Chapter No"><NInputNumber v-model:value="newChapterNo" :min="1" style="width: 100%" /></NFormItem>
-                </NGridItem>
-                <NGridItem span="0:3 900:1">
-                  <NFormItem label="Language"><NSelect v-model:value="newChapterLang" :options="languageOptions" filterable /></NFormItem>
-                </NGridItem>
-                <NGridItem span="0:3 900:1"><NFormItem label="Title"><NInput v-model:value="newChapterTitle" /></NFormItem></NGridItem>
-              </NGrid>
-              <NFormItem label="Markdown">
-                <NInput v-model:value="newChapterMarkdown" type="textarea" :autosize="{ minRows: 8, maxRows: 14 }" />
-              </NFormItem>
-              <NSpace>
-                <NButton type="primary" @click="onCreateChapter">创建并进入编辑</NButton>
-                <NButton @click="showChapterCreate = false">收起</NButton>
-              </NSpace>
-            </div>
-
-            <NDataTable :columns="chapterColumns" :data="filteredChapters" :pagination="{ pageSize: 12 }" />
-          </NCard>
-
-          <NCard v-if="selectedChapterId" :title="`章节编辑器 · ${selectedChapterTitle}`" class="panel-card editor-card">
-            <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-              <NGridItem span="0:2 900:1"><NFormItem label="Language"><NSelect v-model:value="editChapterLang" :options="languageOptions" filterable /></NFormItem></NGridItem>
-              <NGridItem span="0:2 900:1"><NFormItem label="Title"><NInput v-model:value="editChapterTitle" /></NFormItem></NGridItem>
-            </NGrid>
-
-            <NSpace>
-              <NButton type="warning" @click="onUpdateChapter">保存章节</NButton>
-              <NButton type="info" @click="onPreview(selectedChapterId)">预览 01~03</NButton>
-              <NButton @click="onLoadRevisions(selectedChapterId)">修订历史</NButton>
-              <NButton type="primary" @click="onAssistExpandChapter">一键 AI 扩写剧情</NButton>
-            </NSpace>
-
-            <div class="editor-split">
-              <div class="editor-pane">
-                <NFormItem label="Markdown 编辑区">
-                  <NInput v-model:value="editChapterMarkdown" type="textarea" :autosize="{ minRows: 30, maxRows: 60 }" />
-                </NFormItem>
-              </div>
-              <div class="preview-pane">
-                <div class="markdown-preview" v-html="markdownPreviewHtml" />
-              </div>
-            </div>
-
-            <NTabs type="line" animated>
-              <NTabPane name="preview" tab="预览结果 01~03">
-                <pre class="json-panel">{{ previewText }}</pre>
-              </NTabPane>
-              <NTabPane name="revisions" tab="修订历史">
-                <pre class="json-panel">{{ revisionsText }}</pre>
-              </NTabPane>
-              <NTabPane name="assistant" tab="AI 扩写日志">
-                <pre class="json-panel">{{ assistText }}</pre>
-              </NTabPane>
-            </NTabs>
-          </NCard>
-        </template>
-      </NGridItem>
-    </NGrid>
+        <NTabs type="line" animated>
+          <NTabPane name="preview" tab="预览结果"><pre class="json-panel">{{ previewText }}</pre></NTabPane>
+          <NTabPane name="revision" tab="修订历史"><pre class="json-panel">{{ revisionsText }}</pre></NTabPane>
+          <NTabPane name="assistant" tab="AI 扩写日志"><pre class="json-panel">{{ assistText }}</pre></NTabPane>
+        </NTabs>
+      </NCard>
+    </template>
 
     <NAlert v-if="message" type="success" :show-icon="true">{{ message }}</NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
@@ -133,6 +79,7 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   NAlert,
   NButton,
@@ -148,57 +95,51 @@ import {
   NSpace,
   NTabPane,
   NTabs,
-  NTag,
   type DataTableColumns,
 } from "naive-ui";
 
 import {
-  type ChapterResponse,
-  type NovelResponse,
   assistExpandChapter,
   createChapter,
-  createNovel,
   getLanguageSettings,
   listChapterRevisions,
   listChapters,
   listNovels,
   previewChapterPlan,
   updateChapter,
+  type ChapterResponse,
+  type NovelResponse,
 } from "@/api/product";
+
+const STORAGE_KEY = "studio_selected_novel_id";
 
 interface SelectOption {
   label: string;
   value: string;
 }
 
+const route = useRoute();
+const router = useRouter();
 const tenantId = ref("default");
 const projectId = ref("default");
+const targetLanguage = ref("en-US");
+const novels = ref<NovelResponse[]>([]);
+const selectedNovelId = ref("");
+const chapters = ref<ChapterResponse[]>([]);
 
 const languageOptions = ref<SelectOption[]>([
   { label: "简体中文 (zh-CN)", value: "zh-CN" },
   { label: "English (en-US)", value: "en-US" },
   { label: "日本語 (ja-JP)", value: "ja-JP" },
 ]);
-const targetLanguage = ref("en-US");
 
-const showNovelCreate = ref(false);
-const showChapterCreate = ref(false);
-
-const novelKeyword = ref("");
 const chapterKeyword = ref("");
-
-const novelTitle = ref("demo novel");
-const novelSummary = ref("novel summary");
-const novelLang = ref("zh-CN");
-const novels = ref<NovelResponse[]>([]);
-const selectedNovelId = ref("");
-
+const showCreate = ref(false);
 const newChapterNo = ref<number | null>(1);
 const newChapterLang = ref("zh-CN");
 const newChapterTitle = ref("chapter-1");
 const newChapterMarkdown = ref("章节内容");
 
-const chapters = ref<ChapterResponse[]>([]);
 const selectedChapterId = ref("");
 const editChapterLang = ref("zh-CN");
 const editChapterTitle = ref("");
@@ -207,17 +148,12 @@ const editChapterMarkdown = ref("");
 const previewText = ref("{}");
 const revisionsText = ref("[]");
 const assistText = ref("{}");
-
 const message = ref("");
 const errorMessage = ref("");
 
-const filteredNovels = computed(() => {
-  const keyword = novelKeyword.value.trim().toLowerCase();
-  if (!keyword) {
-    return novels.value;
-  }
-  return novels.value.filter((item) => item.title.toLowerCase().includes(keyword));
-});
+const novelOptions = computed(() => novels.value.map((item) => ({ label: item.title, value: item.id })));
+
+const selectedNovelTitle = computed(() => novels.value.find((item) => item.id === selectedNovelId.value)?.title || "");
 
 const filteredChapters = computed(() => {
   const keyword = chapterKeyword.value.trim().toLowerCase();
@@ -230,10 +166,6 @@ const filteredChapters = computed(() => {
   });
 });
 
-const selectedNovelTitle = computed(() =>
-  novels.value.find((item) => item.id === selectedNovelId.value)?.title || ""
-);
-
 const selectedChapterTitle = computed(() => {
   const chapter = chapters.value.find((item) => item.id === selectedChapterId.value);
   if (!chapter) {
@@ -243,17 +175,6 @@ const selectedChapterTitle = computed(() => {
 });
 
 const markdownPreviewHtml = computed(() => renderMarkdownToHtml(editChapterMarkdown.value));
-
-const novelColumns: DataTableColumns<NovelResponse> = [
-  { title: "Title", key: "title" },
-  { title: "Lang", key: "default_language_code", width: 100 },
-  {
-    title: "Action",
-    key: "actions",
-    width: 100,
-    render: (row) => h(NButton, { size: "small", onClick: () => onSelectNovel(row.id) }, { default: () => "选择" }),
-  },
-];
 
 const chapterColumns: DataTableColumns<ChapterResponse> = [
   { title: "No", key: "chapter_no", width: 70 },
@@ -274,13 +195,13 @@ const chapterColumns: DataTableColumns<ChapterResponse> = [
   },
 ];
 
-function stringifyError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function clearNotice(): void {
   message.value = "";
   errorMessage.value = "";
+}
+
+function stringifyError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function toPrettyJson(value: unknown): string {
@@ -358,8 +279,12 @@ function syncEditorFromChapter(chapter: ChapterResponse): void {
 function resetChapterCreateForm(): void {
   newChapterNo.value = (chapters.value[chapters.value.length - 1]?.chapter_no || 0) + 1;
   newChapterTitle.value = `chapter-${newChapterNo.value ?? 1}`;
+  newChapterLang.value = editChapterLang.value || newChapterLang.value;
   newChapterMarkdown.value = "章节内容";
-  newChapterLang.value = novelLang.value;
+}
+
+function goNovelLibrary(): void {
+  void router.push({ name: "studio-novels" });
 }
 
 async function onLoadLanguagePolicy(): Promise<void> {
@@ -373,35 +298,14 @@ async function onLoadLanguagePolicy(): Promise<void> {
       languageOptions.value = options;
     }
     targetLanguage.value = settings.default_target_languages[0] || targetLanguage.value;
-    novelLang.value = settings.default_source_language;
-    newChapterLang.value = settings.default_source_language;
     editChapterLang.value = settings.default_source_language;
-    message.value = "language settings loaded";
+    newChapterLang.value = settings.default_source_language;
   } catch (error) {
     errorMessage.value = `load language settings failed: ${stringifyError(error)}`;
   }
 }
 
-async function onCreateNovel(): Promise<void> {
-  clearNotice();
-  try {
-    const novel = await createNovel({
-      tenant_id: tenantId.value,
-      project_id: projectId.value,
-      title: novelTitle.value,
-      summary: novelSummary.value,
-      default_language_code: novelLang.value,
-    });
-    await onListNovels();
-    onSelectNovel(novel.id);
-    showNovelCreate.value = false;
-    message.value = `novel created: ${novel.id}`;
-  } catch (error) {
-    errorMessage.value = `create novel failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onListNovels(): Promise<void> {
+async function onLoadNovels(): Promise<void> {
   clearNotice();
   try {
     novels.value = await listNovels(tenantId.value, projectId.value);
@@ -411,45 +315,16 @@ async function onListNovels(): Promise<void> {
       selectedChapterId.value = "";
     }
   } catch (error) {
-    errorMessage.value = `list novels failed: ${stringifyError(error)}`;
+    errorMessage.value = `load novels failed: ${stringifyError(error)}`;
   }
 }
 
-function onSelectNovel(novelId: string): void {
+async function onNovelChanged(novelId: string): Promise<void> {
   selectedNovelId.value = novelId;
+  localStorage.setItem(STORAGE_KEY, novelId);
   selectedChapterId.value = "";
-  editChapterTitle.value = "";
   editChapterMarkdown.value = "";
-  showChapterCreate.value = false;
-  void onListChapters();
-}
-
-async function onCreateChapter(): Promise<void> {
-  clearNotice();
-  if (!selectedNovelId.value || newChapterNo.value === null) {
-    errorMessage.value = "select novel and chapter no first";
-    return;
-  }
-  try {
-    const chapter = await createChapter(selectedNovelId.value, {
-      tenant_id: tenantId.value,
-      project_id: projectId.value,
-      chapter_no: newChapterNo.value,
-      language_code: newChapterLang.value,
-      title: newChapterTitle.value,
-      markdown_text: newChapterMarkdown.value,
-    });
-    await onListChapters();
-    const created = chapters.value.find((item) => item.id === chapter.id);
-    if (created) {
-      syncEditorFromChapter(created);
-    }
-    resetChapterCreateForm();
-    showChapterCreate.value = false;
-    message.value = `chapter created: ${chapter.id}`;
-  } catch (error) {
-    errorMessage.value = `create chapter failed: ${stringifyError(error)}`;
-  }
+  await onListChapters();
 }
 
 async function onListChapters(): Promise<void> {
@@ -463,6 +338,33 @@ async function onListChapters(): Promise<void> {
     resetChapterCreateForm();
   } catch (error) {
     errorMessage.value = `list chapters failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onCreateChapter(): Promise<void> {
+  clearNotice();
+  if (!selectedNovelId.value || newChapterNo.value === null) {
+    errorMessage.value = "select novel and chapter no first";
+    return;
+  }
+  try {
+    const created = await createChapter(selectedNovelId.value, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      chapter_no: newChapterNo.value,
+      language_code: newChapterLang.value,
+      title: newChapterTitle.value,
+      markdown_text: newChapterMarkdown.value,
+    });
+    await onListChapters();
+    const chapter = chapters.value.find((item) => item.id === created.id);
+    if (chapter) {
+      syncEditorFromChapter(chapter);
+    }
+    showCreate.value = false;
+    message.value = `chapter created: ${created.id}`;
+  } catch (error) {
+    errorMessage.value = `create chapter failed: ${stringifyError(error)}`;
   }
 }
 
@@ -481,7 +383,7 @@ async function onUpdateChapter(): Promise<void> {
       title: editChapterTitle.value,
       language_code: editChapterLang.value,
       markdown_text: editChapterMarkdown.value,
-      revision_note: "studio edit",
+      revision_note: "workspace edit",
     });
     await onListChapters();
     const current = chapters.value.find((item) => item.id === selectedChapterId.value);
@@ -527,7 +429,6 @@ async function onPreview(chapterId: string): Promise<void> {
       target_locale: targetLanguage.value,
     });
     previewText.value = toPrettyJson(preview);
-    message.value = "preview generated";
   } catch (error) {
     errorMessage.value = `preview failed: ${stringifyError(error)}`;
   }
@@ -547,8 +448,15 @@ async function onLoadRevisions(chapterId = selectedChapterId.value): Promise<voi
 }
 
 onMounted(() => {
+  const queryNovelId = String(route.query.novelId || "").trim();
+  const storedNovelId = localStorage.getItem(STORAGE_KEY) || "";
+  selectedNovelId.value = queryNovelId || storedNovelId;
   void onLoadLanguagePolicy();
-  void onListNovels();
+  void onLoadNovels().then(() => {
+    if (selectedNovelId.value) {
+      void onListChapters();
+    }
+  });
 });
 </script>
 
@@ -559,13 +467,8 @@ onMounted(() => {
   gap: 12px;
 }
 
-.toolbar-card,
-.panel-card {
-  border-radius: 10px;
-}
-
 .inline-form {
-  margin: 12px 0;
+  margin-top: 10px;
   padding: 10px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -583,15 +486,10 @@ onMounted(() => {
   grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr);
 }
 
-.editor-pane,
-.preview-pane {
-  min-height: 560px;
-}
-
 .preview-pane {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: #ffffff;
+  background: #fff;
   padding: 12px;
   overflow: auto;
 }

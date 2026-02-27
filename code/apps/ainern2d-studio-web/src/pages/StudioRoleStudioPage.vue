@@ -1,6 +1,6 @@
 <template>
   <div class="page-grid">
-    <NCard title="Roles · Role Studio Foundation (P0/P1)">
+    <NCard title="Role Workbench">
       <NGrid :cols="3" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
         <NGridItem span="0:3 900:1">
           <NFormItem label="Tenant ID"><NInput v-model:value="tenantId" /></NFormItem>
@@ -9,98 +9,98 @@
           <NFormItem label="Project ID"><NInput v-model:value="projectId" /></NFormItem>
         </NGridItem>
         <NGridItem span="0:3 900:1">
-          <NFormItem label="Keyword"><NInput v-model:value="keyword" placeholder="filter" /></NFormItem>
+          <NFormItem label="Keyword"><NInput v-model:value="keyword" placeholder="role/skill keyword" /></NFormItem>
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="primary" @click="onReloadAll">刷新全部</NButton>
+        <NButton type="primary" @click="onReloadRuntimeData">刷新工作台数据</NButton>
       </NSpace>
     </NCard>
 
-    <NGrid :cols="2" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
-      <NGridItem span="0:2 1200:1">
-        <NCard title="Role Profiles">
-          <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-            <NGridItem span="0:2 900:1"><NFormItem label="Role ID"><NInput v-model:value="roleId" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Default Model Profile"><NSelect v-model:value="roleDefaultModelProfile" :options="modelProfileOptions" clearable filterable /></NFormItem></NGridItem>
-          </NGrid>
-          <NFormItem label="Prompt Style"><NInput v-model:value="rolePromptStyle" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" /></NFormItem>
-          <NFormItem label="Default Skills CSV"><NInput v-model:value="roleDefaultSkillsCsv" placeholder="shot_planner,translator_zh_en" /></NFormItem>
-          <NFormItem label="Default Knowledge Scopes CSV"><NInput v-model:value="roleKnowledgeScopesCsv" placeholder="director_basic,project_novel" /></NFormItem>
-          <NGrid :cols="4" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-            <NGridItem span="0:4 900:1"><NFormItem label="Import"><NSwitch v-model:value="permImport" /></NFormItem></NGridItem>
-            <NGridItem span="0:4 900:1"><NFormItem label="Publish"><NSwitch v-model:value="permPublish" /></NFormItem></NGridItem>
-            <NGridItem span="0:4 900:1"><NFormItem label="Global KB"><NSwitch v-model:value="permEditGlobalKb" /></NFormItem></NGridItem>
-            <NGridItem span="0:4 900:1"><NFormItem label="Model Router"><NSwitch v-model:value="permManageRouter" /></NFormItem></NGridItem>
-          </NGrid>
-          <NSpace>
-            <NButton type="primary" @click="onUpsertRole">保存 Role</NButton>
-            <NButton type="error" :disabled="!roleId" @click="onDeleteRole(roleId)">删除 Role</NButton>
-          </NSpace>
-          <NDataTable :columns="roleColumns" :data="roleProfiles" :pagination="{ pageSize: 6 }" />
-        </NCard>
-      </NGridItem>
+    <NCard title="Role Runtime Resolve">
+      <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 900:1">
+          <NFormItem label="Role">
+            <NSelect v-model:value="resolveRoleId" :options="roleSelectOptions" filterable clearable />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 900:1">
+          <NFormItem label="Skill">
+            <NSelect v-model:value="resolveSkillId" :options="skillSelectOptions" filterable clearable />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NSpace>
+        <NButton type="info" :disabled="!resolveRoleId || !resolveSkillId" @click="onResolveRuntime">解析运行时上下文</NButton>
+      </NSpace>
+      <pre class="json-panel">{{ resolveText }}</pre>
+    </NCard>
 
-      <NGridItem span="0:2 1200:1">
-        <NCard title="Skill Registry">
-          <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-            <NGridItem span="0:2 900:1"><NFormItem label="Skill ID"><NInput v-model:value="skillId" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="UI Renderer"><NInput v-model:value="skillUiRenderer" placeholder="form/table/timeline" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Default Model Profile"><NSelect v-model:value="skillDefaultModelProfile" :options="modelProfileOptions" clearable filterable /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Tools CSV"><NInput v-model:value="skillToolsCsv" placeholder="embedding,search,tts" /></NFormItem></NGridItem>
-          </NGrid>
-          <NFormItem label="Required Knowledge Scopes CSV"><NInput v-model:value="skillKnowledgeScopesCsv" /></NFormItem>
-          <NFormItem label="Input Schema JSON"><NInput v-model:value="skillInputSchemaText" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" /></NFormItem>
-          <NFormItem label="Output Schema JSON"><NInput v-model:value="skillOutputSchemaText" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" /></NFormItem>
-          <NFormItem label="Init Template"><NInput v-model:value="skillInitTemplate" /></NFormItem>
-          <NSpace>
-            <NButton type="primary" @click="onUpsertSkill">保存 Skill</NButton>
-            <NButton type="error" :disabled="!skillId" @click="onDeleteSkill(skillId)">删除 Skill</NButton>
-          </NSpace>
-          <NDataTable :columns="skillColumns" :data="skillRegistryItems" :pagination="{ pageSize: 6 }" />
-        </NCard>
-      </NGridItem>
+    <NCard title="Skill Runner">
+      <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 900:1">
+          <NFormItem label="Input Payload JSON">
+            <NInput v-model:value="runInputText" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 900:1">
+          <NFormItem label="Context JSON">
+            <NInput v-model:value="runContextText" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NSpace>
+        <NButton type="primary" :disabled="!resolveRoleId || !resolveSkillId" @click="onRunSkill">执行 Skill</NButton>
+      </NSpace>
+      <div>{{ runExecutionSummary }}</div>
+      <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 1200:1">
+          <NFormItem label="Output">
+            <NInput :value="runResultText" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }" readonly />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 1200:1">
+          <NFormItem label="Logs / Change Report">
+            <NInput :value="runLogText" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }" readonly />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+    </NCard>
 
-      <NGridItem span="0:2 1200:1">
-        <NCard title="Feature Route Map">
-          <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-            <NGridItem span="0:2 900:1"><NFormItem label="Route ID"><NInput v-model:value="routeId" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Path"><NInput v-model:value="routePath" placeholder="/studio/xxx" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Component"><NInput v-model:value="routeComponent" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Feature ID"><NInput v-model:value="routeFeatureId" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="UI Mode"><NInput v-model:value="routeUiMode" placeholder="list/edit/timeline/config" /></NFormItem></NGridItem>
-            <NGridItem span="0:2 900:1"><NFormItem label="Depends On CSV"><NInput v-model:value="routeDependsOnCsv" placeholder="rag,embedding,minio" /></NFormItem></NGridItem>
-          </NGrid>
-          <NFormItem label="Allowed Roles CSV"><NInput v-model:value="routeAllowedRolesCsv" placeholder="director,translator" /></NFormItem>
-          <NSpace>
-            <NButton type="primary" @click="onUpsertRoute">保存 Route</NButton>
-            <NButton type="error" :disabled="!routeId" @click="onDeleteRoute(routeId)">删除 Route</NButton>
-          </NSpace>
-          <NDataTable :columns="routeColumns" :data="featureRoutes" :pagination="{ pageSize: 6 }" />
-        </NCard>
-      </NGridItem>
+    <NCard title="Knowledge Bootstrapping + Import Center">
+      <NGrid :cols="3" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:3 900:1"><NFormItem label="Bootstrap Role"><NInput v-model:value="bootstrapRoleId" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Pack Name"><NInput v-model:value="bootstrapPackName" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Template Key"><NInput v-model:value="bootstrapTemplateKey" placeholder="director / translator / lighting" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Language"><NInput v-model:value="bootstrapLanguageCode" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Scope"><NInput v-model:value="bootstrapScope" /></NFormItem></NGridItem>
+      </NGrid>
+      <NSpace>
+        <NButton type="primary" @click="onBootstrapKnowledgePack">初始化角色知识包</NButton>
+      </NSpace>
+      <NDataTable :columns="knowledgePackColumns" :data="knowledgePacks" :pagination="{ pageSize: 5 }" />
 
-      <NGridItem span="0:2 1200:1">
-        <NCard title="Role Runtime Resolve">
-          <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
-            <NGridItem span="0:2 900:1">
-              <NFormItem label="Role">
-                <NSelect v-model:value="resolveRoleId" :options="roleSelectOptions" filterable clearable />
-              </NFormItem>
-            </NGridItem>
-            <NGridItem span="0:2 900:1">
-              <NFormItem label="Skill">
-                <NSelect v-model:value="resolveSkillId" :options="skillSelectOptions" filterable clearable />
-              </NFormItem>
-            </NGridItem>
-          </NGrid>
-          <NSpace>
-            <NButton type="info" :disabled="!resolveRoleId || !resolveSkillId" @click="onResolveRuntime">解析运行时上下文</NButton>
-          </NSpace>
-          <pre class="json-panel">{{ resolveText }}</pre>
-        </NCard>
-      </NGridItem>
-    </NGrid>
+      <NGrid :cols="3" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:3 900:1"><NFormItem label="Collection ID"><NInput v-model:value="importCollectionId" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="KB Version ID"><NInput v-model:value="importKbVersionId" placeholder="optional" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1">
+          <NFormItem label="Source Format">
+            <NSelect v-model:value="importSourceFormat" :options="sourceFormatOptions" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Source Name"><NInput v-model:value="importSourceName" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1"><NFormItem label="Affected Roles CSV"><NInput v-model:value="importRoleIdsCsv" /></NFormItem></NGridItem>
+        <NGridItem span="0:3 900:1">
+          <NFormItem label="Content Text (txt/pdf/excel extracted text)">
+            <NInput v-model:value="importContentText" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NSpace>
+        <NButton type="warning" :disabled="!importCollectionId || !importSourceName" @click="onCreateImportJob">导入并增量进化</NButton>
+      </NSpace>
+      <NDataTable :columns="importJobColumns" :data="importJobs" :pagination="{ pageSize: 5 }" />
+    </NCard>
 
     <NAlert v-if="message" type="success" :show-icon="true">{{ message }}</NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
@@ -108,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   NAlert,
   NButton,
@@ -120,77 +120,57 @@ import {
   NInput,
   NSelect,
   NSpace,
-  NSwitch,
   type DataTableColumns,
 } from "naive-ui";
 
 import {
-  type FeatureRouteMapResponse,
-  type ModelProfileResponse,
-  type RoleProfileResponse,
-  type SkillRegistryResponse,
-  deleteFeatureRouteMap,
-  deleteRoleProfile,
-  deleteSkillRegistry,
-  listFeatureRouteMaps,
-  listModelProfiles,
+  bootstrapKnowledgePack,
+  createKnowledgeImportJob,
+  listKnowledgeImportJobs,
+  listKnowledgePacks,
   listRoleProfiles,
   listSkillRegistry,
   resolveRoleStudioRuntime,
-  upsertFeatureRouteMap,
-  upsertRoleProfile,
-  upsertSkillRegistry,
+  runRoleStudioSkill,
+  type KnowledgeImportJobResponse,
+  type KnowledgePackItemResponse,
+  type RoleProfileResponse,
+  type SkillRegistryResponse,
 } from "@/api/product";
 
 const tenantId = ref("default");
 const projectId = ref("default");
 const keyword = ref("");
 
-const modelProfiles = ref<ModelProfileResponse[]>([]);
 const roleProfiles = ref<RoleProfileResponse[]>([]);
 const skillRegistryItems = ref<SkillRegistryResponse[]>([]);
-const featureRoutes = ref<FeatureRouteMapResponse[]>([]);
-
-const roleId = ref("director");
-const rolePromptStyle = ref("cinematic, decisive, output structured checklist");
-const roleDefaultSkillsCsv = ref("shot_planner,dialogue_director,review_gate");
-const roleKnowledgeScopesCsv = ref("director_basic,project_style");
-const roleDefaultModelProfile = ref<string | null>(null);
-const permImport = ref(true);
-const permPublish = ref(true);
-const permEditGlobalKb = ref(false);
-const permManageRouter = ref(false);
-
-const skillId = ref("shot_planner");
-const skillUiRenderer = ref("timeline");
-const skillDefaultModelProfile = ref<string | null>(null);
-const skillToolsCsv = ref("search,embedding");
-const skillKnowledgeScopesCsv = ref("director_basic,visual_grammar");
-const skillInputSchemaText = ref('{"type":"object","properties":{"chapter_id":{"type":"string"}}}');
-const skillOutputSchemaText = ref('{"type":"object","properties":{"shot_plan":{"type":"array"}}}');
-const skillInitTemplate = ref("director_bootstrap_v1");
-
-const routeId = ref("route_scene_board");
-const routePath = ref("/studio/scene-board");
-const routeComponent = ref("StudioSceneBoardPage");
-const routeFeatureId = ref("shot_planner");
-const routeUiMode = ref("timeline");
-const routeAllowedRolesCsv = ref("director,script_supervisor");
-const routeDependsOnCsv = ref("rag,embedding,minio");
 
 const resolveRoleId = ref<string | null>(null);
 const resolveSkillId = ref<string | null>(null);
 const resolveText = ref("{}");
+const runInputText = ref('{"chapter_id":"chapter_demo","raw_text":"hero enters tavern"}');
+const runContextText = ref("{}");
+const runResultText = ref("{}");
+const runLogText = ref("[]");
+const runExecutionSummary = ref("");
+
+const bootstrapRoleId = ref("director");
+const bootstrapPackName = ref("director_bootstrap_pack");
+const bootstrapTemplateKey = ref("");
+const bootstrapLanguageCode = ref("zh");
+const bootstrapScope = ref("style_rule");
+const knowledgePacks = ref<KnowledgePackItemResponse[]>([]);
+
+const importCollectionId = ref("");
+const importKbVersionId = ref("");
+const importSourceFormat = ref("txt");
+const importSourceName = ref("director_notes.txt");
+const importRoleIdsCsv = ref("director");
+const importContentText = ref("动作分解要求：先建立冲突，再给动作节奏，再输出安全边界。");
+const importJobs = ref<KnowledgeImportJobResponse[]>([]);
 
 const message = ref("");
 const errorMessage = ref("");
-
-const modelProfileOptions = computed(() =>
-  modelProfiles.value.map((item) => ({
-    label: `${item.purpose} · ${item.name} (${item.id})`,
-    value: item.id,
-  }))
-);
 
 const roleSelectOptions = computed(() =>
   roleProfiles.value.map((item) => ({ label: item.role_id, value: item.role_id }))
@@ -200,75 +180,39 @@ const skillSelectOptions = computed(() =>
   skillRegistryItems.value.map((item) => ({ label: item.skill_id, value: item.skill_id }))
 );
 
-const roleColumns: DataTableColumns<RoleProfileResponse> = [
+const knowledgePackColumns: DataTableColumns<KnowledgePackItemResponse> = [
+  { title: "Pack", key: "pack_name" },
   { title: "Role", key: "role_id" },
-  { title: "Default Model", key: "default_model_profile" },
-  { title: "Skills", key: "default_skills", render: (row) => row.default_skills.join(",") },
-  {
-    title: "Action",
-    key: "action",
-    render: (row) =>
-      h(NSpace, { size: 6 }, {
-        default: () => [
-          h(NButton, { size: "tiny", onClick: () => useRole(row) }, { default: () => "Use" }),
-          h(NButton, { size: "tiny", type: "error", onClick: () => void onDeleteRole(row.role_id) }, { default: () => "Delete" }),
-        ],
-      }),
-  },
+  { title: "Collection", key: "collection_id" },
+  { title: "KB Version", key: "kb_version_id" },
+  { title: "Docs", key: "created_documents" },
 ];
 
-const skillColumns: DataTableColumns<SkillRegistryResponse> = [
-  { title: "Skill", key: "skill_id" },
-  { title: "Renderer", key: "ui_renderer" },
-  { title: "Default Model", key: "default_model_profile" },
-  {
-    title: "Action",
-    key: "action",
-    render: (row) =>
-      h(NSpace, { size: 6 }, {
-        default: () => [
-          h(NButton, { size: "tiny", onClick: () => useSkill(row) }, { default: () => "Use" }),
-          h(NButton, { size: "tiny", type: "error", onClick: () => void onDeleteSkill(row.skill_id) }, { default: () => "Delete" }),
-        ],
-      }),
-  },
+const importJobColumns: DataTableColumns<KnowledgeImportJobResponse> = [
+  { title: "Job", key: "import_job_id" },
+  { title: "Source", key: "source_name" },
+  { title: "Format", key: "source_format" },
+  { title: "Created", key: "created_documents" },
+  { title: "Dedup", key: "deduplicated_documents" },
 ];
 
-const routeColumns: DataTableColumns<FeatureRouteMapResponse> = [
-  { title: "Route", key: "route_id" },
-  { title: "Path", key: "path" },
-  { title: "Feature", key: "feature_id" },
-  { title: "Roles", key: "allowed_roles", render: (row) => row.allowed_roles.join(",") },
-  {
-    title: "Action",
-    key: "action",
-    render: (row) =>
-      h(NSpace, { size: 6 }, {
-        default: () => [
-          h(NButton, { size: "tiny", onClick: () => useRoute(row) }, { default: () => "Use" }),
-          h(NButton, { size: "tiny", type: "error", onClick: () => void onDeleteRoute(row.route_id) }, { default: () => "Delete" }),
-        ],
-      }),
-  },
+const sourceFormatOptions = [
+  { label: "txt", value: "txt" },
+  { label: "pdf", value: "pdf" },
+  { label: "excel/csv", value: "excel" },
+  { label: "markdown", value: "markdown" },
 ];
-
-function stringifyError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function clearNotice(): void {
   message.value = "";
   errorMessage.value = "";
 }
 
-function splitCsv(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+function stringifyError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function parseJsonObject(text: string): Record<string, unknown> {
+function parseObject(text: string): Record<string, unknown> {
   const parsed = JSON.parse(text) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("json must be object");
@@ -276,181 +220,39 @@ function parseJsonObject(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function useRole(row: RoleProfileResponse): void {
-  roleId.value = row.role_id;
-  rolePromptStyle.value = row.prompt_style;
-  roleDefaultSkillsCsv.value = row.default_skills.join(",");
-  roleKnowledgeScopesCsv.value = row.default_knowledge_scopes.join(",");
-  roleDefaultModelProfile.value = row.default_model_profile || null;
-  permImport.value = Boolean(row.permissions.can_import_data);
-  permPublish.value = Boolean(row.permissions.can_publish_task);
-  permEditGlobalKb.value = Boolean(row.permissions.can_edit_global_knowledge);
-  permManageRouter.value = Boolean(row.permissions.can_manage_model_router);
+function parseCsv(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }
 
-function useSkill(row: SkillRegistryResponse): void {
-  skillId.value = row.skill_id;
-  skillUiRenderer.value = row.ui_renderer;
-  skillDefaultModelProfile.value = row.default_model_profile || null;
-  skillToolsCsv.value = row.tools_required.join(",");
-  skillKnowledgeScopesCsv.value = row.required_knowledge_scopes.join(",");
-  skillInputSchemaText.value = JSON.stringify(row.input_schema || {}, null, 2);
-  skillOutputSchemaText.value = JSON.stringify(row.output_schema || {}, null, 2);
-  skillInitTemplate.value = row.init_template || "";
+function toPrettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
 }
 
-function useRoute(row: FeatureRouteMapResponse): void {
-  routeId.value = row.route_id;
-  routePath.value = row.path;
-  routeComponent.value = row.component;
-  routeFeatureId.value = row.feature_id;
-  routeUiMode.value = row.ui_mode;
-  routeAllowedRolesCsv.value = row.allowed_roles.join(",");
-  routeDependsOnCsv.value = row.depends_on.join(",");
-}
-
-async function onLoadModelProfiles(): Promise<void> {
-  modelProfiles.value = await listModelProfiles({ tenant_id: tenantId.value, project_id: projectId.value });
-}
-
-async function onLoadRoleProfiles(): Promise<void> {
-  roleProfiles.value = await listRoleProfiles({
-    tenant_id: tenantId.value,
-    project_id: projectId.value,
-    keyword: keyword.value || undefined,
-  });
-}
-
-async function onLoadSkillRegistry(): Promise<void> {
-  skillRegistryItems.value = await listSkillRegistry({
-    tenant_id: tenantId.value,
-    project_id: projectId.value,
-    keyword: keyword.value || undefined,
-  });
-}
-
-async function onLoadFeatureRoutes(): Promise<void> {
-  featureRoutes.value = await listFeatureRouteMaps({
-    tenant_id: tenantId.value,
-    project_id: projectId.value,
-    keyword: keyword.value || undefined,
-  });
-}
-
-async function onReloadAll(): Promise<void> {
+async function onReloadRuntimeData(): Promise<void> {
   clearNotice();
   try {
-    await Promise.all([onLoadModelProfiles(), onLoadRoleProfiles(), onLoadSkillRegistry(), onLoadFeatureRoutes()]);
-    message.value = "role studio config reloaded";
+    const [roles, skills, packs, jobs] = await Promise.all([
+      listRoleProfiles({ tenant_id: tenantId.value, project_id: projectId.value, keyword: keyword.value || undefined }),
+      listSkillRegistry({ tenant_id: tenantId.value, project_id: projectId.value, keyword: keyword.value || undefined }),
+      listKnowledgePacks({ tenant_id: tenantId.value, project_id: projectId.value }),
+      listKnowledgeImportJobs({ tenant_id: tenantId.value, project_id: projectId.value }),
+    ]);
+    roleProfiles.value = roles;
+    skillRegistryItems.value = skills;
+    knowledgePacks.value = packs;
+    importJobs.value = jobs;
+    if (!resolveRoleId.value && roles.length > 0) {
+      resolveRoleId.value = roles[0].role_id;
+    }
+    if (!resolveSkillId.value && skills.length > 0) {
+      resolveSkillId.value = skills[0].skill_id;
+    }
+    message.value = "工作台数据已刷新";
   } catch (error) {
     errorMessage.value = `reload failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onUpsertRole(): Promise<void> {
-  clearNotice();
-  try {
-    await upsertRoleProfile(roleId.value, {
-      tenant_id: tenantId.value,
-      project_id: projectId.value,
-      role_id: roleId.value,
-      prompt_style: rolePromptStyle.value,
-      default_skills: splitCsv(roleDefaultSkillsCsv.value),
-      default_knowledge_scopes: splitCsv(roleKnowledgeScopesCsv.value),
-      default_model_profile: roleDefaultModelProfile.value || undefined,
-      permissions: {
-        can_import_data: permImport.value,
-        can_publish_task: permPublish.value,
-        can_edit_global_knowledge: permEditGlobalKb.value,
-        can_manage_model_router: permManageRouter.value,
-      },
-      enabled: true,
-      schema_version: "1.0",
-    });
-    await onLoadRoleProfiles();
-    message.value = `role upserted: ${roleId.value}`;
-  } catch (error) {
-    errorMessage.value = `upsert role failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onDeleteRole(targetRoleId: string): Promise<void> {
-  clearNotice();
-  try {
-    await deleteRoleProfile(targetRoleId, { tenant_id: tenantId.value, project_id: projectId.value });
-    await onLoadRoleProfiles();
-    message.value = `role deleted: ${targetRoleId}`;
-  } catch (error) {
-    errorMessage.value = `delete role failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onUpsertSkill(): Promise<void> {
-  clearNotice();
-  try {
-    await upsertSkillRegistry(skillId.value, {
-      tenant_id: tenantId.value,
-      project_id: projectId.value,
-      skill_id: skillId.value,
-      input_schema: parseJsonObject(skillInputSchemaText.value),
-      output_schema: parseJsonObject(skillOutputSchemaText.value),
-      required_knowledge_scopes: splitCsv(skillKnowledgeScopesCsv.value),
-      default_model_profile: skillDefaultModelProfile.value || undefined,
-      tools_required: splitCsv(skillToolsCsv.value),
-      ui_renderer: skillUiRenderer.value,
-      init_template: skillInitTemplate.value || undefined,
-      enabled: true,
-      schema_version: "1.0",
-    });
-    await onLoadSkillRegistry();
-    message.value = `skill upserted: ${skillId.value}`;
-  } catch (error) {
-    errorMessage.value = `upsert skill failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onDeleteSkill(targetSkillId: string): Promise<void> {
-  clearNotice();
-  try {
-    await deleteSkillRegistry(targetSkillId, { tenant_id: tenantId.value, project_id: projectId.value });
-    await onLoadSkillRegistry();
-    message.value = `skill deleted: ${targetSkillId}`;
-  } catch (error) {
-    errorMessage.value = `delete skill failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onUpsertRoute(): Promise<void> {
-  clearNotice();
-  try {
-    await upsertFeatureRouteMap(routeId.value, {
-      tenant_id: tenantId.value,
-      project_id: projectId.value,
-      route_id: routeId.value,
-      path: routePath.value,
-      component: routeComponent.value,
-      feature_id: routeFeatureId.value,
-      allowed_roles: splitCsv(routeAllowedRolesCsv.value),
-      ui_mode: routeUiMode.value,
-      depends_on: splitCsv(routeDependsOnCsv.value),
-      enabled: true,
-      schema_version: "1.0",
-    });
-    await onLoadFeatureRoutes();
-    message.value = `route upserted: ${routeId.value}`;
-  } catch (error) {
-    errorMessage.value = `upsert route failed: ${stringifyError(error)}`;
-  }
-}
-
-async function onDeleteRoute(targetRouteId: string): Promise<void> {
-  clearNotice();
-  try {
-    await deleteFeatureRouteMap(targetRouteId, { tenant_id: tenantId.value, project_id: projectId.value });
-    await onLoadFeatureRoutes();
-    message.value = `route deleted: ${targetRouteId}`;
-  } catch (error) {
-    errorMessage.value = `delete route failed: ${stringifyError(error)}`;
   }
 }
 
@@ -461,21 +263,92 @@ async function onResolveRuntime(): Promise<void> {
     return;
   }
   try {
-    const resolved = await resolveRoleStudioRuntime({
+    const response = await resolveRoleStudioRuntime({
       tenant_id: tenantId.value,
       project_id: projectId.value,
       role_id: resolveRoleId.value,
       skill_id: resolveSkillId.value,
       context: {},
     });
-    resolveText.value = JSON.stringify(resolved, null, 2);
+    resolveText.value = toPrettyJson(response);
     message.value = "runtime resolved";
   } catch (error) {
     errorMessage.value = `resolve runtime failed: ${stringifyError(error)}`;
   }
 }
 
+async function onRunSkill(): Promise<void> {
+  clearNotice();
+  if (!resolveRoleId.value || !resolveSkillId.value) {
+    errorMessage.value = "select role and skill first";
+    return;
+  }
+  try {
+    const response = await runRoleStudioSkill({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      role_id: resolveRoleId.value,
+      skill_id: resolveSkillId.value,
+      input_payload: parseObject(runInputText.value),
+      context: parseObject(runContextText.value),
+    });
+    runExecutionSummary.value = `mode=${response.execution_mode} status=${response.status} run=${response.run_id}`;
+    runResultText.value = toPrettyJson(response.output || {});
+    runLogText.value = toPrettyJson(response.logs || []);
+    message.value = "skill executed";
+  } catch (error) {
+    errorMessage.value = `run skill failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onBootstrapKnowledgePack(): Promise<void> {
+  clearNotice();
+  try {
+    await bootstrapKnowledgePack({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      role_id: bootstrapRoleId.value,
+      pack_name: bootstrapPackName.value || undefined,
+      template_key: bootstrapTemplateKey.value || undefined,
+      language_code: bootstrapLanguageCode.value || undefined,
+      default_knowledge_scope: bootstrapScope.value || undefined,
+    });
+    knowledgePacks.value = await listKnowledgePacks({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+    });
+    message.value = "knowledge pack bootstrapped";
+  } catch (error) {
+    errorMessage.value = `bootstrap knowledge pack failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onCreateImportJob(): Promise<void> {
+  clearNotice();
+  try {
+    await createKnowledgeImportJob({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      collection_id: importCollectionId.value,
+      kb_version_id: importKbVersionId.value || undefined,
+      source_format: importSourceFormat.value,
+      source_name: importSourceName.value,
+      content_text: importContentText.value,
+      role_ids: parseCsv(importRoleIdsCsv.value),
+      language_code: bootstrapLanguageCode.value || undefined,
+      scope: bootstrapScope.value || undefined,
+    });
+    importJobs.value = await listKnowledgeImportJobs({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+    });
+    message.value = "import job created";
+  } catch (error) {
+    errorMessage.value = `create import job failed: ${stringifyError(error)}`;
+  }
+}
+
 onMounted(() => {
-  void onReloadAll();
+  void onReloadRuntimeData();
 });
 </script>

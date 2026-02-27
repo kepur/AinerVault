@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +19,7 @@ from ainern2d_shared.queue.rabbitmq import RabbitMQConsumer
 
 from app.api.deps import get_db, get_db_session, publish
 from ainern2d_shared.telemetry.logging import get_logger
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/internal/orchestrator", tags=["orchestrator"])
 
@@ -238,6 +240,60 @@ def handle_skill_event(payload: dict) -> None:
         db.close()
 
 
+def handle_alert_event(payload: dict) -> None:
+    """Consume alert.events and execute queued Telegram retries."""
+    if payload.get("event_type") != "telegram.notify.retry":
+        return
+    tenant_id = str(payload.get("tenant_id") or "").strip()
+    project_id = str(payload.get("project_id") or "").strip()
+    if not tenant_id or not project_id:
+        return
+
+    delay_ms = int(payload.get("delay_ms") or 0)
+    if delay_ms > 0:
+        time.sleep(min(delay_ms / 1000.0, 5.0))
+
+    retry_attempt = int(payload.get("retry_attempt") or 0)
+    max_retry_attempts = int(payload.get("max_retry_attempts") or 3)
+    db = get_db_session()
+    try:
+        result = notify_telegram_event(
+            db=db,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            event_type=str(payload.get("source_event_type") or "unknown"),
+            summary=str(payload.get("summary") or "queued telegram notify"),
+            run_id=str(payload.get("run_id") or "") or None,
+            job_id=str(payload.get("job_id") or "") or None,
+            trace_id=str(payload.get("trace_id") or "") or None,
+            correlation_id=str(payload.get("correlation_id") or "") or None,
+            extra=dict(payload.get("extra") or {}),
+            queue_on_failure=False,
+            retry_attempt=retry_attempt,
+            max_retry_attempts=max_retry_attempts,
+        )
+        reason = str(result.get("reason") or "")
+        status_code = int(result.get("status_code") or 0)
+        retryable = (
+            reason.startswith("network_error")
+            or reason.startswith("notify_error")
+            or reason.startswith("circuit_open")
+            or reason.startswith("telegram_not_ok")
+            or (reason.startswith("http_error:") and status_code >= 500)
+        )
+        if (not result.get("delivered")) and retryable and retry_attempt < max_retry_attempts:
+            publish(
+                SYSTEM_TOPICS.ALERT_EVENTS,
+                {
+                    **payload,
+                    "retry_attempt": retry_attempt + 1,
+                    "delay_ms": max(1000, int(payload.get("delay_ms") or 1000) * 2),
+                },
+            )
+    finally:
+        db.close()
+
+
 def consume_orchestrator_topic(topic: str) -> None:
     consumer = RabbitMQConsumer(settings.rabbitmq_url)
     if topic == SYSTEM_TOPICS.TASK_SUBMITTED:
@@ -248,6 +304,8 @@ def consume_orchestrator_topic(topic: str) -> None:
         consumer.consume(topic, handle_compose_status)
     elif topic == SYSTEM_TOPICS.SKILL_EVENTS:
         consumer.consume(topic, handle_skill_event)
+    elif topic == SYSTEM_TOPICS.ALERT_EVENTS:
+        consumer.consume(topic, handle_alert_event)
 
 
 @router.post("/events", status_code=202)

@@ -22,6 +22,7 @@ from ainern2d_shared.schemas.events import EventEnvelope
 from ainern2d_shared.schemas.task import RunDetailResponse, TaskCreateRequest, TaskResponse
 
 from app.api.deps import get_db, publish
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 _REPLAY_P95_ALERT_MS = 3000
@@ -284,6 +285,21 @@ def create_task(body: TaskSubmitRequest, db: Session = Depends(get_db)) -> TaskS
 	)
 	event_repo.create(wf_event)
 	db.commit()
+	notify_telegram_event(
+		db=db,
+		tenant_id=body.tenant_id,
+		project_id=body.project_id,
+		event_type="task.submitted",
+		summary="Task submitted",
+		run_id=run_id,
+		trace_id=body.trace_id,
+		correlation_id=body.correlation_id,
+		extra={
+			"chapter_id": body.chapter_id,
+			"requested_quality": body.requested_quality,
+			"language_context": body.language_context,
+		},
+	)
 
 	return TaskSubmitAccepted(run_id=run_id, status="queued", message="accepted")
 

@@ -35,3 +35,9 @@
 - [ ] 可从 Chapter 创建 Task 并启动 Run
 - [ ] 可展示 pipeline DAG 状态与产物
 - [ ] 支持 rerun-shot / rerun-stage
+
+---
+
+## 4. 对话补充需求索引（接力必读）
+- 23~30 对话收敛需求见：`SKILL_23_30_PRODUCT_REQUIREMENTS_MASTER.md`
+- 本 Skill 重点补充：任务提交与关键运行调用需接入 Telegram 通知链路（可配置过滤）。

@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ainern2d_shared.ainer_db_models.auth_models import Project
+from ainern2d_shared.ainer_db_models.auth_models import Project, ProjectMember
+from ainern2d_shared.ainer_db_models.enum_models import MembershipRole
 
 from app.api.deps import get_db
 
@@ -34,6 +35,7 @@ class ProjectResponse(BaseModel):
 @router.post("", response_model=ProjectResponse, status_code=201)
 def create_project(
     body: ProjectCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> ProjectResponse:
     project_id = f"proj_{uuid4().hex}"
@@ -46,6 +48,22 @@ def create_project(
         description=body.description,
     )
     db.add(project)
+    db.flush()
+
+    # Grant creator (admin) access to the new project
+    if hasattr(request.state, "auth_claims") and request.state.auth_claims:
+        creator_member = ProjectMember(
+            id=f"pm_{uuid4().hex}",
+            tenant_id=body.tenant_id,
+            project_id=project_id,
+            trace_id=f"tr_pm_{uuid4().hex[:12]}",
+            correlation_id=f"cr_pm_{uuid4().hex[:12]}",
+            idempotency_key=f"idem_pm_{project_id}_{request.state.auth_claims.user_id}_{uuid4().hex[:8]}",
+            user_id=request.state.auth_claims.user_id,
+            role=MembershipRole.admin,
+        )
+        db.add(creator_member)
+
     db.commit()
     db.refresh(project)
     return ProjectResponse(

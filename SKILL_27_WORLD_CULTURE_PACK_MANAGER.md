@@ -29,3 +29,9 @@
 ## 3. Definition of Done
 - [ ] 支持 culture pack CRUD + 版本化
 - [ ] 支持导出 constraints 给 02/07/10
+
+---
+
+## 4. 对话补充需求索引（接力必读）
+- 23~30 对话收敛需求见：`SKILL_23_30_PRODUCT_REQUIREMENTS_MASTER.md`
+- 本 Skill 重点补充：文化包保持独立管理页，不与其它配置页拥挤混排。

@@ -37,3 +37,9 @@
 ## 3. Definition of Done
 - [ ] 可把 06/09/10 产物渲染为多轨道时间线
 - [ ] 支持 patch + rerun-shot 并回写素材库
+
+---
+
+## 4. 对话补充需求索引（接力必读）
+- 23~30 对话收敛需求见：`SKILL_23_30_PRODUCT_REQUIREMENTS_MASTER.md`
+- 本 Skill 重点补充：PR 式时间线必须独立页面；多轨拖拽/NLE 级增强属于后续 P1/P2。

@@ -21,6 +21,7 @@ from ainern2d_shared.schemas.timeline import (
 )
 
 from app.api.deps import get_db, publish
+from app.services.telegram_notify import notify_telegram_event
 
 router = APIRouter(prefix="/api/v1", tags=["timeline"])
 
@@ -38,6 +39,33 @@ class TimelinePatchRequest(BaseModel):
 class TimelinePatchResponse(BaseModel):
     run_id: str
     patch_id: str
+    job_id: str
+    status: str
+    message: str
+
+
+class TimelinePatchHistoryItem(BaseModel):
+    patch_id: str
+    patch_type: str
+    track: str | None = None
+    shot_id: str | None = None
+    patch_text: str | None = None
+    parent_patch_id: str | None = None
+    rollback_to_patch_id: str | None = None
+    requested_by: str | None = None
+    requested_at: str | None = None
+    created_at: datetime
+
+
+class TimelinePatchRollbackRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    requested_by: str | None = None
+
+
+class TimelinePatchRollbackResponse(BaseModel):
+    run_id: str
+    rollback_patch_id: str
     job_id: str
     status: str
     message: str
@@ -226,6 +254,16 @@ def patch_timeline(
         raise HTTPException(status_code=404, detail="run not found")
     if run.tenant_id != body.tenant_id or run.project_id != body.project_id:
         raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN-002: run scope mismatch")
+    parent_patch = db.execute(
+        select(RunPatchRecord)
+        .where(
+            RunPatchRecord.run_id == run_id,
+            RunPatchRecord.deleted_at.is_(None),
+            RunPatchRecord.patch_json["shot_id"].astext == body.shot_id,
+        )
+        .order_by(RunPatchRecord.created_at.desc())
+        .limit(1)
+    ).scalars().first()
 
     patch = RunPatchRecord(
         id=f"patch_{uuid4().hex}",
@@ -241,6 +279,7 @@ def patch_timeline(
             "track": body.track,
             "shot_id": body.shot_id,
             "patch_text": body.patch_text,
+            "parent_patch_id": parent_patch.id if parent_patch else None,
             "requested_by": body.requested_by,
             "requested_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -317,6 +356,23 @@ def patch_timeline(
     run.status = RunStatus.running
     run.stage = RenderStage.execute
     db.commit()
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="job.created",
+        summary="Timeline patch queued",
+        run_id=run_id,
+        job_id=job.id,
+        trace_id=run.trace_id,
+        correlation_id=run.correlation_id,
+        extra={
+            "patch_id": patch.id,
+            "patch_scope": body.patch_scope,
+            "track": body.track,
+            "shot_id": body.shot_id,
+        },
+    )
 
     return TimelinePatchResponse(
         run_id=run_id,
@@ -324,4 +380,203 @@ def patch_timeline(
         job_id=job.id,
         status="queued",
         message="timeline patch accepted; rerun-shot queued",
+    )
+
+
+@router.get("/runs/{run_id}/timeline/patches", response_model=list[TimelinePatchHistoryItem])
+def list_timeline_patches(
+    run_id: str,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+) -> list[TimelinePatchHistoryItem]:
+    run = db.get(RenderRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    rows = db.execute(
+        select(RunPatchRecord)
+        .where(
+            RunPatchRecord.run_id == run_id,
+            RunPatchRecord.deleted_at.is_(None),
+        )
+        .order_by(RunPatchRecord.created_at.desc())
+        .limit(max(1, min(limit, 200)))
+    ).scalars().all()
+    items: list[TimelinePatchHistoryItem] = []
+    for row in rows:
+        payload = row.patch_json or {}
+        items.append(
+            TimelinePatchHistoryItem(
+                patch_id=row.id,
+                patch_type=row.patch_type,
+                track=payload.get("track"),
+                shot_id=payload.get("shot_id"),
+                patch_text=payload.get("patch_text"),
+                parent_patch_id=payload.get("parent_patch_id"),
+                rollback_to_patch_id=payload.get("rollback_to_patch_id"),
+                requested_by=payload.get("requested_by"),
+                requested_at=payload.get("requested_at"),
+                created_at=row.created_at or datetime.now(timezone.utc),
+            )
+        )
+    return items
+
+
+@router.post(
+    "/runs/{run_id}/timeline/patches/{patch_id}/rollback",
+    response_model=TimelinePatchRollbackResponse,
+)
+def rollback_timeline_patch(
+    run_id: str,
+    patch_id: str,
+    body: TimelinePatchRollbackRequest,
+    db: Session = Depends(get_db),
+) -> TimelinePatchRollbackResponse:
+    run = db.get(RenderRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.tenant_id != body.tenant_id or run.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN-002: run scope mismatch")
+
+    target = db.execute(
+        select(RunPatchRecord).where(
+            RunPatchRecord.id == patch_id,
+            RunPatchRecord.run_id == run_id,
+            RunPatchRecord.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="patch not found")
+
+    source_payload = target.patch_json or {}
+    shot_id = str(source_payload.get("shot_id") or "").strip()
+    patch_text = str(source_payload.get("patch_text") or "").strip()
+    track = str(source_payload.get("track") or "prompt").strip() or "prompt"
+    if not shot_id or not patch_text:
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: rollback patch payload invalid")
+
+    parent_patch = db.execute(
+        select(RunPatchRecord)
+        .where(
+            RunPatchRecord.run_id == run_id,
+            RunPatchRecord.deleted_at.is_(None),
+            RunPatchRecord.patch_json["shot_id"].astext == shot_id,
+        )
+        .order_by(RunPatchRecord.created_at.desc())
+        .limit(1)
+    ).scalars().first()
+    rollback_patch = RunPatchRecord(
+        id=f"patch_{uuid4().hex}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=run.trace_id,
+        correlation_id=run.correlation_id,
+        idempotency_key=f"idem_patch_rollback_{run_id}_{shot_id}_{uuid4().hex[:8]}",
+        run_id=run_id,
+        stage=RenderStage.plan,
+        patch_type="rollback",
+        patch_json={
+            "track": track,
+            "shot_id": shot_id,
+            "patch_text": patch_text,
+            "rollback_to_patch_id": patch_id,
+            "parent_patch_id": parent_patch.id if parent_patch else None,
+            "requested_by": body.requested_by,
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        },
+        applied_by=body.requested_by,
+    )
+    db.add(rollback_patch)
+
+    job = Job(
+        id=f"job_{uuid4().hex}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        run_id=run_id,
+        chapter_id=run.chapter_id,
+        shot_id=shot_id,
+        trace_id=run.trace_id,
+        correlation_id=run.correlation_id,
+        idempotency_key=f"idem_timeline_rollback_job_{run_id}_{shot_id}_{uuid4().hex[:8]}",
+        job_type=JobType.render_video,
+        stage=RenderStage.execute,
+        status=JobStatus.queued,
+        payload_json={
+            "patch_source": "timeline_editor_rollback",
+            "patch_id": rollback_patch.id,
+            "patch_scope": "rollback",
+            "track": track,
+            "patch_text": patch_text,
+            "shot_id": shot_id,
+            "regenerate": True,
+            "rollback_to_patch_id": patch_id,
+        },
+    )
+    db.add(job)
+
+    event = EventEnvelope(
+        event_type="job.created",
+        producer="studio-api",
+        occurred_at=datetime.now(timezone.utc),
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        idempotency_key=job.idempotency_key or f"idem_job_{job.id}",
+        run_id=run_id,
+        job_id=job.id,
+        trace_id=run.trace_id or "",
+        correlation_id=run.correlation_id or "",
+        payload={
+            "job_id": job.id,
+            "shot_id": shot_id,
+            "patch_id": rollback_patch.id,
+            "patch_text": patch_text,
+            "track": track,
+            "regenerate": True,
+            "rollback_to_patch_id": patch_id,
+        },
+    )
+    publish(SYSTEM_TOPICS.JOB_DISPATCH, event.model_dump(mode="json"))
+    db.add(
+        WorkflowEvent(
+            id=event.event_id,
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            trace_id=run.trace_id,
+            correlation_id=run.correlation_id,
+            idempotency_key=event.idempotency_key,
+            run_id=run_id,
+            job_id=job.id,
+            stage=RenderStage.execute,
+            event_type="job.created",
+            event_version="1.0",
+            producer="studio-api",
+            occurred_at=event.occurred_at,
+            payload_json=event.payload,
+        )
+    )
+    run.status = RunStatus.running
+    run.stage = RenderStage.execute
+    db.commit()
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="job.created",
+        summary="Timeline patch rollback queued",
+        run_id=run_id,
+        job_id=job.id,
+        trace_id=run.trace_id,
+        correlation_id=run.correlation_id,
+        extra={
+            "rollback_patch_id": rollback_patch.id,
+            "rollback_to_patch_id": patch_id,
+            "track": track,
+            "shot_id": shot_id,
+        },
+    )
+    return TimelinePatchRollbackResponse(
+        run_id=run_id,
+        rollback_patch_id=rollback_patch.id,
+        job_id=job.id,
+        status="queued",
+        message="timeline rollback accepted; rerun-shot queued",
     )

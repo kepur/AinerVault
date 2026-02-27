@@ -116,8 +116,12 @@ const menuOptions: MenuOption[] = [
     label: "角色能力中台",
     children: [
       {
+        key: "/studio/roles/config",
+        label: "角色配置中心",
+      },
+      {
         key: "/studio/roles",
-        label: "Role Studio",
+        label: "Role Workbench",
       },
     ],
   },
@@ -126,8 +130,12 @@ const menuOptions: MenuOption[] = [
     label: "24/28 内容任务",
     children: [
       {
-        key: "/studio/chapters",
-        label: "24 章节管理",
+        key: "/studio/novels",
+        label: "24 小说管理",
+      },
+      {
+        key: "/studio/chapters/workspace",
+        label: "24 章节工作区",
       },
       {
         key: "/studio/runs",
@@ -141,7 +149,11 @@ const menuOptions: MenuOption[] = [
     children: [
       {
         key: "/studio/providers",
-        label: "25 Provider路由",
+        label: "25 Provider接入",
+      },
+      {
+        key: "/studio/model-routing",
+        label: "25 模型档案与路由",
       },
       {
         key: "/studio/languages",

@@ -69,6 +69,19 @@ export interface ChapterPreviewResponse {
   shot_plan: Record<string, unknown>[];
 }
 
+export interface ChapterAssistExpandResponse {
+  chapter_id: string;
+  original_length: number;
+  expanded_length: number;
+  expanded_markdown: string;
+  appended_excerpt: string;
+  provider_used: string;
+  model_name: string;
+  mode: string;
+  prompt_tokens_estimate: number;
+  completion_tokens_estimate: number;
+}
+
 export interface TaskSubmitAccepted {
   run_id: string;
   status: string;
@@ -240,6 +253,20 @@ export interface RoleStudioResolveResponse {
   skill_profile: SkillRegistryResponse;
 }
 
+export interface RoleStudioRunSkillResponse {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  skill_id: string;
+  run_id: string;
+  execution_mode: string;
+  status: string;
+  resolved_model_profile: Record<string, unknown>;
+  resolved_knowledge_scopes: string[];
+  output: Record<string, unknown>;
+  logs: Array<Record<string, unknown>>;
+}
+
 export interface ProviderConnectionTestResponse {
   provider_id: string;
   provider_name: string;
@@ -296,6 +323,26 @@ export interface TelegramSettingsResponse {
   notify_events: string[];
   schema_version: string;
   updated_at?: string | null;
+}
+
+export interface TelegramSettingsTestResponse {
+  delivered: boolean;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  message: string;
+  telegram_ok?: boolean | null;
+}
+
+export interface BootstrapDefaultsResponse {
+  tenant_id: string;
+  project_id: string;
+  seed_mode: string;
+  roles_upserted: number;
+  skills_upserted: number;
+  routes_upserted: number;
+  language_settings_applied: boolean;
+  stage_routing_applied: boolean;
+  summary: Record<string, unknown>;
 }
 
 export interface RagCollectionResponse {
@@ -356,6 +403,54 @@ export interface PersonaPreviewResponse {
     score: number;
     snippet: string;
   }>;
+}
+
+export interface KnowledgePackBootstrapResponse {
+  pack_id: string;
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  pack_name: string;
+  collection_id: string;
+  kb_version_id: string;
+  scope: string;
+  created_documents: number;
+  chunk_count: number;
+  extracted_terms: string[];
+  updated_at?: string | null;
+}
+
+export interface KnowledgePackItemResponse {
+  pack_id: string;
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  pack_name: string;
+  collection_id: string;
+  kb_version_id: string;
+  scope: string;
+  status: string;
+  created_documents: number;
+  extracted_terms: string[];
+  updated_at?: string | null;
+}
+
+export interface KnowledgeImportJobResponse {
+  import_job_id: string;
+  tenant_id: string;
+  project_id: string;
+  collection_id: string;
+  kb_version_id?: string | null;
+  source_name: string;
+  source_format: string;
+  status: string;
+  created_documents: number;
+  deduplicated_documents: number;
+  chunk_count: number;
+  extracted_terms: string[];
+  affected_roles: string[];
+  knowledge_change_report: Record<string, unknown>;
+  updated_at?: string | null;
 }
 
 export interface CulturePackResponse {
@@ -437,6 +532,27 @@ export interface TimelinePlan {
 export interface TimelinePatchResponse {
   run_id: string;
   patch_id: string;
+  job_id: string;
+  status: string;
+  message: string;
+}
+
+export interface TimelinePatchHistoryItem {
+  patch_id: string;
+  patch_type: string;
+  track?: string | null;
+  shot_id?: string | null;
+  patch_text?: string | null;
+  parent_patch_id?: string | null;
+  rollback_to_patch_id?: string | null;
+  requested_by?: string | null;
+  requested_at?: string | null;
+  created_at: string;
+}
+
+export interface TimelinePatchRollbackResponse {
+  run_id: string;
+  rollback_patch_id: string;
   job_id: string;
   status: string;
   message: string;
@@ -567,6 +683,18 @@ export async function previewChapterPlan(chapterId: string, payload: {
   persona_ref?: string;
 }): Promise<ChapterPreviewResponse> {
   const { data } = await http.post<ChapterPreviewResponse>(`/api/v1/chapters/${chapterId}/preview-plan`, payload);
+  return data;
+}
+
+export async function assistExpandChapter(chapterId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  instruction?: string;
+  style_hint?: string;
+  target_language?: string;
+  max_tokens?: number;
+}): Promise<ChapterAssistExpandResponse> {
+  const { data } = await http.post<ChapterAssistExpandResponse>(`/api/v1/chapters/${chapterId}/assist-expand`, payload);
   return data;
 }
 
@@ -796,6 +924,23 @@ export async function resolveRoleStudioRuntime(payload: {
   return data;
 }
 
+export async function runRoleStudioSkill(payload: {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  skill_id: string;
+  input_payload?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  run_id?: string;
+  trace_id?: string;
+  correlation_id?: string;
+  idempotency_key?: string;
+  schema_version?: string;
+}): Promise<RoleStudioRunSkillResponse> {
+  const { data } = await http.post<RoleStudioRunSkillResponse>("/api/v1/config/role-studio/run-skill", payload);
+  return data;
+}
+
 export async function upsertStageRouting(payload: {
   tenant_id: string;
   project_id: string;
@@ -868,6 +1013,38 @@ export async function getTelegramSettings(tenantId: string, projectId: string): 
   const { data } = await http.get<TelegramSettingsResponse>("/api/v1/config/telegram-settings", {
     params: { tenant_id: tenantId, project_id: projectId },
   });
+  return data;
+}
+
+export async function testTelegramSettings(payload: {
+  tenant_id: string;
+  project_id: string;
+  message_text?: string;
+  bot_token?: string;
+  chat_id?: string;
+  thread_id?: string;
+  parse_mode?: string;
+  timeout_ms?: number;
+}): Promise<TelegramSettingsTestResponse> {
+  const { data } = await http.post<TelegramSettingsTestResponse>("/api/v1/config/telegram-settings/test", payload);
+  return data;
+}
+
+export async function bootstrapDefaults(payload: {
+  tenant_id: string;
+  project_id: string;
+  seed_mode?: string;
+  model_profile_id?: string;
+  role_ids?: string[];
+  enrich_rounds?: number;
+  session_id?: string;
+  include_roles?: boolean;
+  include_skills?: boolean;
+  include_routes?: boolean;
+  include_language_settings?: boolean;
+  include_stage_routing?: boolean;
+}): Promise<BootstrapDefaultsResponse> {
+  const { data } = await http.post<BootstrapDefaultsResponse>("/api/v1/config/bootstrap-defaults", payload);
   return data;
 }
 
@@ -983,6 +1160,53 @@ export async function previewPersona(payload: {
   top_k?: number;
 }): Promise<PersonaPreviewResponse> {
   const { data } = await http.post<PersonaPreviewResponse>("/api/v1/rag/persona-preview", payload);
+  return data;
+}
+
+export async function bootstrapKnowledgePack(payload: {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  pack_name?: string;
+  template_key?: string;
+  language_code?: string;
+  default_knowledge_scope?: string;
+}): Promise<KnowledgePackBootstrapResponse> {
+  const { data } = await http.post<KnowledgePackBootstrapResponse>("/api/v1/rag/knowledge-packs/bootstrap", payload);
+  return data;
+}
+
+export async function listKnowledgePacks(params: {
+  tenant_id: string;
+  project_id: string;
+  role_id?: string;
+}): Promise<KnowledgePackItemResponse[]> {
+  const { data } = await http.get<KnowledgePackItemResponse[]>("/api/v1/rag/knowledge-packs", { params });
+  return data;
+}
+
+export async function createKnowledgeImportJob(payload: {
+  tenant_id: string;
+  project_id: string;
+  collection_id: string;
+  kb_version_id?: string;
+  source_format?: string;
+  source_name: string;
+  content_text: string;
+  role_ids?: string[];
+  language_code?: string;
+  scope?: string;
+}): Promise<KnowledgeImportJobResponse> {
+  const { data } = await http.post<KnowledgeImportJobResponse>("/api/v1/rag/import-jobs", payload);
+  return data;
+}
+
+export async function listKnowledgeImportJobs(params: {
+  tenant_id: string;
+  project_id: string;
+  role_id?: string;
+}): Promise<KnowledgeImportJobResponse[]> {
+  const { data } = await http.get<KnowledgeImportJobResponse[]>("/api/v1/rag/import-jobs", { params });
   return data;
 }
 
@@ -1132,5 +1356,28 @@ export async function patchRunTimeline(runId: string, payload: {
 
 export async function updateRunTimeline(runId: string, payload: TimelinePlan): Promise<TimelinePlan> {
   const { data } = await http.put<TimelinePlan>(`/api/v1/runs/${runId}/timeline`, payload);
+  return data;
+}
+
+export async function listRunTimelinePatches(runId: string, limit = 50): Promise<TimelinePatchHistoryItem[]> {
+  const { data } = await http.get<TimelinePatchHistoryItem[]>(`/api/v1/runs/${runId}/timeline/patches`, {
+    params: { limit },
+  });
+  return data;
+}
+
+export async function rollbackRunTimelinePatch(
+  runId: string,
+  patchId: string,
+  payload: {
+    tenant_id: string;
+    project_id: string;
+    requested_by?: string;
+  }
+): Promise<TimelinePatchRollbackResponse> {
+  const { data } = await http.post<TimelinePatchRollbackResponse>(
+    `/api/v1/runs/${runId}/timeline/patches/${patchId}/rollback`,
+    payload
+  );
   return data;
 }

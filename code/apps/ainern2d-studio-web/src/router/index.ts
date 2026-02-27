@@ -6,11 +6,14 @@ import RunPreviewPage from "@/pages/RunPreviewPage.vue";
 import StudioAssetLibraryPage from "@/pages/StudioAssetLibraryPage.vue";
 import StudioAssetBindingConsistencyPage from "@/pages/StudioAssetBindingConsistencyPage.vue";
 import StudioAuthPage from "@/pages/StudioAuthPage.vue";
-import StudioChapterManagerPage from "@/pages/StudioChapterManagerPage.vue";
+import StudioChapterWorkspacePage from "@/pages/StudioChapterWorkspacePage.vue";
 import StudioCulturePackPage from "@/pages/StudioCulturePackPage.vue";
 import StudioLanguageSettingsPage from "@/pages/StudioLanguageSettingsPage.vue";
+import StudioModelRoutingPage from "@/pages/StudioModelRoutingPage.vue";
+import StudioNovelLibraryPage from "@/pages/StudioNovelLibraryPage.vue";
 import StudioProviderRouterPage from "@/pages/StudioProviderRouterPage.vue";
 import StudioRagPersonaPage from "@/pages/StudioRagPersonaPage.vue";
+import StudioRoleConfigPage from "@/pages/StudioRoleConfigPage.vue";
 import StudioRoleStudioPage from "@/pages/StudioRoleStudioPage.vue";
 import StudioRunCenterPage from "@/pages/StudioRunCenterPage.vue";
 import StudioTimelinePatchPage from "@/pages/StudioTimelinePatchPage.vue";
@@ -53,12 +56,22 @@ const router = createRouter({
       },
     },
     {
-      path: "/studio/chapters",
-      name: "studio-chapters",
-      component: StudioChapterManagerPage,
+      path: "/studio/novels",
+      name: "studio-novels",
+      component: StudioNovelLibraryPage,
       meta: {
         requiresAuth: true,
-        title: "章节管理",
+        title: "小说管理",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/chapters/workspace",
+      name: "studio-chapter-workspace",
+      component: StudioChapterWorkspacePage,
+      meta: {
+        requiresAuth: true,
+        title: "章节工作区",
         section: "studio",
       },
     },
@@ -78,7 +91,17 @@ const router = createRouter({
       component: StudioProviderRouterPage,
       meta: {
         requiresAuth: true,
-        title: "Provider与路由",
+        title: "Provider接入与通知",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/model-routing",
+      name: "studio-model-routing",
+      component: StudioModelRoutingPage,
+      meta: {
+        requiresAuth: true,
+        title: "模型档案与路由映射",
         section: "studio",
       },
     },
@@ -89,6 +112,16 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "多语言设置",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/roles/config",
+      name: "studio-role-config",
+      component: StudioRoleConfigPage,
+      meta: {
+        requiresAuth: true,
+        title: "角色配置中心",
         section: "studio",
       },
     },
@@ -158,11 +191,15 @@ const router = createRouter({
     },
     {
       path: "/studio/content",
-      redirect: "/studio/chapters",
+      redirect: "/studio/novels",
     },
     {
       path: "/studio/config",
       redirect: "/studio/providers",
+    },
+    {
+      path: "/studio/chapters",
+      redirect: "/studio/novels",
     },
     {
       path: "/projects/:projectId/runs/:runId/preview",

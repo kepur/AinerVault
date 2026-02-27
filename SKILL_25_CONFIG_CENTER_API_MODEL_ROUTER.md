@@ -57,3 +57,13 @@
 - [ ] 支持按 stage 路由与 fallback
 - [ ] 支持健康检查与状态展示
 - [ ] Run 可记录 config snapshot id
+
+---
+
+## 7. 对话补充需求索引（接力必读）
+- 23~30 对话收敛需求见：`SKILL_23_30_PRODUCT_REQUIREMENTS_MASTER.md`
+- 本 Skill 重点补充：
+  - `bootstrap-defaults` 必须使用 LangGraph 编排。
+  - 初始化支持 `model_profile_id + role_ids + enrich_rounds + session_id`。
+  - Provider 页面与 ModelProfile/FeatureRoute 页面拆分。
+  - Telegram 通知覆盖跨模块关键调用并受 `notify_events` 过滤。
