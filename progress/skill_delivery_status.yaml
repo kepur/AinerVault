@@ -544,7 +544,7 @@ skills:
 
   - skill_id: "SKILL_30"
     name: "Timeline Editor / NLE"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_30_TIMELINE_EDITOR_NLE.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/timesline.py"
@@ -556,5 +556,6 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/timesline.py + app/services/telegram_notify.py (/timeline/patch 提交后触发 job.created 通知)"
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioTimelinePatchPage.vue + src/api/product.ts (PR式时间线页面独立展示 + 多轨拖拽编辑 + patch 历史与回滚入口)"
-    next_action:
-      - "NLE 级增强：吸附/裁切/分组与更细粒度回滚对比"
+      - "code/apps/ainern2d-studio-api/app/api/v1/timesline.py (GET /timeline/patch-history-tree 返回补丁历史树：节点/深度/父子关系)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/timesline.py (GET /timeline/patches/{patch_id}/rollback-comparison 返回版本对比：变更详情/相似度评分)"
+    next_action: []

@@ -71,6 +71,50 @@ class TimelinePatchRollbackResponse(BaseModel):
     message: str
 
 
+class PatchHistoryTreeNode(BaseModel):
+    patch_id: str
+    patch_type: str
+    shot_id: str | None = None
+    track: str | None = None
+    parent_patch_id: str | None = None
+    children_patch_ids: list[str] = []
+    rollback_target_id: str | None = None
+    patch_text: str | None = None
+    requested_by: str | None = None
+    requested_at: str | None = None
+    created_at: datetime
+    depth: int = 0
+
+
+class PatchHistoryTreeResponse(BaseModel):
+    run_id: str
+    root_nodes: list[PatchHistoryTreeNode] = []
+    all_nodes: dict[str, PatchHistoryTreeNode] = Field(default_factory=dict)
+    total_patches: int = 0
+    tree_height: int = 0
+
+
+class RollbackComparisonDetail(BaseModel):
+    field: str
+    before_value: str | None = None
+    after_value: str | None = None
+    change_type: str  # added|removed|modified
+    importance: str = "normal"  # critical|high|normal|low
+
+
+class RollbackComparisonResponse(BaseModel):
+    patch_id: str
+    rollback_from_patch_id: str | None = None
+    shot_id: str | None = None
+    track: str | None = None
+    before_snapshot: dict = Field(default_factory=dict)
+    after_snapshot: dict = Field(default_factory=dict)
+    changes: list[RollbackComparisonDetail] = []
+    similarity_score: float = 0.0  # 0.0-1.0, how similar before and after are
+    change_summary: str = ""
+    created_at: datetime
+
+
 @router.get("/runs/{run_id}/timeline", response_model=TimelinePlanDto)
 def get_timeline(run_id: str, db: Session = Depends(get_db)) -> TimelinePlanDto:
     run = db.get(RenderRun, run_id)
@@ -579,4 +623,185 @@ def rollback_timeline_patch(
         job_id=job.id,
         status="queued",
         message="timeline rollback accepted; rerun-shot queued",
+    )
+
+
+@router.get("/runs/{run_id}/timeline/patch-history-tree", response_model=PatchHistoryTreeResponse)
+def get_patch_history_tree(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> PatchHistoryTreeResponse:
+    """Get patch history as a tree structure showing lineage and relationships."""
+    run = db.get(RenderRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    # Fetch all patches for this run
+    all_patches = db.execute(
+        select(RunPatchRecord)
+        .where(
+            RunPatchRecord.run_id == run_id,
+            RunPatchRecord.deleted_at.is_(None),
+        )
+        .order_by(RunPatchRecord.created_at.asc())
+    ).scalars().all()
+
+    # Build tree structure
+    nodes_dict: dict[str, PatchHistoryTreeNode] = {}
+    root_node_ids: list[str] = []
+
+    for patch in all_patches:
+        payload = patch.patch_json or {}
+        node = PatchHistoryTreeNode(
+            patch_id=patch.id,
+            patch_type=patch.patch_type,
+            shot_id=payload.get("shot_id"),
+            track=payload.get("track"),
+            parent_patch_id=payload.get("parent_patch_id"),
+            rollback_target_id=payload.get("rollback_to_patch_id"),
+            patch_text=payload.get("patch_text"),
+            requested_by=payload.get("requested_by"),
+            requested_at=payload.get("requested_at"),
+            created_at=patch.created_at or datetime.now(timezone.utc),
+            depth=0,
+        )
+        nodes_dict[patch.id] = node
+
+    # Calculate depths and build parent-child relationships
+    def calculate_depth(node_id: str, visited: set[str] | None = None) -> int:
+        if visited is None:
+            visited = set()
+        if node_id in visited:
+            return 0
+        visited.add(node_id)
+
+        node = nodes_dict.get(node_id)
+        if not node or not node.parent_patch_id:
+            return 0
+
+        parent = nodes_dict.get(node.parent_patch_id)
+        if not parent:
+            return 1
+
+        return 1 + calculate_depth(node.parent_patch_id, visited)
+
+    # Build relationships
+    for patch_id, node in nodes_dict.items():
+        node.depth = calculate_depth(patch_id)
+        if not node.parent_patch_id:
+            root_node_ids.append(patch_id)
+        else:
+            parent_node = nodes_dict.get(node.parent_patch_id)
+            if parent_node and patch_id not in parent_node.children_patch_ids:
+                parent_node.children_patch_ids.append(patch_id)
+
+    root_nodes = [nodes_dict[rid] for rid in root_node_ids if rid in nodes_dict]
+    max_depth = max([node.depth for node in nodes_dict.values()]) if nodes_dict else 0
+
+    return PatchHistoryTreeResponse(
+        run_id=run_id,
+        root_nodes=root_nodes,
+        all_nodes=nodes_dict,
+        total_patches=len(all_patches),
+        tree_height=max_depth + 1,
+    )
+
+
+@router.get("/runs/{run_id}/timeline/patches/{patch_id}/rollback-comparison", response_model=RollbackComparisonResponse)
+def get_rollback_comparison(
+    run_id: str,
+    patch_id: str,
+    db: Session = Depends(get_db),
+) -> RollbackComparisonResponse:
+    """Get detailed comparison of versions before and after rollback."""
+    run = db.get(RenderRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    patch = db.get(RunPatchRecord, patch_id)
+    if patch is None or patch.run_id != run_id:
+        raise HTTPException(status_code=404, detail="patch not found")
+
+    payload = patch.patch_json or {}
+    rollback_target_id = payload.get("rollback_to_patch_id")
+
+    # Get the patch being rolled back from (if this is a rollback patch)
+    before_snapshot: dict = {}
+    after_snapshot: dict = {}
+    rollback_from_patch_id: str | None = None
+
+    if rollback_target_id:
+        # This is a rollback patch, compare with target
+        target_patch = db.get(RunPatchRecord, rollback_target_id)
+        if target_patch:
+            target_payload = target_patch.patch_json or {}
+            before_snapshot = {
+                "patch_text": target_payload.get("patch_text"),
+                "track": target_payload.get("track"),
+                "shot_id": target_payload.get("shot_id"),
+            }
+            rollback_from_patch_id = rollback_target_id
+    else:
+        # This is a regular patch, get parent as before
+        parent_patch_id = payload.get("parent_patch_id")
+        if parent_patch_id:
+            parent_patch = db.get(RunPatchRecord, parent_patch_id)
+            if parent_patch:
+                parent_payload = parent_patch.patch_json or {}
+                before_snapshot = {
+                    "patch_text": parent_payload.get("patch_text"),
+                    "track": parent_payload.get("track"),
+                    "shot_id": parent_payload.get("shot_id"),
+                }
+
+    after_snapshot = {
+        "patch_text": payload.get("patch_text"),
+        "track": payload.get("track"),
+        "shot_id": payload.get("shot_id"),
+    }
+
+    # Calculate changes
+    changes: list[RollbackComparisonDetail] = []
+    if before_snapshot.get("patch_text") != after_snapshot.get("patch_text"):
+        before_text = str(before_snapshot.get("patch_text") or "")
+        after_text = str(after_snapshot.get("patch_text") or "")
+
+        changes.append(RollbackComparisonDetail(
+            field="patch_text",
+            before_value=before_text[:100] if before_text else None,
+            after_value=after_text[:100] if after_text else None,
+            change_type="modified" if before_text and after_text else ("added" if after_text else "removed"),
+            importance="critical",
+        ))
+
+    if before_snapshot.get("track") != after_snapshot.get("track"):
+        changes.append(RollbackComparisonDetail(
+            field="track",
+            before_value=before_snapshot.get("track"),
+            after_value=after_snapshot.get("track"),
+            change_type="modified",
+            importance="high",
+        ))
+
+    # Calculate similarity score
+    similarity_score = 1.0
+    if before_text and after_text:
+        matching_chars = sum(1 for a, b in zip(before_text, after_text) if a == b)
+        similarity_score = matching_chars / max(len(before_text), len(after_text))
+    elif before_text or after_text:
+        similarity_score = 0.5
+
+    change_summary = f"{len(changes)} change(s): " + ", ".join([c.field for c in changes[:3]])
+
+    return RollbackComparisonResponse(
+        patch_id=patch_id,
+        rollback_from_patch_id=rollback_from_patch_id,
+        shot_id=payload.get("shot_id"),
+        track=payload.get("track"),
+        before_snapshot=before_snapshot,
+        after_snapshot=after_snapshot,
+        changes=changes,
+        similarity_score=round(similarity_score, 2),
+        change_summary=change_summary,
+        created_at=patch.created_at or datetime.now(timezone.utc),
     )
