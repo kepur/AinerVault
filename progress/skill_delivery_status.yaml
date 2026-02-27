@@ -411,6 +411,8 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/novels.py (novel/chapter CRUD + revision history + chapter preview 01~03 + chapter->task)"
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioChapterManagerPage.vue (章节独立页面，Markdown/修订/预览分离，不再堆叠到任务面板)"
+      - "code/apps/ainern2d-studio-web/src/pages/StudioChapterManagerPage.vue (小说列表->章节列表层级视图；新建小说/新建章节/编辑章节三段分离)"
+      - "npm --prefix code/apps/ainern2d-studio-web run build -> PASS"
     next_action:
       - "补充章节发布审批与 diff 对比交互"
 
@@ -429,9 +431,11 @@ skills:
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (Provider Token+Capability CRUD、Profile CRUD、Feature Matrix、Stage/Feature 路由、Telegram 配置)"
       - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py (/language-settings 多语言策略 API) + code/apps/ainern2d-studio-web/src/pages/StudioLanguageSettingsPage.vue (中英/小语种配置 UI)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py + code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (provider test-connection API + 单条/批量健康探测)"
+      - "code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (feature routing 可视化绑定：功能->profile 下拉 + capability 兼容校验)"
       - "npm run build (ainern2d-studio-web) -> PASS"
     next_action:
-      - "补充真实 provider 联通健康检查（网络探测 + 限流指标）"
+      - "补充 provider 配额/限流/余额指标接入（在联通探测基础上扩展）"
 
   - skill_id: "SKILL_26"
     name: "RAG / KB / Dataset / Persona Console"
@@ -479,6 +483,7 @@ skills:
       - "code/apps/ainern2d-studio-api/app/api/v1/novels.py (/chapters/{chapter_id}/tasks)"
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioRunCenterPage.vue (任务提交/Run Snapshot 独立页面 + 快速选章)"
+      - "code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioRunCenterPage.vue (Run 详情 + Prompt 回放 + Policy 回放可视化)"
     next_action:
       - "DAG 可视化与阶段级 rerun-stage 前端入口"
 

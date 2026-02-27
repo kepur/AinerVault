@@ -79,8 +79,10 @@
       <NSpace>
         <NButton type="primary" @click="onUpsertProvider">新增/更新 Provider</NButton>
         <NButton @click="onListProviders">刷新 Provider</NButton>
+        <NButton type="info" @click="onBatchProbeProviders">批量健康探测</NButton>
       </NSpace>
       <NDataTable :columns="providerColumns" :data="filteredProviders" :pagination="{ pageSize: 8 }" />
+      <NDataTable :columns="probeColumns" :data="providerProbeRows" :pagination="{ pageSize: 6 }" />
     </NCard>
 
     <NCard title="Model Profile + 功能路由映射">
@@ -117,12 +119,28 @@
       <NFormItem label="Feature Routes JSON（功能->Profile）">
         <NInput v-model:value="featureRoutesJson" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
       </NFormItem>
+      <NGrid :cols="2" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem v-for="item in featureBindingItems" :key="item.featureKey" span="0:2 900:1">
+          <NFormItem :label="`Feature: ${item.featureKey}`">
+            <NSelect
+              :value="featureRouteBindings[item.featureKey]"
+              :options="profileSelectOptions"
+              placeholder="选择 Profile"
+              filterable
+              clearable
+              @update:value="(value) => onUpdateFeatureBinding(item.featureKey, value)"
+            />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
       <NFormItem label="Provider Probe Path">
         <NInput v-model:value="providerProbePath" placeholder="/models" />
       </NFormItem>
       <NSpace>
+        <NButton type="primary" @click="onApplyVisualFeatureRoutes">应用功能路由映射</NButton>
         <NButton type="warning" @click="onUpsertRouting">Upsert Routing</NButton>
         <NButton type="primary" @click="onTestProvider()">测试联通</NButton>
+        <NButton @click="onLoadRouting">Load Routing</NButton>
         <NButton @click="onLoadHealth">Health</NButton>
         <NButton @click="onLoadFeatureMatrix">Feature Matrix</NButton>
       </NSpace>
@@ -180,6 +198,7 @@ import {
   NGrid,
   NGridItem,
   NInput,
+  NSelect,
   NSpace,
   NSwitch,
   type DataTableColumns,
@@ -187,11 +206,13 @@ import {
 
 import {
   type ModelProfileResponse,
+  type ProviderConnectionTestResponse,
   type ProviderResponse,
   deleteModelProfile,
   deleteProvider,
   getConfigHealth,
   getFeatureMatrix,
+  getStageRouting,
   getTelegramSettings,
   listModelProfiles,
   listProviders,
@@ -229,8 +250,18 @@ const profiles = ref<ModelProfileResponse[]>([]);
 const stageRoutesJson = ref('{"skill_01":"planner","skill_10":"planner"}');
 const fallbackJson = ref('{"planner":["fallback_a","fallback_b"]}');
 const featureRoutesJson = ref('{"embedding":"embedding","text_generation":"planner"}');
+const featureRouteBindings = ref<Record<string, string>>({
+  text_generation: "",
+  embedding: "",
+  multimodal: "",
+  image_generation: "",
+  video_generation: "",
+  tts: "",
+  stt: "",
+});
 const providerProbePath = ref("/models");
 const providerProbeText = ref("{}");
+const providerProbeRows = ref<ProviderProbeRow[]>([]);
 const configHealthText = ref("{}");
 const featureMatrixText = ref("{}");
 
@@ -244,6 +275,20 @@ const tgSettingsText = ref("{}");
 const message = ref("");
 const errorMessage = ref("");
 
+interface ProviderProbeRow {
+  provider_id: string;
+  provider_name: string;
+  connected: boolean;
+  status_code: number | null;
+  latency_ms: number | null;
+  message: string;
+  checked_at: string;
+}
+
+interface FeatureBindingItem {
+  featureKey: string;
+}
+
 const filteredProviders = computed(() =>
   providers.value.filter((item) => {
     const keyword = providerKeyword.value.trim().toLowerCase();
@@ -252,6 +297,23 @@ const filteredProviders = computed(() =>
     }
     return item.name.toLowerCase().includes(keyword) || (item.endpoint || "").toLowerCase().includes(keyword);
   })
+);
+
+const featureBindingItems = computed<FeatureBindingItem[]>(() => [
+  { featureKey: "text_generation" },
+  { featureKey: "embedding" },
+  { featureKey: "multimodal" },
+  { featureKey: "image_generation" },
+  { featureKey: "video_generation" },
+  { featureKey: "tts" },
+  { featureKey: "stt" },
+]);
+
+const profileSelectOptions = computed(() =>
+  profiles.value.map((profile) => ({
+    label: `${profile.purpose} · ${profile.name} (${profile.id})`,
+    value: profile.id,
+  }))
 );
 
 const providerColumns: DataTableColumns<ProviderResponse> = [
@@ -316,6 +378,15 @@ const providerColumns: DataTableColumns<ProviderResponse> = [
   },
 ];
 
+const probeColumns: DataTableColumns<ProviderProbeRow> = [
+  { title: "Provider", key: "provider_name" },
+  { title: "Connected", key: "connected", render: (row) => (row.connected ? "yes" : "no") },
+  { title: "Status", key: "status_code", render: (row) => String(row.status_code ?? "-") },
+  { title: "Latency(ms)", key: "latency_ms", render: (row) => String(row.latency_ms ?? "-") },
+  { title: "Message", key: "message" },
+  { title: "Checked At", key: "checked_at" },
+];
+
 const profileColumns: DataTableColumns<ModelProfileResponse> = [
   { title: "ID", key: "id" },
   { title: "Provider", key: "provider_id" },
@@ -362,6 +433,56 @@ function parseJsonObject(text: string): Record<string, unknown> {
     throw new Error("json must be object");
   }
   return parsed as Record<string, unknown>;
+}
+
+function syncFeatureBindingsFromJson(): void {
+  const source = parseJsonObject(featureRoutesJson.value);
+  const next = { ...featureRouteBindings.value };
+  for (const item of featureBindingItems.value) {
+    const raw = source[item.featureKey];
+    next[item.featureKey] = typeof raw === "string" ? raw : "";
+  }
+  featureRouteBindings.value = next;
+}
+
+function syncFeatureJsonFromBindings(): void {
+  const payload: Record<string, unknown> = {};
+  for (const item of featureBindingItems.value) {
+    const value = (featureRouteBindings.value[item.featureKey] || "").trim();
+    if (value) {
+      payload[item.featureKey] = value;
+    }
+  }
+  featureRoutesJson.value = JSON.stringify(payload, null, 2);
+}
+
+function onUpdateFeatureBinding(featureKey: string, value: string | null): void {
+  featureRouteBindings.value = {
+    ...featureRouteBindings.value,
+    [featureKey]: value || "",
+  };
+}
+
+function profileSupportsFeature(profileId: string, featureKey: string): boolean {
+  const profile = profiles.value.find((item) => item.id === profileId);
+  if (!profile) {
+    return false;
+  }
+  const provider = providers.value.find((item) => item.id === profile.provider_id);
+  if (!provider) {
+    return false;
+  }
+  const caps = provider.capability_flags || {};
+  const featureGateMap: Record<string, boolean> = {
+    text_generation: Boolean(caps.supports_text_generation),
+    embedding: Boolean(caps.supports_embedding),
+    multimodal: Boolean(caps.supports_multimodal),
+    image_generation: Boolean(caps.supports_image_generation),
+    video_generation: Boolean(caps.supports_video_generation),
+    tts: Boolean(caps.supports_tts),
+    stt: Boolean(caps.supports_stt),
+  };
+  return featureGateMap[featureKey] ?? false;
 }
 
 async function onListProviders(): Promise<void> {
@@ -458,6 +579,11 @@ async function onListProfiles(): Promise<void> {
       tenant_id: tenantId.value,
       project_id: projectId.value,
     });
+    try {
+      syncFeatureBindingsFromJson();
+    } catch {
+      // Keep manual JSON as-is when parse fails; user can fix json text then re-apply.
+    }
   } catch (error) {
     errorMessage.value = `list profiles failed: ${stringifyError(error)}`;
   }
@@ -481,6 +607,7 @@ async function onDeleteProfile(profileId: string): Promise<void> {
 async function onUpsertRouting(): Promise<void> {
   clearNotice();
   try {
+    syncFeatureJsonFromBindings();
     await upsertStageRouting({
       tenant_id: tenantId.value,
       project_id: projectId.value,
@@ -492,6 +619,36 @@ async function onUpsertRouting(): Promise<void> {
   } catch (error) {
     errorMessage.value = `upsert routing failed: ${stringifyError(error)}`;
   }
+}
+
+async function onLoadRouting(): Promise<void> {
+  clearNotice();
+  try {
+    const routing = await getStageRouting(tenantId.value, projectId.value);
+    stageRoutesJson.value = JSON.stringify(routing.routes || {}, null, 2);
+    fallbackJson.value = JSON.stringify(routing.fallback_chain || {}, null, 2);
+    featureRoutesJson.value = JSON.stringify(routing.feature_routes || {}, null, 2);
+    syncFeatureBindingsFromJson();
+    message.value = "routing loaded";
+  } catch (error) {
+    errorMessage.value = `load routing failed: ${stringifyError(error)}`;
+  }
+}
+
+function onApplyVisualFeatureRoutes(): void {
+  clearNotice();
+  for (const item of featureBindingItems.value) {
+    const profileId = (featureRouteBindings.value[item.featureKey] || "").trim();
+    if (!profileId) {
+      continue;
+    }
+    if (!profileSupportsFeature(profileId, item.featureKey)) {
+      errorMessage.value = `feature ${item.featureKey} incompatible with profile ${profileId}`;
+      return;
+    }
+  }
+  syncFeatureJsonFromBindings();
+  message.value = "feature routes mapped from visual bindings";
 }
 
 async function onTestProvider(providerId?: string): Promise<void> {
@@ -508,6 +665,7 @@ async function onTestProvider(providerId?: string): Promise<void> {
       probe_path: providerProbePath.value || "/models",
       timeout_ms: 5000,
     });
+    upsertProbeRow(toProbeRow(response));
     providerProbeText.value = JSON.stringify(response, null, 2);
     selectedProviderId.value = targetProviderId;
     if (response.connected) {
@@ -518,6 +676,59 @@ async function onTestProvider(providerId?: string): Promise<void> {
   } catch (error) {
     errorMessage.value = `test provider failed: ${stringifyError(error)}`;
   }
+}
+
+function toProbeRow(response: ProviderConnectionTestResponse): ProviderProbeRow {
+  return {
+    provider_id: response.provider_id,
+    provider_name: response.provider_name,
+    connected: response.connected,
+    status_code: response.status_code ?? null,
+    latency_ms: response.latency_ms ?? null,
+    message: response.message,
+    checked_at: new Date().toISOString(),
+  };
+}
+
+function upsertProbeRow(row: ProviderProbeRow): void {
+  const index = providerProbeRows.value.findIndex((item) => item.provider_id === row.provider_id);
+  if (index >= 0) {
+    providerProbeRows.value.splice(index, 1, row);
+    return;
+  }
+  providerProbeRows.value = [row, ...providerProbeRows.value];
+}
+
+async function onBatchProbeProviders(): Promise<void> {
+  clearNotice();
+  if (providers.value.length === 0) {
+    errorMessage.value = "no providers to probe";
+    return;
+  }
+  const rows: ProviderProbeRow[] = [];
+  for (const provider of providers.value) {
+    try {
+      const response = await testProviderConnection(provider.id, {
+        tenant_id: tenantId.value,
+        project_id: projectId.value,
+        probe_path: providerProbePath.value || "/models",
+        timeout_ms: 5000,
+      });
+      rows.push(toProbeRow(response));
+    } catch (error) {
+      rows.push({
+        provider_id: provider.id,
+        provider_name: provider.name,
+        connected: false,
+        status_code: null,
+        latency_ms: null,
+        message: `probe_failed:${stringifyError(error)}`,
+        checked_at: new Date().toISOString(),
+      });
+    }
+  }
+  providerProbeRows.value = rows;
+  message.value = `batch probe done: ${rows.length} providers`;
 }
 
 async function onLoadFeatureMatrix(): Promise<void> {
@@ -597,6 +808,7 @@ async function onLoadTelegramSettings(): Promise<void> {
 onMounted(() => {
   void onListProviders();
   void onListProfiles();
+  void onLoadRouting();
   void onLoadHealth();
   void onLoadFeatureMatrix();
   void onLoadTelegramSettings();

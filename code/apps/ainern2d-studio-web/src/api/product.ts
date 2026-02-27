@@ -80,6 +80,41 @@ export interface RunSnapshotResponse {
   snapshot: Record<string, unknown>;
 }
 
+export interface RunDetailResponse {
+  run_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  latest_error?: {
+    error_code?: string;
+    message?: string;
+  } | null;
+  final_artifact_uri?: string | null;
+}
+
+export interface PromptPlanReplayItem {
+  plan_id: string;
+  run_id: string;
+  shot_id: string;
+  prompt_text: string;
+  negative_prompt_text?: string | null;
+  model_hint_json?: Record<string, unknown> | null;
+}
+
+export interface PolicyStackReplayItem {
+  policy_stack_id: string;
+  run_id: string;
+  name: string;
+  status: string;
+  active_persona_ref: string;
+  review_items: string[];
+  hard_constraints: number;
+  soft_constraints: number;
+  guidelines: number;
+  conflicts: number;
+  audit_entries: number;
+}
+
 export interface ProviderResponse {
   id: string;
   tenant_id: string;
@@ -484,6 +519,24 @@ export async function getRunSnapshot(runId: string): Promise<RunSnapshotResponse
   return data;
 }
 
+export async function getRunDetail(runId: string): Promise<RunDetailResponse> {
+  const { data } = await http.get<RunDetailResponse>(`/api/v1/runs/${runId}`);
+  return data;
+}
+
+export async function getRunPromptPlans(runId: string, params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<PromptPlanReplayItem[]> {
+  const { data } = await http.get<PromptPlanReplayItem[]>(`/api/v1/runs/${runId}/prompt-plans`, { params });
+  return data;
+}
+
+export async function getRunPolicyStacks(runId: string): Promise<PolicyStackReplayItem[]> {
+  const { data } = await http.get<PolicyStackReplayItem[]>(`/api/v1/runs/${runId}/policy-stacks`);
+  return data;
+}
+
 export async function upsertProvider(payload: {
   tenant_id: string;
   project_id: string;
@@ -563,6 +616,13 @@ export async function upsertStageRouting(payload: {
   feature_routes?: Record<string, unknown>;
 }): Promise<StageRoutingResponse> {
   const { data } = await http.put<StageRoutingResponse>("/api/v1/config/stage-routing", payload);
+  return data;
+}
+
+export async function getStageRouting(tenantId: string, projectId: string): Promise<StageRoutingResponse> {
+  const { data } = await http.get<StageRoutingResponse>("/api/v1/config/stage-routing", {
+    params: { tenant_id: tenantId, project_id: projectId },
+  });
   return data;
 }
 
