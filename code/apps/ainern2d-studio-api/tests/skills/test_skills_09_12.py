@@ -263,6 +263,71 @@ class TestSkill10:
             for frag in out.global_prompt_constraints.global_positive_fragments
         )
 
+    def test_precheck_requires_shot_plan_and_shot_render_plans(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+
+        out_missing_shots = svc.execute(self._make_input(shot_plan={}), ctx)
+        assert out_missing_shots.status == "failed"
+        assert any(
+            "PLAN-VALIDATION-004" in warning
+            for warning in out_missing_shots.warnings
+        )
+
+        out_missing_render_plans = svc.execute(
+            self._make_input(
+                visual_render_plan={"status": "ready_for_render_execution"},
+            ),
+            ctx,
+        )
+        assert out_missing_render_plans.status == "failed"
+        assert any(
+            "PLAN-VALIDATION-005" in warning
+            for warning in out_missing_render_plans.warnings
+        )
+
+    def test_persona_validation_warning_uses_plan_domain(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+        out = svc.execute(
+            self._make_input(
+                persona_dataset_index_result={
+                    "runtime_manifests": [{"persona_ref": "director_B@1.0"}],
+                },
+                active_persona_ref="director_A@2.0",
+            ),
+            ctx,
+        )
+        assert out.status == "review_required"
+        assert any(
+            warning.startswith("PLAN-")
+            for warning in out.warnings
+        )
+        assert any(
+            "PLAN-VALIDATION-007" in item.reason
+            for item in out.review_required_items
+        )
+
+    def test_prompt_plan_persisted_per_shot(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+        out = svc.execute(self._make_input(), ctx)
+        assert mock_db.merge.call_count == len(out.shot_prompt_plans)
+        persisted_rows = [call.args[0] for call in mock_db.merge.call_args_list]
+        assert all(row.run_id == ctx.run_id for row in persisted_rows)
+        assert all(row.prompt_text for row in persisted_rows)
+        assert all(row.model_hint_json.get("model_mode") for row in persisted_rows)
+
+    def test_prompt_plan_persistence_replay_id_stable(self, mock_db, ctx):
+        svc = self._make_service(mock_db)
+        inp = self._make_input()
+
+        svc.execute(inp, ctx)
+        ids_first = [call.args[0].id for call in mock_db.merge.call_args_list]
+
+        mock_db.merge.reset_mock()
+        svc.execute(inp, ctx)
+        ids_second = [call.args[0].id for call in mock_db.merge.call_args_list]
+
+        assert ids_first == ids_second
+
 
 # ── SKILL 11: RagKBManagerService ────────────────────────────────────────────
 

@@ -174,11 +174,15 @@ class EntityRegistryContinuityService(BaseSkillService[Skill21Input, Skill21Outp
                 }
                 if input_dto.feature_flags.enable_world_model_link and source_entity.world_model_id:
                     anchors["world_model_id"] = source_entity.world_model_id
-                continuity_status = (
-                    "needs_review"
-                    if resolved.confidence < 0.75 or not source_entity.label
-                    else "active"
-                )
+                existing_profile = self._find_continuity_profile(ctx, resolved.matched_entity_id)
+                if existing_profile and existing_profile.continuity_status == "locked":
+                    continuity_status = "locked"
+                else:
+                    continuity_status = (
+                        "needs_review"
+                        if resolved.confidence < 0.75 or not source_entity.label
+                        else "active"
+                    )
                 if continuity_status == "needs_review":
                     review_required_items.append(
                         f"continuity_review:{resolved.source_entity_uid}"
@@ -281,7 +285,8 @@ class EntityRegistryContinuityService(BaseSkillService[Skill21Input, Skill21Outp
 
                 existing = self._find_continuity_profile(ctx, entity_id)
                 if existing:
-                    existing.continuity_status = profile.continuity_status
+                    if existing.continuity_status != "locked":
+                        existing.continuity_status = profile.continuity_status
                     existing.anchors_json = dict(profile.anchors)
                     existing.rules_json = dict(profile.rules)
                     existing.meta_json = {

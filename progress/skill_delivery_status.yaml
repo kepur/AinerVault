@@ -183,7 +183,11 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补 API/DB E2E：验证 persona/continuity 注入后的 prompt_plan 持久化与回放一致"
+      - "已完成预检查必填收敛与错误码域对齐（PLAN-*）"
+      - "已接入 PromptPlan 持久化（按 run+shot 稳定ID merge）"
+      - "已补 API+DB E2E：/api/v1/runs/{run_id}/prompt-plans 回放与持久化一致性"
+      - "已补跨多 shot + microshot 输入的回放一致性 E2E（持久化记录稳定）"
+      - "下一步补充性能基线（大批量 shot 回放分页与时延指标）"
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"
@@ -331,8 +335,8 @@ skills:
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
       - "code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py"
-    next_action:
-      - "补 API 级 E2E：连通 preview 审批接口，验证 continuity lock 在后续 run 持续生效"
+      - "code/apps/ainern2d-studio-api/tests/skills/test_skill21_api_db_e2e.py"
+    next_action: []
 
   - skill_id: "SKILL_22"
     name: "Persona Dataset & Index Manager"

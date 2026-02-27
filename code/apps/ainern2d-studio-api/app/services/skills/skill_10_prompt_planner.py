@@ -17,6 +17,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.content_models import PromptPlan
 from ainern2d_shared.schemas.skills.skill_10 import (
     AssemblyRules,
     BackendCapability,
@@ -339,6 +340,13 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             avg_consistency_score=avg_cs,
         )
 
+        self._persist_prompt_plans(
+            ctx=ctx,
+            shot_plans=shot_plans,
+            model_variants=model_variants,
+            ff=ff,
+        )
+
         logger.info(
             f"[{self.skill_id}] completed | run={ctx.run_id} "
             f"shots={summary.total_shots} microshots={summary.total_microshots} "
@@ -360,6 +368,61 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             review_required_items=review_items,
         )
 
+    def _persist_prompt_plans(
+        self,
+        ctx: SkillContext,
+        shot_plans: list[ShotPromptPlan],
+        model_variants: list[ModelVariant],
+        ff: Skill10FeatureFlags,
+    ) -> None:
+        """Persist shot-level prompt plans for downstream replay / audit."""
+        variant_map: dict[str, ModelVariant] = {}
+        for variant in model_variants:
+            if variant.target_type == "shot" and variant.target_id:
+                variant_map.setdefault(variant.target_id, variant)
+
+        for shot_plan in shot_plans:
+            variant = variant_map.get(shot_plan.shot_id)
+            if variant is None:
+                positive_prompt = _assemble_positive(
+                    shot_plan.prompt_layers,
+                    shot_plan.assembly_rules,
+                    shot_plan.lora_triggers,
+                    shot_plan.embedding_tokens,
+                    ff,
+                )
+                negative_prompt = _assemble_negative(
+                    shot_plan.negative_layers,
+                    shot_plan.assembly_rules,
+                )
+                model_mode = "T2I"
+            else:
+                positive_prompt = variant.positive_prompt
+                negative_prompt = variant.negative_prompt
+                model_mode = variant.model_mode
+
+            prompt_plan_row = PromptPlan(
+                id=f"PP_{hashlib.md5(f'{ctx.run_id}:{shot_plan.shot_id}'.encode()).hexdigest()[:16]}",
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                trace_id=ctx.trace_id,
+                correlation_id=ctx.correlation_id,
+                idempotency_key=f"{ctx.idempotency_key}:{self.skill_id}:{shot_plan.shot_id}",
+                run_id=ctx.run_id,
+                shot_id=shot_plan.shot_id,
+                prompt_text=positive_prompt,
+                negative_prompt_text=negative_prompt,
+                model_hint_json={
+                    "status": "ready_for_prompt_execution",
+                    "model_mode": model_mode,
+                    "token_budget_used": shot_plan.token_budget_used,
+                    "token_budget_limit": shot_plan.token_budget_limit,
+                    "consistency_anchors": list(shot_plan.consistency_anchors),
+                },
+            )
+            self.db.merge(prompt_plan_row)
+        self.db.commit()
+
     # ── P1: Precheck ─────────────────────────────────────────────────────
 
     def _precheck(self, inp: Skill10Input) -> list[str]:
@@ -367,15 +430,23 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         issues: list[str] = []
         if not inp.visual_render_plan:
             issues.append(
-                "PROMPT-PRECHECK-001: missing visual_render_plan (SKILL 09)",
+                "PLAN-VALIDATION-001: missing visual_render_plan (SKILL 09)",
             )
         if not inp.entity_canonicalization_result:
             issues.append(
-                "PROMPT-PRECHECK-002: missing entity_canonicalization_result (SKILL 07)",
+                "PLAN-VALIDATION-002: missing entity_canonicalization_result (SKILL 07)",
             )
         if not inp.asset_match_result:
             issues.append(
-                "PROMPT-PRECHECK-003: missing asset_match_result (SKILL 08)",
+                "PLAN-VALIDATION-003: missing asset_match_result (SKILL 08)",
+            )
+        if not _extract_list(inp.shot_plan, "shots"):
+            issues.append(
+                "PLAN-VALIDATION-004: missing shot_plan.shots",
+            )
+        if not _extract_list(inp.visual_render_plan, "shot_render_plans"):
+            issues.append(
+                "PLAN-VALIDATION-005: missing visual_render_plan.shot_render_plans",
             )
         for src in [
             inp.entity_canonicalization_result,
@@ -384,7 +455,7 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
         ]:
             s = src.get("status", "")
             if s and "failed" in s.lower():
-                issues.append(f"PROMPT-PRECHECK-004: upstream status is '{s}'")
+                issues.append(f"PLAN-STATE-001: upstream status is '{s}'")
         return issues
 
     # ── P2: Global Constraints (§17.2) ───────────────────────────────────
@@ -564,7 +635,7 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                 continuity_anchor_refs.append(str(anchor.get("entity_id") or key))
                 entity.extend(list(anchor.get("consistency_tokens") or [])[:2])
                 if str(anchor.get("continuity_status") or "") == "needs_review":
-                    warnings.append(f"PROMPT-CONTINUITY-001: {key} needs continuity review")
+                    warnings.append(f"PLAN-CONSISTENCY-001: {key} needs continuity review")
 
                 critic_rule = continuity_ctx["critic_rule_map"].get(
                     str(anchor.get("entity_id") or key)
@@ -757,7 +828,7 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
             )
             lora, embed = [], []
             warnings.append(
-                f"PROMPT-MS-001: parent shot '{parent_id}' not found "
+                f"PLAN-VALIDATION-006: parent shot '{parent_id}' not found "
                 f"for microshot '{ms_id}'",
             )
 
@@ -1032,7 +1103,7 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                     ", ".join(_all_positive_fragments(plan.prompt_layers)),
                 )
                 plan.warnings.append(
-                    f"PROMPT-BUDGET-001: trimmed '{removed}' from {layer_name}",
+                    f"PLAN-BUDGET-001: trimmed '{removed}' from {layer_name}",
                 )
         plan.token_budget_used = total
 
@@ -1146,14 +1217,14 @@ class PromptPlannerService(BaseSkillService[Skill10Input, Skill10Output]):
                 )
                 if selected is None:
                     review_reason = (
-                        f"PROMPT-PERSONA-001: active_persona_ref '{active_ref}' not found"
+                        f"PLAN-VALIDATION-007: active_persona_ref '{active_ref}' not found"
                     )
                     warnings.append(review_reason)
             if selected is None:
                 selected = manifests[0]
         elif persona_result:
             warnings.append(
-                "PROMPT-PERSONA-002: persona_dataset_index_result has no runtime_manifests"
+                "PLAN-VALIDATION-008: persona_dataset_index_result has no runtime_manifests"
             )
 
         runtime_manifest = dict((selected or {}).get("runtime_manifest") or {})

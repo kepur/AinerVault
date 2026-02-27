@@ -4,8 +4,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.content_models import PromptPlan
 from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
 from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
 from ainern2d_shared.db.repositories.pipeline import RenderRunRepository, WorkflowEventRepository
@@ -26,6 +29,15 @@ class TaskSubmitRequest(TaskCreateRequest):
 
 class TaskSubmitAccepted(TaskResponse):
 	pass
+
+
+class PromptPlanReplayItem(BaseModel):
+	plan_id: str
+	run_id: str
+	shot_id: str
+	prompt_text: str
+	negative_prompt_text: str | None = None
+	model_hint_json: dict | None = None
 
 
 @router.post("/tasks", response_model=TaskSubmitAccepted, status_code=202)
@@ -108,3 +120,31 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRespo
 		final_artifact_uri=None,
 	)
 
+
+@router.get("/runs/{run_id}/prompt-plans", response_model=list[PromptPlanReplayItem])
+def get_run_prompt_plans(run_id: str, db: Session = Depends(get_db)) -> list[PromptPlanReplayItem]:
+	run_repo = RenderRunRepository(db)
+	run = run_repo.get(run_id)
+	if run is None:
+		raise HTTPException(status_code=404, detail="run not found")
+
+	plans = db.execute(
+		select(PromptPlan)
+		.where(
+			PromptPlan.run_id == run_id,
+			PromptPlan.deleted_at.is_(None),
+		)
+		.order_by(PromptPlan.shot_id.asc()),
+	).scalars().all()
+
+	return [
+		PromptPlanReplayItem(
+			plan_id=plan.id,
+			run_id=plan.run_id,
+			shot_id=plan.shot_id,
+			prompt_text=plan.prompt_text,
+			negative_prompt_text=plan.negative_prompt_text,
+			model_hint_json=plan.model_hint_json,
+		)
+		for plan in plans
+	]
