@@ -117,11 +117,16 @@
       <NFormItem label="Feature Routes JSON（功能->Profile）">
         <NInput v-model:value="featureRoutesJson" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" />
       </NFormItem>
+      <NFormItem label="Provider Probe Path">
+        <NInput v-model:value="providerProbePath" placeholder="/models" />
+      </NFormItem>
       <NSpace>
         <NButton type="warning" @click="onUpsertRouting">Upsert Routing</NButton>
+        <NButton type="primary" @click="onTestProvider()">测试联通</NButton>
         <NButton @click="onLoadHealth">Health</NButton>
         <NButton @click="onLoadFeatureMatrix">Feature Matrix</NButton>
       </NSpace>
+      <pre class="json-panel">{{ providerProbeText }}</pre>
       <pre class="json-panel">{{ configHealthText }}</pre>
       <pre class="json-panel">{{ featureMatrixText }}</pre>
     </NCard>
@@ -190,6 +195,7 @@ import {
   getTelegramSettings,
   listModelProfiles,
   listProviders,
+  testProviderConnection,
   upsertTelegramSettings,
   upsertModelProfile,
   upsertProvider,
@@ -223,6 +229,8 @@ const profiles = ref<ModelProfileResponse[]>([]);
 const stageRoutesJson = ref('{"skill_01":"planner","skill_10":"planner"}');
 const fallbackJson = ref('{"planner":["fallback_a","fallback_b"]}');
 const featureRoutesJson = ref('{"embedding":"embedding","text_generation":"planner"}');
+const providerProbePath = ref("/models");
+const providerProbeText = ref("{}");
 const configHealthText = ref("{}");
 const featureMatrixText = ref("{}");
 
@@ -293,6 +301,11 @@ const providerColumns: DataTableColumns<ProviderResponse> = [
               capToolCalling.value = Boolean(caps.supports_tool_calling);
             },
           }, { default: () => "Use" }),
+          h(NButton, {
+            size: "small",
+            type: "info",
+            onClick: () => void onTestProvider(row.id),
+          }, { default: () => "Test" }),
           h(NButton, {
             size: "small",
             type: "error",
@@ -478,6 +491,32 @@ async function onUpsertRouting(): Promise<void> {
     message.value = "stage routing updated";
   } catch (error) {
     errorMessage.value = `upsert routing failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onTestProvider(providerId?: string): Promise<void> {
+  clearNotice();
+  const targetProviderId = (providerId || selectedProviderId.value).trim();
+  if (!targetProviderId) {
+    errorMessage.value = "select provider first";
+    return;
+  }
+  try {
+    const response = await testProviderConnection(targetProviderId, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      probe_path: providerProbePath.value || "/models",
+      timeout_ms: 5000,
+    });
+    providerProbeText.value = JSON.stringify(response, null, 2);
+    selectedProviderId.value = targetProviderId;
+    if (response.connected) {
+      message.value = `provider connected: ${response.provider_name} (${response.status_code ?? "ok"})`;
+      return;
+    }
+    errorMessage.value = `provider not connected: ${response.message}`;
+  } catch (error) {
+    errorMessage.value = `test provider failed: ${stringifyError(error)}`;
   }
 }
 

@@ -138,6 +138,17 @@ export interface FeatureMatrixResponse {
   }>;
 }
 
+export interface ProviderConnectionTestResponse {
+  provider_id: string;
+  provider_name: string;
+  endpoint: string;
+  probe_url: string;
+  connected: boolean;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  message: string;
+}
+
 export interface ConfigHealthResponse {
   tenant_id: string;
   project_id: string;
@@ -501,6 +512,19 @@ export async function deleteProvider(providerId: string, params: {
   project_id: string;
 }): Promise<void> {
   await http.delete(`/api/v1/config/providers/${providerId}`, { params });
+}
+
+export async function testProviderConnection(providerId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  probe_path?: string;
+  timeout_ms?: number;
+}): Promise<ProviderConnectionTestResponse> {
+  const { data } = await http.post<ProviderConnectionTestResponse>(
+    `/api/v1/config/providers/${providerId}/test-connection`,
+    payload
+  );
+  return data;
 }
 
 export async function upsertModelProfile(payload: {

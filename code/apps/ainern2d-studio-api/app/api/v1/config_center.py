@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from time import perf_counter
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -108,6 +111,24 @@ class FeatureMatrixResponse(BaseModel):
     tenant_id: str
     project_id: str
     items: list[FeatureMatrixItem] = Field(default_factory=list)
+
+
+class ProviderConnectionTestRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    probe_path: str = "/models"
+    timeout_ms: int = 4000
+
+
+class ProviderConnectionTestResponse(BaseModel):
+    provider_id: str
+    provider_name: str
+    endpoint: str
+    probe_url: str
+    connected: bool
+    status_code: int | None = None
+    latency_ms: int | None = None
+    message: str
 
 
 class ProviderHealthItem(BaseModel):
@@ -444,6 +465,126 @@ def delete_provider(
         stack.deleted_at = now
     db.commit()
     return {"status": "deleted", "provider_id": provider_id}
+
+
+@router.post("/providers/{provider_id}/test-connection", response_model=ProviderConnectionTestResponse)
+def test_provider_connection(
+    provider_id: str,
+    body: ProviderConnectionTestRequest,
+    db: Session = Depends(get_db),
+) -> ProviderConnectionTestResponse:
+    provider = db.get(ModelProvider, provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="provider not found")
+    if provider.tenant_id != body.tenant_id or provider.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN-002: provider scope mismatch")
+
+    endpoint = (provider.endpoint or "").strip()
+    if not endpoint:
+        return ProviderConnectionTestResponse(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint="",
+            probe_url="",
+            connected=False,
+            status_code=None,
+            latency_ms=0,
+            message="missing provider endpoint",
+        )
+
+    settings_payload = _provider_settings_map(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_ids=[provider.id],
+    ).get(provider.id, _default_provider_settings())
+    token = (settings_payload.get("access_token") or "").strip()
+    auth_mode = (provider.auth_mode or "api_key").strip().lower()
+    probe_path = (body.probe_path or "/models").strip()
+    if not probe_path.startswith("/"):
+        probe_path = f"/{probe_path}"
+    probe_url = f"{endpoint.rstrip('/')}{probe_path}"
+    timeout_seconds = max(0.2, min(15.0, body.timeout_ms / 1000.0))
+
+    headers: dict[str, str] = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    raw_headers = settings_payload.get("headers_json") or {}
+    for key, value in dict(raw_headers).items():
+        if key and value is not None:
+            headers[str(key)] = str(value)
+    if auth_mode in {"api_key", "token", "bearer"} and token:
+        headers.setdefault("Authorization", f"Bearer {token}")
+
+    if auth_mode in {"api_key", "token", "bearer"} and not token:
+        return ProviderConnectionTestResponse(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint=endpoint,
+            probe_url=probe_url,
+            connected=False,
+            status_code=None,
+            latency_ms=0,
+            message="missing provider token for auth mode",
+        )
+
+    started = perf_counter()
+    request = Request(url=probe_url, method="GET", headers=headers)
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            latency_ms = int((perf_counter() - started) * 1000)
+            status_code = int(getattr(response, "status", 0) or 0)
+            connected = 200 <= status_code < 300
+            message = "connected" if connected else f"unexpected status {status_code}"
+            return ProviderConnectionTestResponse(
+                provider_id=provider.id,
+                provider_name=provider.name,
+                endpoint=endpoint,
+                probe_url=probe_url,
+                connected=connected,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                message=message,
+            )
+    except HTTPError as exc:
+        latency_ms = int((perf_counter() - started) * 1000)
+        # 401/403 also prove endpoint is reachable; surface as connected with auth warning.
+        reachable = exc.code in {401, 403}
+        return ProviderConnectionTestResponse(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint=endpoint,
+            probe_url=probe_url,
+            connected=reachable,
+            status_code=exc.code,
+            latency_ms=latency_ms,
+            message=f"http_error:{exc.code}",
+        )
+    except URLError as exc:
+        latency_ms = int((perf_counter() - started) * 1000)
+        return ProviderConnectionTestResponse(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint=endpoint,
+            probe_url=probe_url,
+            connected=False,
+            status_code=None,
+            latency_ms=latency_ms,
+            message=f"network_error:{exc.reason}",
+        )
+    except Exception as exc:  # pragma: no cover
+        latency_ms = int((perf_counter() - started) * 1000)
+        return ProviderConnectionTestResponse(
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint=endpoint,
+            probe_url=probe_url,
+            connected=False,
+            status_code=None,
+            latency_ms=latency_ms,
+            message=f"probe_error:{str(exc)}",
+        )
 
 
 @router.post("/profiles", response_model=ModelProfileResponse)

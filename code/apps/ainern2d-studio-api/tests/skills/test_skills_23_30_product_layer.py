@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from unittest.mock import patch as mock_patch
 from uuid import uuid4
 
 import pytest
@@ -433,6 +434,29 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 )
                 assert provider_list.status_code == 200
                 assert any(item["id"] == provider_id for item in provider_list.json())
+
+                class _FakeHTTPResponse:
+                    status = 200
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+
+                with mock_patch("app.api.v1.config_center.urlopen", return_value=_FakeHTTPResponse()):
+                    probe = client.post(
+                        f"/api/v1/config/providers/{provider_id}/test-connection",
+                        json={
+                            "tenant_id": tenant_id,
+                            "project_id": project_id,
+                            "probe_path": "/models",
+                            "timeout_ms": 2000,
+                        },
+                    )
+                assert probe.status_code == 200
+                assert probe.json()["connected"] is True
+                assert probe.json()["status_code"] == 200
 
                 profile = client.post(
                     "/api/v1/config/profiles",
