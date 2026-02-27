@@ -17,6 +17,7 @@ from collections import Counter
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.schemas.events import EventEnvelope
 from ainern2d_shared.schemas.skills.skill_13 import (
     ActionTaken,
     EvolutionHistory,
@@ -105,11 +106,27 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
     def execute(self, input_dto: Skill13Input, ctx: SkillContext) -> Skill13Output:
         state = Skill13State.INIT
         flags = input_dto.feature_flags
+        events: list[str] = []
+        event_envelopes: list[EventEnvelope] = []
 
         try:
             # ── F1: Capture Feedback ──────────────────────────────────────
             state = self._transition(ctx, state, Skill13State.CAPTURING_FEEDBACK)
             feedback_event = self._capture_feedback(input_dto, ctx)
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="feedback.event.created",
+                payload={
+                    "feedback_event_id": feedback_event.feedback_event_id,
+                    "run_id": feedback_event.run_id,
+                    "shot_id": feedback_event.shot_id,
+                    "kb_version_id": feedback_event.kb_version_id,
+                    "rating": feedback_event.rating,
+                    "issues": feedback_event.issues,
+                },
+            )
 
             # ── Impact scoring ────────────────────────────────────────────
             impact = self._compute_impact(input_dto)
@@ -131,6 +148,8 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                     impact_score=impact,
                     state=state.value,
                     status="completed",
+                    events_emitted=events,
+                    event_envelopes=event_envelopes,
                 )
 
             # ── F3: Run-level Patch ───────────────────────────────────────
@@ -152,11 +171,26 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                     impact_score=impact,
                     state=state.value,
                     status="completed",
+                    events_emitted=events,
+                    event_envelopes=event_envelopes,
                 )
 
             # ── F4: Proposal Auto-generation ──────────────────────────────
             state = self._transition(ctx, state, Skill13State.GENERATING_PROPOSAL)
             proposal = self._generate_proposal(input_dto, feedback_event, flags)
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="proposal.created",
+                payload={
+                    "proposal_id": proposal.proposal_id,
+                    "feedback_event_id": proposal.feedback_event_id,
+                    "suggested_role": proposal.suggested_role,
+                    "target_skill": proposal.target_skill,
+                    "status": proposal.status,
+                },
+            )
 
             # ── Evolution recommendations per skill ───────────────────────
             recommendations = self._generate_recommendations(input_dto, proposal)
@@ -175,6 +209,36 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                 regression_passed = all(r.passed for r in regression_results)
                 if not regression_passed:
                     proposal.status = ProposalStatus.REJECTED.value
+                    self._emit_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        event_type="proposal.reviewed",
+                        payload={
+                            "proposal_id": proposal.proposal_id,
+                            "decision": "rejected",
+                            "reason": "regression_failed",
+                        },
+                    )
+                    self._emit_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        event_type="proposal.rejected",
+                        payload={
+                            "proposal_id": proposal.proposal_id,
+                            "feedback_event_id": proposal.feedback_event_id,
+                            "reason": "regression_failed",
+                        },
+                    )
+                    self._emit_rollback_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        run_context=input_dto.run_context,
+                        proposal=proposal,
+                        reason="regression_failed",
+                    )
                     state = self._transition(ctx, state, Skill13State.FAILED)
                     logger.warning(
                         f"[{self.skill_id}] regression failed | "
@@ -191,6 +255,8 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                         evolution_recommendations=recommendations,
                         state=state.value,
                         status="regression_failed",
+                        events_emitted=events,
+                        event_envelopes=event_envelopes,
                     )
 
             # ── F5: Review & Merge ────────────────────────────────────────
@@ -199,6 +265,48 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                     ctx, state, Skill13State.REVIEWING_PROPOSAL,
                 )
                 proposal = self._review_proposal(proposal, flags)
+                review_decision = "approved" if proposal.status == ProposalStatus.APPROVED.value else "pending_review"
+                self._emit_event(
+                    events,
+                    event_envelopes,
+                    ctx,
+                    event_type="proposal.reviewed",
+                    payload={
+                        "proposal_id": proposal.proposal_id,
+                        "decision": review_decision,
+                        "status": proposal.status,
+                    },
+                )
+                if proposal.status == ProposalStatus.APPROVED.value:
+                    self._emit_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        event_type="proposal.approved",
+                        payload={
+                            "proposal_id": proposal.proposal_id,
+                            "feedback_event_id": proposal.feedback_event_id,
+                        },
+                    )
+                elif proposal.status == ProposalStatus.REJECTED.value:
+                    self._emit_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        event_type="proposal.rejected",
+                        payload={
+                            "proposal_id": proposal.proposal_id,
+                            "feedback_event_id": proposal.feedback_event_id,
+                        },
+                    )
+                    self._emit_rollback_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        run_context=input_dto.run_context,
+                        proposal=proposal,
+                        reason="review_rejected",
+                    )
 
             # ── F5 cont: Apply to KB (if approved/merged) ────────────────
             kb_evolution = False
@@ -224,6 +332,17 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                 logger.info(
                     f"[{self.skill_id}] embedding build triggered | "
                     f"kb_version={new_kb_version_id}"
+                )
+                self._emit_event(
+                    events,
+                    event_envelopes,
+                    ctx,
+                    event_type="kb.version.released",
+                    payload={
+                        "kb_version_id": new_kb_version_id,
+                        "source_proposal_id": proposal.proposal_id,
+                        "kb_version_before": input_dto.run_context.kb_version_id,
+                    },
                 )
 
                 # ── F7: Evaluate improvement ──────────────────────────────
@@ -264,6 +383,8 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
                 kb_evolution_triggered=kb_evolution,
                 new_kb_version_id=new_kb_version_id,
                 status="completed",
+                events_emitted=events,
+                event_envelopes=event_envelopes,
             )
 
         except Exception as exc:
@@ -542,6 +663,58 @@ class FeedbackLoopService(BaseSkillService[Skill13Input, Skill13Output]):
     def _generate_kb_version_id(inp: Skill13Input) -> str:
         ts = utcnow().strftime("%Y%m%d_%H%M%S")
         return f"KB_V_{ts}_{uuid.uuid4().hex[:6]}"
+
+    @staticmethod
+    def _emit_event(
+        events: list[str],
+        event_envelopes: list[EventEnvelope],
+        ctx: SkillContext,
+        *,
+        event_type: str,
+        payload: dict,
+    ) -> None:
+        events.append(event_type)
+        event_envelopes.append(
+            EventEnvelope(
+                event_type=event_type,
+                event_version="1.0",
+                schema_version=ctx.schema_version,
+                producer="ainern2d-studio-api.skill_13",
+                occurred_at=utcnow(),
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
+                correlation_id=ctx.correlation_id,
+                idempotency_key=f"{ctx.idempotency_key}:{event_type}:{len(events)}",
+                payload=payload,
+            )
+        )
+
+    def _emit_rollback_event(
+        self,
+        events: list[str],
+        event_envelopes: list[EventEnvelope],
+        ctx: SkillContext,
+        *,
+        run_context,
+        proposal: ImprovementProposal,
+        reason: str,
+    ) -> None:
+        target_kb_version = run_context.kb_version_id
+        if not target_kb_version:
+            return
+        self._emit_event(
+            events,
+            event_envelopes,
+            ctx,
+            event_type="kb.version.rolled_back",
+            payload={
+                "rollback_target_kb_version_id": target_kb_version,
+                "source_proposal_id": proposal.proposal_id,
+                "reason": reason,
+            },
+        )
 
     def _transition(
         self,

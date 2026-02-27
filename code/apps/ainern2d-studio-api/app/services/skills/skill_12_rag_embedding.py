@@ -922,6 +922,42 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
 
     # ── Utilities ─────────────────────────────────────────────────
 
+    @staticmethod
+    def _promote_gate_passed(metrics: EvalMetrics) -> bool:
+        """Release gate for promotion based on eval metrics."""
+        return (
+            metrics.recall_at_k >= 0.7
+            and metrics.constraint_conflict_rate <= 0.1
+            and metrics.recommendation == "promote_to_active"
+        )
+
+    @staticmethod
+    def _emit_event(
+        events: list[str],
+        event_envelopes: list[EventEnvelope],
+        ctx: SkillContext,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        events.append(event_type)
+        event_envelopes.append(
+            EventEnvelope(
+                event_type=event_type,
+                event_version="1.0",
+                schema_version=ctx.schema_version,
+                producer="ainern2d-studio-api.skill_12",
+                occurred_at=utcnow(),
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
+                correlation_id=ctx.correlation_id,
+                idempotency_key=f"{ctx.idempotency_key}:{event_type}:{len(events)}",
+                payload=payload,
+            )
+        )
+
     def _transition(
         self, ctx: SkillContext, from_s: PipelineStage, to_s: PipelineStage,
     ) -> None:

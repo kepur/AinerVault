@@ -58,6 +58,9 @@ class TestSkill13:
         assert out.proposal is not None
         assert out.proposal.suggested_role == "cinematographer"
         assert len(out.evolution_recommendations) > 0
+        assert "feedback.event.created" in out.events_emitted
+        assert "proposal.created" in out.events_emitted
+        assert "proposal.reviewed" in out.events_emitted
 
     def test_execute_good_rating_ignored(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_13 import (
@@ -71,6 +74,8 @@ class TestSkill13:
         assert out.action_taken == "ignored"
         assert out.proposal is None
         assert out.kb_evolution_triggered is False
+        assert out.events_emitted == ["feedback.event.created"]
+        assert out.event_envelopes[0].tenant_id == ctx.tenant_id
 
     def test_free_text_only_creates_run_patch(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_13 import (
@@ -86,6 +91,47 @@ class TestSkill13:
         assert out.action_taken == "run_patch"
         assert out.run_patch is not None
         assert out.kb_evolution_triggered is False
+        assert "feedback.event.created" in out.events_emitted
+
+    def test_regression_reject_triggers_rollback_event(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_13 import (
+            RegressionTestResult,
+            RunContext,
+            ShotResultContext,
+            Skill13Input,
+            UserFeedback,
+        )
+        svc = self._make_service(mock_db)
+
+        svc._run_regression_tests = lambda proposal: [  # type: ignore[method-assign]
+            RegressionTestResult(
+                test_id="rt_fail",
+                proposal_id=proposal.proposal_id,
+                historical_case_id="case_1",
+                previous_score=0.6,
+                new_score=0.2,
+                passed=False,
+                detail="forced failure",
+            )
+        ]
+
+        inp = Skill13Input(
+            run_context=RunContext(run_id="run_rb", kb_version_id="KB_V_BASE"),
+            shot_result_context=ShotResultContext(shot_id="S1"),
+            user_feedback=UserFeedback(
+                rating=1,
+                issues=["prompt_quality"],
+                free_text="force regression fail path",
+            ),
+        )
+        out = svc.execute(inp, ctx)
+        assert out.status == "regression_failed"
+        assert "proposal.rejected" in out.events_emitted
+        assert "kb.version.rolled_back" in out.events_emitted
+        rollback_env = next(
+            env for env in out.event_envelopes if env.event_type == "kb.version.rolled_back"
+        )
+        assert rollback_env.payload["rollback_target_kb_version_id"] == "KB_V_BASE"
 
 
 # ── SKILL 14: PersonaStyleService ────────────────────────────────────────────

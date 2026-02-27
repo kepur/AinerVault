@@ -202,7 +202,9 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "对齐事件发布要求并补 E2E 验证"
+      - "已补事件契约：输出 events_emitted + event_envelopes（kb.item.* / kb.version.* / rag.chunking.started）"
+      - "已补服务级 E2E：11->12 事件链路与 Envelope 上下文字段校验"
+      - "下一步：接入真实消息总线发布/消费侧验证（当前为服务内事件输出）"
 
   - skill_id: "SKILL_12"
     name: "RAG Pipeline Embedding"
@@ -215,7 +217,9 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补充 promote gate 与统计字段契约测试"
+      - "已补事件契约：rag.chunking.started / rag.embedding.completed / rag.index.ready / rag.eval.completed"
+      - "已补 promote gate：通过时发布 kb.rollout.promoted，并回写 promote_gate_passed"
+      - "下一步：补真实向量库延迟与召回性能基线测试"
 
   - skill_id: "SKILL_13"
     name: "Feedback Evolution Loop"
@@ -228,7 +232,10 @@ skills:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
     next_action:
-      - "补齐反馈事件发布链路与回流闭环测试"
+      - "已补事件契约：feedback.event.created / proposal.created / proposal.reviewed / proposal.approved / proposal.rejected / kb.version.released"
+      - "已补服务级 E2E：feedback -> proposal -> review -> kb release 事件闭环校验"
+      - "已补 proposal.rejected -> kb.version.rolled_back 自动回滚联动与服务级 E2E"
+      - "已补跨服务 E2E：已将 SKILL_13 的 kb.version.rolled_back 接入 SKILL_11 rollback 执行器形成真实发布回滚闭环"
 
   - skill_id: "SKILL_14"
     name: "Persona Style Pack Manager"

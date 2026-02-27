@@ -368,6 +368,11 @@ class TestSkill11:
         out = svc.execute(Skill11Input(kb_id="kb_t11_002", action="publish"), ctx)
         assert out.status == "READY"
         assert out.kb_version_id != ""
+        assert "kb.version.release.requested" in out.events_emitted
+        assert "kb.version.released" in out.events_emitted
+        assert out.event_envelopes
+        assert out.event_envelopes[0].tenant_id == ctx.tenant_id
+        assert out.event_envelopes[0].project_id == ctx.project_id
 
     def test_rollback_action(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_11 import KBEntry, Skill11Input
@@ -390,6 +395,11 @@ class TestSkill11:
         ), ctx)
         assert out.status == "READY"
         assert "kb.version.rolled_back" in out.events_emitted
+        assert any(
+            env.event_type == "kb.version.rolled_back"
+            and env.trace_id == ctx.trace_id
+            for env in out.event_envelopes
+        )
 
     def test_invalid_action_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_11 import Skill11Input
@@ -431,6 +441,9 @@ class TestSkill12:
         assert out.status == "index_ready"
         assert out.index_metadata.index_id.startswith("idx_kb_001")
         assert out.index_metadata.total_vectors > 0
+        assert "rag.chunking.started" in out.events_emitted
+        assert "rag.embedding.completed" in out.events_emitted
+        assert "rag.index.ready" in out.events_emitted
 
     def test_coverage_ratio_valid(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_12 import KnowledgeItem, Skill12Input
@@ -451,3 +464,30 @@ class TestSkill12:
         inp = Skill12Input(kb_id="", kb_version_id="v1")
         with pytest.raises(ValueError, match="RAG-VALIDATION"):
             svc.execute(inp, ctx)
+
+    def test_promote_gate_pass_emits_rollout_event(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_12 import KnowledgeItem, Skill12Input
+        svc = self._make_service(mock_db)
+        inp = Skill12Input(
+            kb_id="kb_gate",
+            kb_version_id="v_gate",
+            preview_queries=["wuxia duel continuity"],
+            knowledge_items=[
+                KnowledgeItem(
+                    item_id=f"item_{i}",
+                    role="director",
+                    content=(
+                        f"Wuxia continuity guidance {i} for duel composition and pacing. "
+                        "Keep camera flow stable and preserve character identity across cuts. "
+                    ) * 4,
+                    tags=["wuxia", "continuity"],
+                )
+                for i in range(8)
+            ],
+        )
+        out = svc.execute(inp, ctx)
+        assert out.eval.enabled is True
+        assert out.promote_gate_passed is True
+        assert "rag.eval.completed" in out.events_emitted
+        assert "kb.rollout.promoted" in out.events_emitted
+        assert all(env.schema_version == ctx.schema_version for env in out.event_envelopes)
