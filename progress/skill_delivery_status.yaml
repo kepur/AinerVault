@@ -402,7 +402,7 @@ skills:
 
   - skill_id: "SKILL_24"
     name: "Project / Novel / Chapter Manager"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_24_PROJECT_NOVEL_CHAPTER_MANAGER.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/novels.py"
@@ -418,8 +418,11 @@ skills:
       - "code/apps/ainern2d-studio-web/src/pages/StudioChapterWorkspacePage.vue (章节编辑工作区：Markdown 左编辑右预览、保存/预览/修订/AI扩写按钮)"
       - "code/apps/ainern2d-studio-web/src/router/index.ts + src/App.vue (24 菜单分层：小说管理 / 章节工作区)"
       - "npm --prefix code/apps/ainern2d-studio-web run build -> PASS"
-    next_action:
-      - "补充章节发布审批与 diff 可视化对比（PR 风格）"
+      - "TASK_CARD_24_CHAPTER_APPROVAL_DIFF: 添加章节发布审批流 + PR 式 diff 可视化"
+      - "API: GET /chapters/{chapter_id}/publish-status (查询状态) + POST /chapters/{chapter_id}/publish-approval (submit/approve/reject) + GET /chapters/{chapter_id}/diff"
+      - "状态流转: draft → pending (submit) → released (approve) 或 draft (reject)"
+      - "Diff 计算: 行级别对比，返回 additions/deletions 统计与详细行差异"
+    next_action: []
 
   - skill_id: "SKILL_25"
     name: "Config Center / API Model Router"

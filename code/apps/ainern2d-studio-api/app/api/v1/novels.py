@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -137,6 +137,44 @@ class ChapterAssistExpandResponse(BaseModel):
     mode: str
     prompt_tokens_estimate: int
     completion_tokens_estimate: int
+
+
+class ChapterPublishStatus(BaseModel):
+    """章节发布审批状态"""
+    chapter_id: str
+    status: str  # draft / pending / approved / released
+    submitted_by: str | None = None
+    submitted_at: datetime | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    rejected_by: str | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+
+
+class ChapterDiffResponse(BaseModel):
+    """章节版本 diff"""
+    chapter_id: str
+    from_version: str
+    to_version: str
+    from_text: str
+    to_text: str
+    diff_lines: list[dict]  # [{type: "add/remove/unchanged", content: "...", line_no: int}]
+    additions: int
+    deletions: int
+
+
+class ChapterPublishApprovalRequest(BaseModel):
+    """章节发布审批请求"""
+    tenant_id: str
+    action: str  # submit / approve / reject
+    rejection_reason: str | None = None
+
+
+class ChapterDiffRequest(BaseModel):
+    """章节 diff 请求"""
+    from_version: str = "latest"  # "latest" 或指定版本 ID
+    to_version: str = "current"  # "current" 或指定版本 ID
 
 
 @router.post("/novels", response_model=NovelResponse, status_code=201)
@@ -664,6 +702,73 @@ def _chapter_to_response(chapter: Chapter) -> ChapterResponse:
     )
 
 
+def _compute_diff(from_text: str, to_text: str) -> tuple[list[dict], int, int]:
+    """
+    简单的行级 diff 计算（基于行的增删比较）
+
+    返回:
+        (diff_lines, additions, deletions)
+        - diff_lines: [{"type": "add/remove/unchanged", "content": "...", "line_no": int}]
+        - additions: 增加的行数
+        - deletions: 删除的行数
+    """
+    from_lines = from_text.split("\n")
+    to_lines = to_text.split("\n")
+
+    diff_lines = []
+    additions = 0
+    deletions = 0
+
+    # 简单逻辑：比较行数
+    i, j = 0, 0
+    while i < len(from_lines) or j < len(to_lines):
+        if i >= len(from_lines):
+            # 剩余的是新增
+            diff_lines.append({
+                "type": "add",
+                "content": to_lines[j],
+                "line_no": j + 1
+            })
+            additions += 1
+            j += 1
+        elif j >= len(to_lines):
+            # 剩余的是删除
+            diff_lines.append({
+                "type": "remove",
+                "content": from_lines[i],
+                "line_no": i + 1
+            })
+            deletions += 1
+            i += 1
+        elif from_lines[i] == to_lines[j]:
+            # 相同行
+            diff_lines.append({
+                "type": "unchanged",
+                "content": from_lines[i],
+                "line_no": i + 1
+            })
+            i += 1
+            j += 1
+        else:
+            # 不同：优先认为是删除 + 新增
+            diff_lines.append({
+                "type": "remove",
+                "content": from_lines[i],
+                "line_no": i + 1
+            })
+            diff_lines.append({
+                "type": "add",
+                "content": to_lines[j],
+                "line_no": j + 1
+            })
+            additions += 1
+            deletions += 1
+            i += 1
+            j += 1
+
+    return diff_lines, additions, deletions
+
+
 def _append_revision_event(
     *,
     db: Session,
@@ -695,3 +800,178 @@ def _append_revision_event(
     )
     db.add(event)
     db.commit()
+
+
+@router.get("/chapters/{chapter_id}/publish-status", response_model=ChapterPublishStatus)
+def get_chapter_publish_status(
+    chapter_id: str,
+    db: Session = Depends(get_db),
+) -> ChapterPublishStatus:
+    """获取章节发布状态"""
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    # 从 metadata 或事件日志中读取发布状态
+    publish_metadata = chapter.metadata or {}
+    publish_status = publish_metadata.get("publish_status", "draft")
+
+    return ChapterPublishStatus(
+        chapter_id=chapter_id,
+        status=publish_status,
+        submitted_by=publish_metadata.get("submitted_by"),
+        submitted_at=publish_metadata.get("submitted_at"),
+        approved_by=publish_metadata.get("approved_by"),
+        approved_at=publish_metadata.get("approved_at"),
+        rejected_by=publish_metadata.get("rejected_by"),
+        rejected_at=publish_metadata.get("rejected_at"),
+        rejection_reason=publish_metadata.get("rejection_reason"),
+    )
+
+
+@router.post("/chapters/{chapter_id}/publish-approval", response_model=ChapterPublishStatus)
+def handle_chapter_publish_approval(
+    chapter_id: str,
+    body: ChapterPublishApprovalRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ChapterPublishStatus:
+    """章节发布审批流程：submit/approve/reject"""
+    from requests import Request as FastAPIRequest
+
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    if not hasattr(request.state, "auth_claims") or not request.state.auth_claims:
+        raise HTTPException(status_code=401, detail="AUTH-VALIDATION-001: unauthorized")
+
+    user_id = request.state.auth_claims.user_id
+    now = datetime.now(timezone.utc)
+
+    # 初始化 metadata
+    if chapter.metadata is None:
+        chapter.metadata = {}
+
+    action = body.action
+
+    if action == "submit":
+        # 提交审批
+        chapter.metadata["publish_status"] = "pending"
+        chapter.metadata["submitted_by"] = user_id
+        chapter.metadata["submitted_at"] = now.isoformat()
+        event_action = "chapter.publish.submitted"
+    elif action == "approve":
+        # 审批通过
+        if chapter.metadata.get("publish_status") != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="chapter must be in pending status to approve"
+            )
+        chapter.metadata["publish_status"] = "released"
+        chapter.metadata["approved_by"] = user_id
+        chapter.metadata["approved_at"] = now.isoformat()
+        event_action = "chapter.publish.approved"
+    elif action == "reject":
+        # 驳回
+        if chapter.metadata.get("publish_status") != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail="chapter must be in pending status to reject"
+            )
+        chapter.metadata["publish_status"] = "draft"
+        chapter.metadata["rejected_by"] = user_id
+        chapter.metadata["rejected_at"] = now.isoformat()
+        chapter.metadata["rejection_reason"] = body.rejection_reason or ""
+        event_action = "chapter.publish.rejected"
+    else:
+        raise HTTPException(status_code=400, detail=f"invalid action: {action}")
+
+    # 记录审计事件
+    event = WorkflowEvent(
+        id=f"evt_{uuid4().hex[:24]}",
+        tenant_id=chapter.tenant_id,
+        project_id=chapter.project_id,
+        trace_id=chapter.trace_id,
+        correlation_id=chapter.correlation_id,
+        idempotency_key=f"idem_publish_{chapter_id}_{uuid4().hex[:8]}",
+        run_id=None,
+        stage=None,
+        event_type="audit.recorded",
+        event_version="1.0",
+        producer="studio_api",
+        occurred_at=now,
+        payload_json={
+            "action": event_action,
+            "chapter_id": chapter_id,
+            "actor": user_id,
+            "rejection_reason": body.rejection_reason,
+        },
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(chapter)
+
+    return ChapterPublishStatus(
+        chapter_id=chapter_id,
+        status=chapter.metadata.get("publish_status", "draft"),
+        submitted_by=chapter.metadata.get("submitted_by"),
+        submitted_at=chapter.metadata.get("submitted_at"),
+        approved_by=chapter.metadata.get("approved_by"),
+        approved_at=chapter.metadata.get("approved_at"),
+        rejected_by=chapter.metadata.get("rejected_by"),
+        rejected_at=chapter.metadata.get("rejected_at"),
+        rejection_reason=chapter.metadata.get("rejection_reason"),
+    )
+
+
+@router.get("/chapters/{chapter_id}/diff", response_model=ChapterDiffResponse)
+def get_chapter_diff(
+    chapter_id: str,
+    from_version: str = Query(default="latest"),
+    to_version: str = Query(default="current"),
+    db: Session = Depends(get_db),
+) -> ChapterDiffResponse:
+    """获取章节版本对比（PR 风格）"""
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    # 获取当前版本
+    current_text = chapter.raw_text or ""
+
+    # 获取历史版本（从事件日志中查询）
+    revisions = db.execute(
+        select(WorkflowEvent).where(
+            WorkflowEvent.project_id == chapter.project_id,
+            WorkflowEvent.payload_json["chapter_id"].astext == chapter_id,
+            WorkflowEvent.event_type == "audit.recorded",
+            WorkflowEvent.deleted_at.is_(None),
+        ).order_by(WorkflowEvent.occurred_at.desc())
+    ).scalars().all()
+
+    from_text = current_text
+    if from_version == "latest" and len(revisions) > 0:
+        # 从最近的修订版本中获取
+        for rev in revisions:
+            if rev.payload_json.get("action") == "chapter.revision":
+                from_text = rev.payload_json.get("previous_markdown_text", current_text)
+                break
+
+    to_text = current_text
+    if to_version != "current":
+        # 可以在这里扩展以支持指定版本查询
+        pass
+
+    diff_lines, additions, deletions = _compute_diff(from_text, to_text)
+
+    return ChapterDiffResponse(
+        chapter_id=chapter_id,
+        from_version=from_version,
+        to_version=to_version,
+        from_text=from_text,
+        to_text=to_text,
+        diff_lines=diff_lines,
+        additions=additions,
+        deletions=deletions,
+    )
