@@ -133,6 +133,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state="READY",
+            **self._build_binding_refs(pack),
             persona_pack_manifest=pack,
         )
 
@@ -146,6 +147,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state="READY",
+            **self._build_binding_refs(pack),
             persona_pack_manifest=pack,
         )
 
@@ -153,6 +155,9 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
         self, dto: Skill14Input, ctx: SkillContext, flags: Skill14FeatureFlags,
     ) -> Skill14Output:
         pid = dto.persona_pack.persona_pack_id or dto.target_pack_id
+        if dto.rollback_to_version:
+            return self._action_update_with_rollback(pid, dto.rollback_to_version, ctx)
+
         existing = self._get_pack_or_error(pid)
         incoming = dto.persona_pack
         self._validate_pack_fields(incoming)
@@ -186,6 +191,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=new_ver,
             status=existing.status,
             state="READY",
+            **self._build_binding_refs(existing),
             persona_pack_manifest=existing,
         )
 
@@ -211,6 +217,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             persona_pack_id=first.persona_pack_id if first else "",
             status="listed",
             state="READY",
+            **self._build_binding_refs(first or PersonaPack()),
             persona_pack_manifest=first,
             warnings=[f"available_packs: {ids}"],
         )
@@ -238,6 +245,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=cloned.current_version,
             status=cloned.status,
             state="READY",
+            **self._build_binding_refs(cloned),
             persona_pack_manifest=cloned,
         )
 
@@ -250,8 +258,10 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
         self._record_state(ctx, "LOADING_CHAIN", "READY")
         return Skill14Output(
             persona_pack_id=pack_a.persona_pack_id,
+            current_version=pack_a.current_version,
             status="compared",
             state="READY",
+            **self._build_binding_refs(pack_a),
             diff=diff,
         )
 
@@ -292,6 +302,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=new_ver,
             status="active",
             state="READY",
+            **self._build_binding_refs(pack),
             persona_pack_manifest=pack,
         )
 
@@ -331,6 +342,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state=state,
+            **self._build_binding_refs(pack),
             resolved_style_dna=resolved_dna,
             resolved_rag_override=resolved_rag,
             resolved_policy_override=resolved_policy,
@@ -359,6 +371,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state=state,
+            **self._build_binding_refs(pack),
             consistency_issues=issues,
             warnings=[f"{len(issues)} consistency issue(s) found"] if issues else [],
         )
@@ -380,6 +393,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state="READY",
+            **self._build_binding_refs(pack),
             export_result=export,
         )
 
@@ -402,6 +416,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
             current_version=pack.current_version,
             status=pack.status,
             state="READY",
+            **self._build_binding_refs(pack),
             persona_pack_manifest=pack,
             warnings=warnings,
         )
@@ -434,6 +449,7 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
                     current_version=restored.current_version,
                     status=restored.status,
                     state="READY",
+                    **self._build_binding_refs(restored),
                     persona_pack_manifest=restored,
                     warnings=[f"rolled back to {target_ver}"],
                 )
@@ -490,6 +506,44 @@ class PersonaStyleService(BaseSkillService[Skill14Input, Skill14Output]):
         else:
             patch += 1
         return f"{major}.{minor}.{patch}"
+
+    @staticmethod
+    def _build_binding_refs(pack: PersonaPack) -> dict[str, str]:
+        """Build canonical refs consumed by SKILL 22 persona binding."""
+        pack_id = str(pack.persona_pack_id or "").strip()
+        version = str(pack.current_version or "").strip()
+        persona_pack_version_ref = f"{pack_id}@{version}" if pack_id and version else ""
+        style_pack_ref = persona_pack_version_ref
+
+        policy_override_ref = str(
+            (pack.policy_override.extra or {}).get("policy_override_ref") or ""
+        ).strip()
+        if not policy_override_ref and persona_pack_version_ref:
+            has_policy_override = (
+                pack.policy_override.prefer_microshots_in_high_motion
+                or pack.policy_override.max_dialogue_hold_ms_in_action != 1200
+                or bool(pack.policy_override.extra)
+            )
+            if has_policy_override:
+                policy_override_ref = f"{persona_pack_version_ref}:policy"
+
+        critic_profile_ref = str(
+            (pack.critic_threshold_override.extra or {}).get("critic_profile_ref") or ""
+        ).strip()
+        if not critic_profile_ref and persona_pack_version_ref:
+            has_critic_override = (
+                pack.critic_threshold_override.motion_readability_min != 0.7
+                or bool(pack.critic_threshold_override.extra)
+            )
+            if has_critic_override:
+                critic_profile_ref = f"{persona_pack_version_ref}:critic"
+
+        return {
+            "style_pack_ref": style_pack_ref,
+            "policy_override_ref": policy_override_ref,
+            "critic_profile_ref": critic_profile_ref,
+            "persona_pack_version_ref": persona_pack_version_ref,
+        }
 
     # ── Inheritance resolution ────────────────────────────────────────────────
 

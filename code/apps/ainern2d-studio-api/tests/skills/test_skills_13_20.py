@@ -242,16 +242,69 @@ class TestSkill14:
         out = svc.execute(inp, ctx)
         assert out.persona_pack_id == "p001"
         assert out.status == "draft"
+        assert out.style_pack_ref == "p001@0.1.0"
+        assert out.persona_pack_version_ref == "p001@0.1.0"
 
     def test_publish_status(self, mock_db, ctx):
-        from ainern2d_shared.schemas.skills.skill_14 import PersonaPack, Skill14Input
+        from ainern2d_shared.schemas.skills.skill_14 import (
+            CriticThresholdOverride,
+            PersonaPack,
+            PolicyOverride,
+            Skill14Input,
+        )
         svc = self._make_service(mock_db)
         # Create first, then publish
-        pack = PersonaPack(persona_pack_id="p002", display_name="测试导演")
+        pack = PersonaPack(
+            persona_pack_id="p002",
+            display_name="测试导演",
+            policy_override=PolicyOverride(prefer_microshots_in_high_motion=True),
+            critic_threshold_override=CriticThresholdOverride(motion_readability_min=0.82),
+        )
         svc.execute(Skill14Input(action="create", persona_pack=pack), ctx)
         inp = Skill14Input(action="publish", persona_pack=PersonaPack(persona_pack_id="p002"))
         out = svc.execute(inp, ctx)
         assert out.status == "active"
+        assert out.style_pack_ref == f"p002@{out.current_version}"
+        assert out.persona_pack_version_ref == f"p002@{out.current_version}"
+        assert out.policy_override_ref.endswith(":policy")
+        assert out.critic_profile_ref.endswith(":critic")
+
+    def test_update_with_rollback_to_version(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_14 import PersonaPack, Skill14Input
+
+        svc = self._make_service(mock_db)
+        created = svc.execute(
+            Skill14Input(
+                action="create",
+                persona_pack=PersonaPack(persona_pack_id="p003", display_name="rollback_demo"),
+            ),
+            ctx,
+        )
+        base_version = created.current_version
+
+        updated = svc.execute(
+            Skill14Input(
+                action="update",
+                persona_pack=PersonaPack(
+                    persona_pack_id="p003",
+                    display_name="rollback_demo_v2",
+                ),
+            ),
+            ctx,
+        )
+        assert updated.current_version != base_version
+
+        rolled = svc.execute(
+            Skill14Input(
+                action="update",
+                target_pack_id="p003",
+                rollback_to_version=base_version,
+            ),
+            ctx,
+        )
+        assert rolled.status == "draft"
+        assert any("rolled back to" in w for w in rolled.warnings)
+        assert rolled.style_pack_ref == f"p003@{rolled.current_version}"
 
     def test_invalid_action_raises(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_14 import Skill14Input

@@ -218,6 +218,52 @@ class TestSkill22:
         assert out.status == "review_required"
         assert any("persona_style_missing" in item for item in out.review_required_items)
 
+    def test_persona_style_result_defaults_fill_skill22_binding_refs(self, mock_db, ctx):
+        from ainern2d_shared.schemas.skills.skill_22 import (
+            DatasetItem,
+            IndexItem,
+            PersonaItem,
+            Skill22Input,
+        )
+
+        svc = self._make_service(mock_db)
+        style_result = {
+            "style_pack_ref": "director_pack@1.2.0",
+            "policy_override_ref": "director_pack@1.2.0:policy",
+            "critic_profile_ref": "director_pack@1.2.0:critic",
+            "persona_pack_version_ref": "director_pack@1.2.0",
+        }
+        inp = Skill22Input(
+            datasets=[DatasetItem(dataset_id="DS_001", name="rules")],
+            indexes=[IndexItem(index_id="IDX_001", kb_version_id="KB_V1", dataset_ids=["DS_001"])],
+            personas=[
+                PersonaItem(
+                    persona_id="director_C",
+                    persona_version="1.0",
+                    dataset_ids=["DS_001"],
+                    index_ids=["IDX_001"],
+                    style_pack_ref="",
+                    policy_override_ref="",
+                    critic_profile_ref="",
+                    metadata={},
+                )
+            ],
+            persona_style_result=style_result,
+        )
+        out = svc.execute(inp, ctx)
+
+        assert out.status == "persona_index_ready"
+        assert out.personas[0].style_pack_ref == style_result["style_pack_ref"]
+        assert out.personas[0].policy_override_ref == style_result["policy_override_ref"]
+        assert out.personas[0].critic_profile_ref == style_result["critic_profile_ref"]
+        assert (
+            out.personas[0].metadata.get("persona_pack_version_ref")
+            == style_result["persona_pack_version_ref"]
+        )
+        assert out.runtime_manifests[0].style_pack_ref == style_result["style_pack_ref"]
+        assert out.runtime_manifests[0].policy_override_ref == style_result["policy_override_ref"]
+        assert out.runtime_manifests[0].critic_profile_ref == style_result["critic_profile_ref"]
+
     def test_empty_personas_raise(self, mock_db, ctx):
         from ainern2d_shared.schemas.skills.skill_22 import Skill22Input
 

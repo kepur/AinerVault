@@ -337,6 +337,8 @@ def test_e2e_022_persona_runtime_manifest_consumed_by_10_15_17(mock_db, ctx):
                 persona_pack_id="director_pack_e2e022",
                 display_name="Director E2E 022",
                 base_role="director",
+                policy_override={"prefer_microshots_in_high_motion": True},
+                critic_threshold_override={"motion_readability_min": 0.82},
             ),
         ),
         ctx,
@@ -348,7 +350,6 @@ def test_e2e_022_persona_runtime_manifest_consumed_by_10_15_17(mock_db, ctx):
         ),
         ctx,
     )
-    style_pack_ref = f"{out14_create.persona_pack_id}@{out14_publish.current_version}"
 
     out22 = s22.execute(
         Skill22Input(
@@ -367,12 +368,13 @@ def test_e2e_022_persona_runtime_manifest_consumed_by_10_15_17(mock_db, ctx):
                     persona_version="2.0",
                     dataset_ids=["DS_E2E_001"],
                     index_ids=[index_id],
-                    style_pack_ref=style_pack_ref,
-                    policy_override_ref="policy_A_v2",
-                    critic_profile_ref="critic_A_v2",
-                    metadata={"persona_pack_version_id": "director_A@2.0"},
+                    style_pack_ref="",
+                    policy_override_ref="",
+                    critic_profile_ref="",
+                    metadata={},
                 )
             ],
+            persona_style_result=out14_publish.model_dump(mode="json"),
             preview_query="night duel in rain",
             preview_top_k=3,
         ),
@@ -380,6 +382,9 @@ def test_e2e_022_persona_runtime_manifest_consumed_by_10_15_17(mock_db, ctx):
     )
 
     assert out22.runtime_manifests
+    assert out22.personas[0].style_pack_ref == out14_publish.style_pack_ref
+    assert out22.personas[0].policy_override_ref == out14_publish.policy_override_ref
+    assert out22.personas[0].critic_profile_ref == out14_publish.critic_profile_ref
     active_persona_ref = out22.runtime_manifests[0].persona_ref
     runtime_payload = out22.model_dump(mode="json")
 

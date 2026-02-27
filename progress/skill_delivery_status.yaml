@@ -222,16 +222,15 @@ skills:
 
   - skill_id: "SKILL_14"
     name: "Persona Style Pack Manager"
-    status: "SERVICE_READY"
-    gate: "REVIEW_REQUIRED"
+    status: "DONE"
+    gate: "PASS"
     spec: "SKILL_14_PERSONA_STYLE_PACK_MANAGER.md"
     dto: "code/shared/ainern2d_shared/schemas/skills/skill_14.py"
     service: "code/apps/ainern2d-studio-api/app/services/skills/skill_14_persona_style.py"
     dispatch_binding:
       type: "studio_registry"
       path: "code/apps/ainern2d-studio-api/app/services/skill_registry.py"
-    next_action:
-      - "与 SKILL_22 dataset/index 绑定字段联调"
+    next_action: []
 
   - skill_id: "SKILL_15"
     name: "Creative Control Policy"

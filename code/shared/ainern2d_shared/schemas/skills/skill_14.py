@@ -245,6 +245,11 @@ class Skill14Output(BaseSchema):
     current_version: str = ""
     status: str = "draft"
     state: str = "READY"
+    # Binding refs for SKILL 22 (11/12/14 -> 22) and downstream 10/15/17.
+    style_pack_ref: str = ""
+    policy_override_ref: str = ""
+    critic_profile_ref: str = ""
+    persona_pack_version_ref: str = ""
 
     # Resolved persona (after inheritance)
     resolved_style_dna: StyleDNA | None = None

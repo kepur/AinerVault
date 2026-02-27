@@ -495,8 +495,11 @@ class PersonaDatasetIndexService(BaseSkillService[Skill22Input, Skill22Output]):
     ) -> tuple[list[PersonaItem], list[PersonaRuntimeManifestOut]]:
         personas_out: list[PersonaItem] = []
         manifests_out: list[PersonaRuntimeManifestOut] = []
-
-        default_style = str((input_dto.persona_style_result or {}).get("style_pack_ref") or "")
+        style_result = input_dto.persona_style_result or {}
+        default_style = str(style_result.get("style_pack_ref") or "")
+        default_policy = str(style_result.get("policy_override_ref") or "")
+        default_critic = str(style_result.get("critic_profile_ref") or "")
+        default_pack_version_ref = str(style_result.get("persona_pack_version_ref") or "")
 
         for persona in input_dto.personas:
             resolved_dataset_ids = [d for d in persona.dataset_ids if d in dataset_map]
@@ -518,6 +521,16 @@ class PersonaDatasetIndexService(BaseSkillService[Skill22Input, Skill22Output]):
 
             # Keep output persona aligned to resolved refs for downstream consumption.
             effective_style_ref = persona.style_pack_ref or default_style
+            effective_policy_ref = persona.policy_override_ref or default_policy
+            effective_critic_ref = persona.critic_profile_ref or default_critic
+            persona_meta = dict(persona.metadata or {})
+            if (
+                default_pack_version_ref
+                and not persona_meta.get("persona_pack_version_ref")
+                and not persona_meta.get("persona_pack_version_id")
+            ):
+                persona_meta["persona_pack_version_ref"] = default_pack_version_ref
+
             if not effective_style_ref:
                 review_required_items.append(f"persona_style_missing:{persona.persona_id}")
 
@@ -527,9 +540,9 @@ class PersonaDatasetIndexService(BaseSkillService[Skill22Input, Skill22Output]):
                 dataset_ids=resolved_dataset_ids,
                 index_ids=resolved_index_ids,
                 style_pack_ref=effective_style_ref,
-                policy_override_ref=persona.policy_override_ref,
-                critic_profile_ref=persona.critic_profile_ref,
-                metadata=persona.metadata,
+                policy_override_ref=effective_policy_ref,
+                critic_profile_ref=effective_critic_ref,
+                metadata=persona_meta,
             )
             personas_out.append(persona_out)
 
@@ -540,16 +553,16 @@ class PersonaDatasetIndexService(BaseSkillService[Skill22Input, Skill22Output]):
                     resolved_dataset_ids=resolved_dataset_ids,
                     resolved_index_ids=resolved_index_ids,
                     style_pack_ref=effective_style_ref,
-                    policy_override_ref=persona_out.policy_override_ref,
-                    critic_profile_ref=persona_out.critic_profile_ref,
+                    policy_override_ref=effective_policy_ref,
+                    critic_profile_ref=effective_critic_ref,
                     runtime_manifest={
                         "manifest_id": f"PRM_{uuid4().hex[:10].upper()}",
                         "persona_ref": persona_ref,
                         "dataset_ids": resolved_dataset_ids,
                         "index_ids": resolved_index_ids,
                         "style_pack_ref": effective_style_ref,
-                        "policy_override_ref": persona_out.policy_override_ref,
-                        "critic_profile_ref": persona_out.critic_profile_ref,
+                        "policy_override_ref": effective_policy_ref,
+                        "critic_profile_ref": effective_critic_ref,
                     },
                 )
             )
