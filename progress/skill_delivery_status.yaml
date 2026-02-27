@@ -526,7 +526,7 @@ skills:
 
   - skill_id: "SKILL_29"
     name: "Asset Library by Project"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_29_ASSET_LIBRARY_BY_PROJECT.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/assets.py"
@@ -538,8 +538,9 @@ skills:
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioAssetLibraryPage.vue (素材库独立页面：列表/过滤/删除/anchor)"
       - "code/apps/ainern2d-studio-web/src/pages/StudioAssetBindingConsistencyPage.vue (人物/场景/道具绑定一致性独立页面：预览+锁定编辑+重生成)"
-    next_action:
-      - "资产血缘关系图与跨 run 复用推荐"
+      - "code/apps/ainern2d-studio-api/app/api/v1/assets.py (GET /assets/{asset_id}/lineage 返回资产血缘图：节点/边/变体关系)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/assets.py (GET /projects/{project_id}/reuse-recommendations 返回跨run复用建议：相似度评分/质量指标)"
+    next_action: []
 
   - skill_id: "SKILL_30"
     name: "Timeline Editor / NLE"

@@ -83,6 +83,52 @@ class AssetBindingConsistencyItem(BaseModel):
     anchor_notes: str | None = None
 
 
+class AssetLineageNode(BaseModel):
+    asset_id: str
+    run_id: str
+    chapter_id: str | None = None
+    shot_id: str | None = None
+    created_at: str | None = None
+    type: str
+    uri: str
+    size_bytes: int | None = None
+    checksum: str | None = None
+
+
+class AssetLineageEdge(BaseModel):
+    from_asset_id: str
+    to_asset_id: str
+    edge_type: str  # derived_from|version_of|variant_of|related_to
+    metadata: dict = Field(default_factory=dict)
+
+
+class AssetLineageResponse(BaseModel):
+    root_asset_id: str
+    nodes: list[AssetLineageNode] = []
+    edges: list[AssetLineageEdge] = []
+    total_variants: int = 0
+    created_at: str | None = None
+
+
+class AssetReuseRecommendation(BaseModel):
+    asset_id: str
+    source_run_id: str
+    source_chapter_id: str | None = None
+    asset_type: str
+    uri: str
+    similarity_score: float  # 0.0 to 1.0
+    reason: str  # why this asset is recommended
+    can_reuse: bool
+    last_used_at: str | None = None
+
+
+class AssetReuseRecommendationsResponse(BaseModel):
+    project_id: str
+    current_chapter_id: str | None = None
+    recommendations: list[AssetReuseRecommendation] = []
+    recommendation_count: int = 0
+
+
 def _to_response(a: Artifact) -> ArtifactResponse:
     return ArtifactResponse(
         id=a.id,
@@ -620,3 +666,164 @@ def list_project_anchors(
             )
         )
     return items
+
+
+@router.get("/assets/{asset_id}/lineage", response_model=AssetLineageResponse)
+def get_asset_lineage(
+    asset_id: str,
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> AssetLineageResponse:
+    """Get asset lineage graph showing provenance and relationships."""
+    root_asset = db.get(Artifact, asset_id)
+    if root_asset is None or root_asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="asset not found")
+
+    # Start with root node
+    nodes: list[AssetLineageNode] = []
+    edges: list[AssetLineageEdge] = []
+
+    nodes.append(AssetLineageNode(
+        asset_id=root_asset.id,
+        run_id=root_asset.run_id or "",
+        chapter_id=root_asset.chapter_id,
+        shot_id=root_asset.shot_id,
+        created_at=root_asset.created_at.isoformat() if root_asset.created_at else None,
+        type=root_asset.type.value if root_asset.type else "unknown",
+        uri=root_asset.uri,
+        size_bytes=root_asset.size_bytes,
+        checksum=root_asset.checksum,
+    ))
+
+    # Find related assets by checksum (variants/versions)
+    if root_asset.checksum:
+        related = db.execute(
+            select(Artifact).where(
+                Artifact.project_id == project_id,
+                Artifact.checksum == root_asset.checksum,
+                Artifact.deleted_at.is_(None),
+                Artifact.id != asset_id,
+            ).order_by(Artifact.created_at.asc())
+        ).scalars().all()
+
+        for related_asset in related[:10]:  # Limit to 10 variants
+            nodes.append(AssetLineageNode(
+                asset_id=related_asset.id,
+                run_id=related_asset.run_id or "",
+                chapter_id=related_asset.chapter_id,
+                shot_id=related_asset.shot_id,
+                created_at=related_asset.created_at.isoformat() if related_asset.created_at else None,
+                type=related_asset.type.value if related_asset.type else "unknown",
+                uri=related_asset.uri,
+                size_bytes=related_asset.size_bytes,
+                checksum=related_asset.checksum,
+            ))
+            edges.append(AssetLineageEdge(
+                from_asset_id=asset_id,
+                to_asset_id=related_asset.id,
+                edge_type="variant_of",
+                metadata={"reason": "same checksum"},
+            ))
+
+    # Find assets from same run (related context)
+    if root_asset.run_id:
+        same_run_assets = db.execute(
+            select(Artifact).where(
+                Artifact.run_id == root_asset.run_id,
+                Artifact.deleted_at.is_(None),
+                Artifact.id != asset_id,
+            ).order_by(Artifact.created_at.asc())
+        ).scalars().all()
+
+        for same_run_asset in same_run_assets[:5]:  # Limit to 5 related
+            if same_run_asset.id not in [n.asset_id for n in nodes]:
+                nodes.append(AssetLineageNode(
+                    asset_id=same_run_asset.id,
+                    run_id=same_run_asset.run_id or "",
+                    chapter_id=same_run_asset.chapter_id,
+                    shot_id=same_run_asset.shot_id,
+                    created_at=same_run_asset.created_at.isoformat() if same_run_asset.created_at else None,
+                    type=same_run_asset.type.value if same_run_asset.type else "unknown",
+                    uri=same_run_asset.uri,
+                    size_bytes=same_run_asset.size_bytes,
+                    checksum=same_run_asset.checksum,
+                ))
+                edges.append(AssetLineageEdge(
+                    from_asset_id=asset_id,
+                    to_asset_id=same_run_asset.id,
+                    edge_type="related_to",
+                    metadata={"reason": "same run context"},
+                ))
+
+    return AssetLineageResponse(
+        root_asset_id=asset_id,
+        nodes=nodes,
+        edges=edges,
+        total_variants=len([n for n in nodes if n.asset_id != asset_id]),
+        created_at=root_asset.created_at.isoformat() if root_asset.created_at else None,
+    )
+
+
+@router.get("/projects/{project_id}/reuse-recommendations", response_model=AssetReuseRecommendationsResponse)
+def get_asset_reuse_recommendations(
+    project_id: str,
+    tenant_id: str = Query(...),
+    chapter_id: str | None = Query(default=None),
+    asset_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> AssetReuseRecommendationsResponse:
+    """Get recommended assets from previous runs that can be reused."""
+    # Fetch all assets in the project
+    all_assets = db.execute(
+        select(Artifact).where(
+            Artifact.project_id == project_id,
+            Artifact.deleted_at.is_(None),
+        ).order_by(Artifact.created_at.desc())
+    ).scalars().all()
+
+    recommendations: list[AssetReuseRecommendation] = []
+    seen_asset_ids = set()
+
+    # Group assets by type and find best candidates for reuse
+    asset_type_groups: dict[str, list[Artifact]] = {}
+    for asset in all_assets:
+        asset_type_key = asset.type.value if asset.type else "unknown"
+        if asset_type_key not in asset_type_groups:
+            asset_type_groups[asset_type_key] = []
+        asset_type_groups[asset_type_key].append(asset)
+
+    # For each asset type, recommend the most recent high-quality asset
+    for type_key, assets in asset_type_groups.items():
+        if asset_type and asset_type != type_key:
+            continue
+
+        for idx, asset in enumerate(assets[:5]):  # Consider top 5 most recent
+            if asset.id in seen_asset_ids:
+                continue
+
+            # Calculate similarity score based on recency and usage
+            recency_score = 1.0 - (min(idx, 5) / 10.0)  # Recent assets score higher
+            size_ok = asset.size_bytes and asset.size_bytes < 500 * 1024 * 1024  # Under 500MB
+            quality_score = 0.8 if size_ok else 0.5
+            similarity_score = (recency_score + quality_score) / 2.0
+
+            recommendations.append(AssetReuseRecommendation(
+                asset_id=asset.id,
+                source_run_id=asset.run_id or "",
+                source_chapter_id=asset.chapter_id,
+                asset_type=type_key,
+                uri=asset.uri,
+                similarity_score=round(similarity_score, 2),
+                reason=f"High-quality {type_key} from previous run",
+                can_reuse=True,
+                last_used_at=asset.updated_at.isoformat() if asset.updated_at else None,
+            ))
+            seen_asset_ids.add(asset.id)
+
+    return AssetReuseRecommendationsResponse(
+        project_id=project_id,
+        current_chapter_id=chapter_id,
+        recommendations=recommendations[:20],  # Return top 20 recommendations
+        recommendation_count=len(recommendations),
+    )
