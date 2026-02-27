@@ -975,3 +975,185 @@ def get_chapter_diff(
         additions=additions,
         deletions=deletions,
     )
+
+
+@router.post("/chapters/{chapter_id}/ai-expand", response_model=ChapterAssistExpandResponse, status_code=202)
+def ai_expand_chapter_content(
+    chapter_id: str,
+    body: ChapterAssistExpandRequest,
+    db: Session = Depends(get_db),
+) -> ChapterAssistExpandResponse:
+    """一键AI智能扩展章节剧情"""
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    if chapter.tenant_id != body.tenant_id or chapter.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN: scope mismatch")
+
+    original_text = chapter.raw_text or ""
+    if not original_text:
+        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: chapter content is empty")
+
+    # 获取默认模型档案（从配置中心）
+    default_model = db.execute(
+        select(ModelProvider).where(
+            ModelProvider.tenant_id == body.tenant_id,
+            ModelProvider.project_id == body.project_id,
+            ModelProvider.is_default == True,
+            ModelProvider.deleted_at.is_(None),
+        )
+    ).scalars().first()
+
+    provider_used = "default"
+    model_name = "gpt-4"
+    if default_model:
+        provider_used = default_model.name
+        model_name = "default-model"
+
+    # 构建扩展提示词
+    expansion_prompt = _build_expansion_prompt(
+        original_text=original_text,
+        instruction=body.instruction,
+        style_hint=body.style_hint,
+        target_language=body.target_language or "zh",
+    )
+
+    # 模拟AI调用返回扩展内容（实际部署时应调用真实LLM）
+    expanded_text = _simulate_llm_expansion(
+        original_text=original_text,
+        prompt=expansion_prompt,
+        max_tokens=body.max_tokens,
+    )
+
+    # 提取新增部分
+    appended_excerpt = expanded_text[len(original_text):] if len(expanded_text) > len(original_text) else expanded_text
+
+    # 估算Token使用
+    prompt_tokens = len(expansion_prompt) // 4
+    completion_tokens = len(expanded_text) // 4
+
+    # 记录AI扩展事件
+    now = datetime.now(timezone.utc)
+    event = WorkflowEvent(
+        id=f"evt_{uuid4().hex[:24]}",
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        trace_id=chapter.trace_id,
+        correlation_id=chapter.correlation_id,
+        idempotency_key=f"idem_expand_{chapter_id}_{uuid4().hex[:8]}",
+        run_id=None,
+        event_type="chapter.ai_expansion",
+        event_version="1.0",
+        producer="studio_api",
+        occurred_at=now,
+        payload_json={
+            "chapter_id": chapter_id,
+            "instruction": body.instruction,
+            "style_hint": body.style_hint,
+            "original_length": len(original_text),
+            "expanded_length": len(expanded_text),
+            "model": model_name,
+            "provider": provider_used,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        },
+    )
+    db.add(event)
+    db.commit()
+
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="chapter.ai_expansion",
+        summary=f"AI扩展章节 {chapter.title or 'Chapter'}",
+        run_id=None,
+        trace_id=chapter.trace_id,
+        correlation_id=chapter.correlation_id,
+        extra={
+            "chapter_id": chapter_id,
+            "original_length": len(original_text),
+            "expanded_length": len(expanded_text),
+        },
+    )
+
+    return ChapterAssistExpandResponse(
+        chapter_id=chapter_id,
+        original_length=len(original_text),
+        expanded_length=len(expanded_text),
+        expanded_markdown=expanded_text,
+        appended_excerpt=appended_excerpt,
+        provider_used=provider_used,
+        model_name=model_name,
+        mode="expand",
+        prompt_tokens_estimate=prompt_tokens,
+        completion_tokens_estimate=completion_tokens,
+    )
+
+
+def _build_expansion_prompt(
+    original_text: str,
+    instruction: str,
+    style_hint: str,
+    target_language: str = "zh",
+) -> str:
+    """构建AI扩展提示词"""
+    return f"""你是一位专业的网络小说编剧助手。
+当前任务：{instruction}
+
+原始文本：
+```
+{original_text}
+```
+
+写作风格指引：{style_hint}
+
+要求：
+1. 保持原有故事主线和人物设定
+2. 增加细节描写、心理活动、对话等元素
+3. 提升情节节奏和阅读体验
+4. 保持一致的叙事风格
+5. 只输出扩展后的完整文本，不要包含任何解释或标记
+
+输出语言：{target_language}
+"""
+
+
+def _simulate_llm_expansion(original_text: str, prompt: str, max_tokens: int = 900) -> str:
+    """模拟LLM调用返回扩展文本（实际部署时应调用真实API）"""
+    # 这是一个简化的实现，实际应该调用真实的LLM服务
+    # 根据原始文本长度和max_tokens估算扩展内容
+    target_length = min(len(original_text) * 2, len(original_text) + max_tokens * 4)
+
+    # 简单的扩展算法：在原文基础上增加描写
+    sentences = original_text.split('。')
+    expanded_sentences = []
+
+    for i, sentence in enumerate(sentences):
+        if sentence.strip():
+            expanded_sentences.append(sentence + '。')
+            # 在某些句子后面添加扩展内容
+            if i % 3 == 1 and len('。'.join(expanded_sentences)) < target_length:
+                expansion = _generate_sentence_expansion(sentence)
+                expanded_sentences.append(expansion)
+
+    expanded_text = ''.join(expanded_sentences)
+    return expanded_text[:target_length] if len(expanded_text) > target_length else expanded_text
+
+
+def _generate_sentence_expansion(sentence: str) -> str:
+    """为句子生成扩展描写"""
+    # 简单的扩展模板
+    expansions = {
+        "发生": "这时，一股不可名状的感觉涌上心头。",
+        "走": "缓缓踱步，脚步声在寂静中显得格外清晰。",
+        "说": "他停顿了片刻，用低沉的嗓音说道。",
+        "看": "眼神中闪烁着复杂的光芒，仔细打量着眼前的一切。",
+    }
+
+    for key, value in expansions.items():
+        if key in sentence:
+            return value
+
+    return "一时间，气氛变得凝重起来。"
