@@ -26,6 +26,14 @@ class RagCollection(Base, StandardColumnsMixin):
 	description: Mapped[str | None] = mapped_column(Text)
 	tags_json: Mapped[list | None] = mapped_column(JSONB)
 
+	def __init__(self, **kwargs):
+		# Backward compatibility for older call sites/tests.
+		legacy_name = kwargs.pop("collection_name", None)
+		if legacy_name is not None and "name" not in kwargs:
+			kwargs["name"] = legacy_name
+		kwargs.pop("status", None)
+		super().__init__(**kwargs)
+
 
 class KbVersion(Base, StandardColumnsMixin):
 	__tablename__ = "kb_versions"

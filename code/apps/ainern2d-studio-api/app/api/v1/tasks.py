@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -122,7 +122,12 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRespo
 
 
 @router.get("/runs/{run_id}/prompt-plans", response_model=list[PromptPlanReplayItem])
-def get_run_prompt_plans(run_id: str, db: Session = Depends(get_db)) -> list[PromptPlanReplayItem]:
+def get_run_prompt_plans(
+	run_id: str,
+	limit: int = Query(default=100, ge=1, le=500),
+	offset: int = Query(default=0, ge=0),
+	db: Session = Depends(get_db),
+) -> list[PromptPlanReplayItem]:
 	run_repo = RenderRunRepository(db)
 	run = run_repo.get(run_id)
 	if run is None:
@@ -134,7 +139,9 @@ def get_run_prompt_plans(run_id: str, db: Session = Depends(get_db)) -> list[Pro
 			PromptPlan.run_id == run_id,
 			PromptPlan.deleted_at.is_(None),
 		)
-		.order_by(PromptPlan.shot_id.asc()),
+		.order_by(PromptPlan.shot_id.asc())
+		.offset(offset)
+		.limit(limit)
 	).scalars().all()
 
 	return [

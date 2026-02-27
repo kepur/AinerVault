@@ -17,6 +17,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.schemas.events import EventEnvelope
 from ainern2d_shared.schemas.skills.skill_12 import (
     Chunk,
     ChunkConfig,
@@ -103,6 +104,8 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
         stage_log: list[StageRecord] = []
         warnings: list[str] = []
         review_items: list[str] = []
+        events: list[str] = []
+        event_envelopes: list[EventEnvelope] = []
         build_id = f"KB_BUILD_{uuid.uuid4().hex[:8].upper()}"
 
         ff = inp.feature_flags or FeatureFlags()
@@ -142,6 +145,18 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
                 raise ValueError("RAG-VALIDATION-003: no active knowledge items")
 
             # ── P2+P3: Chunking ───────────────────────────────────
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="rag.chunking.started",
+                payload={
+                    "kb_id": inp.kb_id,
+                    "kb_version_id": inp.kb_version_id,
+                    "chunking_policy_id": inp.chunking_policy_id,
+                    "knowledge_item_count": len(active_items),
+                },
+            )
             t0 = utcnow()
             chunks = self._stage_chunk(active_items, chunk_cfg_resolved, inp.kb_version_id)
             stage_log.append(self._stage_record(
@@ -172,6 +187,20 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
             stage_log.append(self._stage_record(
                 PipelineStage.EMBEDDING, t0, embed_stats["embedded"],
             ))
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="rag.embedding.completed",
+                payload={
+                    "kb_id": inp.kb_id,
+                    "kb_version_id": inp.kb_version_id,
+                    "embedded_chunks": embed_stats["embedded"],
+                    "failed_chunks": embed_stats["failed"],
+                    "embedding_model": emb_cfg.model_name,
+                    "embedding_dim": dim,
+                },
+            )
 
             # ── Indexing ──────────────────────────────────────────
             self._transition(ctx, PipelineStage.EMBEDDING, PipelineStage.INDEXING)
@@ -189,6 +218,19 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
             stage_log.append(self._stage_record(
                 PipelineStage.INDEXING, t0, len(chunks),
             ))
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="rag.index.ready",
+                payload={
+                    "kb_id": inp.kb_id,
+                    "kb_version_id": inp.kb_version_id,
+                    "index_id": idx_meta.index_id,
+                    "index_version": idx_meta.index_version,
+                    "total_vectors": idx_meta.total_vectors,
+                },
+            )
 
             # ── Validating ────────────────────────────────────────
             self._transition(ctx, PipelineStage.INDEXING, PipelineStage.VALIDATING)
@@ -206,6 +248,21 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
                 eval_metrics = self._stage_eval(
                     inp.preview_queries, chunks, ff, active_items,
                 )
+                self._emit_event(
+                    events,
+                    event_envelopes,
+                    ctx,
+                    event_type="rag.eval.completed",
+                    payload={
+                        "kb_id": inp.kb_id,
+                        "kb_version_id": inp.kb_version_id,
+                        "preview_queries": eval_metrics.preview_queries,
+                        "recall_at_k": eval_metrics.recall_at_k,
+                        "constraint_conflict_rate": eval_metrics.constraint_conflict_rate,
+                        "redundancy_rate": eval_metrics.redundancy_rate,
+                        "recommendation": eval_metrics.recommendation,
+                    },
+                )
                 if eval_metrics.recommendation == "rollback":
                     warnings.append("RAG-WARN-002: eval recommends rollback")
                     review_items.append("eval_rollback_recommended")
@@ -216,6 +273,26 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
             ))
 
             # ── Final status ──────────────────────────────────────
+            promote_gate_passed = False
+            if eval_metrics.enabled:
+                promote_gate_passed = self._promote_gate_passed(eval_metrics)
+                if not promote_gate_passed:
+                    review_items.append("promote_gate_failed")
+                elif not review_items:
+                    self._emit_event(
+                        events,
+                        event_envelopes,
+                        ctx,
+                        event_type="kb.rollout.promoted",
+                        payload={
+                            "kb_id": inp.kb_id,
+                            "kb_version_id": inp.kb_version_id,
+                            "build_id": build_id,
+                            "recall_at_k": eval_metrics.recall_at_k,
+                            "constraint_conflict_rate": eval_metrics.constraint_conflict_rate,
+                        },
+                    )
+
             final_status = "index_ready"
             if review_items:
                 final_status = "review_required"
@@ -241,6 +318,9 @@ class RagPipelineService(BaseSkillService[Skill12Input, Skill12Output]):
                 warnings=warnings,
                 review_required_items=review_items,
                 chunks=chunks,
+                promote_gate_passed=promote_gate_passed,
+                events_emitted=events,
+                event_envelopes=event_envelopes,
             )
 
         except Exception as exc:

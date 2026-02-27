@@ -394,6 +394,34 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
         assert len(persisted2) == 2
         second_snapshot = [(r.id, r.shot_id, r.prompt_text) for r in persisted2]
         assert second_snapshot == first_snapshot
+
+        from app.api.deps import get_db
+        from app.api.v1.tasks import router as task_router
+
+        def _override_get_db():
+            local = SessionLocal()
+            try:
+                yield local
+            finally:
+                local.close()
+
+        app = FastAPI()
+        app.include_router(task_router)
+        app.dependency_overrides[get_db] = _override_get_db
+        try:
+            with TestClient(app) as client:
+                full = client.get(f"/api/v1/runs/{run_id}/prompt-plans")
+                assert full.status_code == 200
+                full_payload = full.json()
+                assert len(full_payload) == 2
+
+                page = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=1&offset=1")
+                assert page.status_code == 200
+                page_payload = page.json()
+                assert len(page_payload) == 1
+                assert page_payload[0]["shot_id"] == full_payload[1]["shot_id"]
+        finally:
+            app.dependency_overrides.clear()
     finally:
         db.rollback()
         from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent

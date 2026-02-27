@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.schemas.events import EventEnvelope
 from ainern2d_shared.schemas.skills.skill_11 import (
     BulkImportItem,
     CoverageStatEntry,
@@ -76,6 +77,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         self._record_state(ctx, "INIT", "LOADING_KB")
         now = utcnow().isoformat()
         events: list[str] = []
+        event_envelopes: list[EventEnvelope] = []
         warnings: list[str] = []
 
         action = input_dto.action or "sync"
@@ -96,23 +98,45 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
 
         # ── Dispatch action ──────────────────────────────────────────────
         if action == "create":
-            return self._action_create(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_create(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "update":
-            return self._action_update(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_update(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "delete":
-            return self._action_delete(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_delete(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "publish":
-            return self._action_publish(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_publish(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "rollback":
-            return self._action_rollback(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_rollback(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "search":
-            return self._action_search(kb_id, input_dto, ctx, store, now, events, warnings)
+            return self._action_search(kb_id, input_dto, ctx, store, now, events, event_envelopes, warnings)
         if action == "import":
-            return self._action_import(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+            return self._action_import(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
         if action == "export":
-            return self._action_export(kb_id, input_dto, ctx, store, now, events, warnings)
+            return self._action_export(kb_id, input_dto, ctx, store, now, events, event_envelopes, warnings)
         # sync — default full pipeline
-        return self._action_sync(kb_id, input_dto, ctx, ff, store, now, events, warnings)
+        return self._action_sync(kb_id, input_dto, ctx, ff, store, now, events, event_envelopes, warnings)
+
+    def _emit_event(
+        self,
+        events: list[str],
+        event_envelopes: list[EventEnvelope],
+        ctx: SkillContext,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        events.append(event_type)
+        event_envelopes.append(EventEnvelope(
+            event_type=event_type,
+            producer=self.skill_id,
+            occurred_at=utcnow(),
+            tenant_id=ctx.tenant_id,
+            project_id=ctx.project_id,
+            idempotency_key=f"{ctx.idempotency_key}:{self.skill_id}:{event_type}:{len(events)}",
+            run_id=ctx.run_id,
+            trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
+            payload=payload,
+        ))
 
     # ── Action: create ───────────────────────────────────────────────────────
 
@@ -125,6 +149,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         quality_issues: list[QualityIssue] = []
@@ -162,7 +187,13 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
 
             store[entry.entry_id] = entry
             created.append(entry)
-            events.append("kb.item.created")
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="kb.item.created",
+                payload={"kb_id": kb_id, "entry_id": entry.entry_id, "action": "create"},
+            )
 
         self._record_state(ctx, "VALIDATING_ENTRIES", "DEDUPLICATING")
         dedup_results = self._deduplicate(store, ff)
@@ -191,6 +222,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -205,6 +237,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         quality_issues: list[QualityIssue] = []
@@ -234,7 +267,13 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
 
             store[merged.entry_id] = merged
             updated.append(merged)
-            events.append("kb.item.updated")
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="kb.item.updated",
+                payload={"kb_id": kb_id, "entry_id": merged.entry_id, "action": "update"},
+            )
 
         # Apply review decisions
         decisions = self._apply_review_decisions(dto.review_decisions, store, now)
@@ -264,6 +303,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -278,6 +318,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         deleted_ids: list[str] = []
@@ -303,6 +344,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -317,6 +359,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         review_items: list[ReviewRequiredItem] = []
@@ -338,6 +381,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
                     review_required_items=review_items,
                     entry_count=len(store),
                     events_emitted=events,
+                    event_envelopes=event_envelopes,
                     warnings=warnings,
                 )
 
@@ -373,7 +417,18 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         _KB_ACTIVE_VERSION[kb_id] = version_id
 
         self._record_state(ctx, "VERSIONING", "PUBLISHING")
-        events.append("kb.version.release.requested")
+        self._emit_event(
+            events,
+            event_envelopes,
+            ctx,
+            event_type="kb.version.release.requested",
+            payload={
+                "kb_id": kb_id,
+                "kb_version_id": version_id,
+                "active_entry_count": len(active_ids),
+                "deprecated_entry_count": len(deprecated_ids),
+            },
+        )
 
         index_stats = self._rebuild_indices(store)
 
@@ -381,11 +436,23 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         manifest = self._build_manifest(kb_id, version, store, now)
 
         self._record_state(ctx, "PUBLISHING", "READY")
-        events.append("kb.version.released")
+        self._emit_event(
+            events,
+            event_envelopes,
+            ctx,
+            event_type="kb.version.released",
+            payload={"kb_id": kb_id, "kb_version_id": version_id, "manifest_hash": content_hash},
+        )
 
         # Auto-publish triggers downstream embedding event
         if ff.auto_publish:
-            events.append("rag.chunking.started")
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="rag.chunking.started",
+                payload={"kb_id": kb_id, "kb_version_id": version_id, "chunking_policy_id": dto.chunking_policy_id},
+            )
 
         summary = self._build_summary(store, [], [], [])
         self._log_completion(ctx, kb_id, "publish", len(active_ids))
@@ -404,6 +471,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -418,6 +486,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         target_vid = dto.rollback_target_version_id
@@ -458,7 +527,18 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         _KB_ACTIVE_VERSION[kb_id] = rollback_version.kb_version_id
 
         self._record_state(ctx, "VERSIONING", "READY")
-        events.append("kb.version.rolled_back")
+        self._emit_event(
+            events,
+            event_envelopes,
+            ctx,
+            event_type="kb.version.rolled_back",
+            payload={
+                "kb_id": kb_id,
+                "kb_version_id": rollback_version.kb_version_id,
+                "rollback_target_version_id": target_vid,
+                "reason": dto.rollback_reason,
+            },
+        )
 
         index_stats = self._rebuild_indices(store)
         summary = self._build_summary(store, [], [], [])
@@ -474,6 +554,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -487,6 +568,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         self._record_state(ctx, "VALIDATING_ENTRIES", "INDEXING")
@@ -506,6 +588,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             search_results=results,
             entry_count=len(store),
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -520,6 +603,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         imported: list[KBEntry] = []
@@ -553,7 +637,13 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
 
             store[entry.entry_id] = entry
             imported.append(entry)
-            events.append("kb.item.created")
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="kb.item.created",
+                payload={"kb_id": kb_id, "entry_id": entry.entry_id, "action": "import"},
+            )
 
         self._record_state(ctx, "VALIDATING_ENTRIES", "DEDUPLICATING")
         dedup_results = self._deduplicate(store, ff)
@@ -576,6 +666,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -589,6 +680,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         self._record_state(ctx, "VALIDATING_ENTRIES", "READY")
@@ -615,6 +707,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             entry_count=len(store),
             version_history=versions,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
@@ -629,6 +722,7 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
         store: dict[str, KBEntry],
         now: str,
         events: list[str],
+        event_envelopes: list[EventEnvelope],
         warnings: list[str],
     ) -> Skill11Output:
         quality_issues: list[QualityIssue] = []
@@ -650,8 +744,16 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
                     severity="high",
                 ))
 
+            existed_before = entry.entry_id in store
             store[entry.entry_id] = entry
-            events.append("kb.item.updated" if entry.entry_id in store else "kb.item.created")
+            event_type = "kb.item.updated" if existed_before else "kb.item.created"
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type=event_type,
+                payload={"kb_id": kb_id, "entry_id": entry.entry_id, "action": "sync"},
+            )
 
         # Apply reviews
         decisions = self._apply_review_decisions(dto.review_decisions, store, now)
@@ -691,7 +793,27 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             )
             _KB_VERSIONS.setdefault(kb_id, []).append(version)
             _KB_ACTIVE_VERSION[kb_id] = vid
-            events.extend(["kb.version.release.requested", "kb.version.released", "rag.chunking.started"])
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="kb.version.release.requested",
+                payload={"kb_id": kb_id, "kb_version_id": vid, "active_entry_count": len(active_ids)},
+            )
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="kb.version.released",
+                payload={"kb_id": kb_id, "kb_version_id": vid, "manifest_hash": content_hash},
+            )
+            self._emit_event(
+                events,
+                event_envelopes,
+                ctx,
+                event_type="rag.chunking.started",
+                payload={"kb_id": kb_id, "kb_version_id": vid},
+            )
             self._record_state(ctx, "PUBLISHING", terminal)
         else:
             self._record_state(ctx, "VERSIONING", terminal)
@@ -718,12 +840,40 @@ class RagKBManagerService(BaseSkillService[Skill11Input, Skill11Output]):
             index_stats=index_stats,
             summary=summary,
             events_emitted=events,
+            event_envelopes=event_envelopes,
             warnings=warnings,
         )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Internal helpers
     # ══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _emit_event(
+        events: list[str],
+        event_envelopes: list[EventEnvelope],
+        ctx: SkillContext,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        events.append(event_type)
+        event_envelopes.append(
+            EventEnvelope(
+                event_type=event_type,
+                event_version="1.0",
+                schema_version=ctx.schema_version,
+                producer="ainern2d-studio-api.skill_11",
+                occurred_at=utcnow(),
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
+                correlation_id=ctx.correlation_id,
+                idempotency_key=f"{ctx.idempotency_key}:{event_type}:{len(events)}",
+                payload=payload,
+            )
+        )
 
     # ── Validation ───────────────────────────────────────────────────────────
 

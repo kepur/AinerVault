@@ -1179,3 +1179,7 @@ def _evaluate_single(c: Constraint, actual: Any) -> EvaluationResult:
         expected=expected,
         message=message,
     )
+
+
+class CreativeControlPolicyService(CreativeControlService):
+    """Backward-compatible alias used by legacy imports/tests."""

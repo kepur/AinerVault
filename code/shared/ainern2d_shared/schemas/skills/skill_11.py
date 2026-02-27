@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from ainern2d_shared.schemas.base import BaseSchema
+from ainern2d_shared.schemas.events import EventEnvelope
 
 
 # ── Feature Flags ────────────────────────────────────────────────────────────
@@ -340,6 +341,7 @@ class Skill11Output(BaseSchema):
 
     # Events emitted (§11.2)
     events_emitted: list[str] = []
+    event_envelopes: list[EventEnvelope] = []
 
     # Warnings
     warnings: list[str] = []

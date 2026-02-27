@@ -187,7 +187,8 @@ skills:
       - "已接入 PromptPlan 持久化（按 run+shot 稳定ID merge）"
       - "已补 API+DB E2E：/api/v1/runs/{run_id}/prompt-plans 回放与持久化一致性"
       - "已补跨多 shot + microshot 输入的回放一致性 E2E（持久化记录稳定）"
-      - "下一步补充性能基线（大批量 shot 回放分页与时延指标）"
+      - "已补回放分页能力（limit/offset）及多 shot API 分页断言"
+      - "下一步补充时延性能指标（大批量 shot 压测基线）"
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"
@@ -353,5 +354,4 @@ skills:
       - "code/apps/alembic/versions/0f2b6c9b0c7f_align_skill_21_22_schema.py"
       - "code/scripts/validate_skill_21_22_persistence_realdb.py"
       - "code/apps/ainern2d-studio-api/tests/skills/test_e2e_handoff_21_22.py"
-    next_action:
       - "补 API/DB E2E：验证 persona lineage 变更后 10/15/17 消费一致且可回滚"

@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Literal
 
 from ainern2d_shared.schemas.base import BaseSchema
+from ainern2d_shared.schemas.events import EventEnvelope
 
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
@@ -279,3 +280,5 @@ class Skill13Output(BaseSchema):
     kb_evolution_triggered: bool = False
     new_kb_version_id: str = ""
     status: str = "completed"
+    events_emitted: list[str] = []
+    event_envelopes: list[EventEnvelope] = []

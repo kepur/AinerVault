@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import Field
 
 from ainern2d_shared.schemas.base import BaseSchema
+from ainern2d_shared.schemas.events import EventEnvelope
 
 
 # ── Enums ─────────────────────────────────────────────────────────
@@ -311,3 +312,6 @@ class Skill12Output(BaseSchema):
     warnings: list[str] = Field(default_factory=list)
     review_required_items: list[str] = Field(default_factory=list)
     chunks: list[Chunk] = Field(default_factory=list)
+    promote_gate_passed: bool = False
+    events_emitted: list[str] = Field(default_factory=list)
+    event_envelopes: list[EventEnvelope] = Field(default_factory=list)
