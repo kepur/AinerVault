@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import requests
+from urllib.error import HTTPError as UrlLibHTTPError, URLError as UrlLibURLError
+from urllib.request import Request as UrlLibRequest, urlopen
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -119,6 +121,7 @@ class ChapterTaskRequest(BaseModel):
 class ChapterAssistExpandRequest(BaseModel):
     tenant_id: str
     project_id: str
+    model_provider_id: str  # 用户选择的模型provider ID
     instruction: str = "扩展剧情，增强冲突、节奏与情绪转折，保持人物一致性。"
     style_hint: str = "影视化叙事，保留可分镜细节。"
     target_language: str | None = None
@@ -550,7 +553,7 @@ def _expand_with_provider(
         "temperature": 0.7,
         "max_tokens": max_tokens,
     }
-    request = Request(
+    request = UrlLibRequest(
         url=f"{endpoint}/chat/completions",
         method="POST",
         headers={
@@ -625,7 +628,7 @@ def assist_expand_chapter(
             )
             mode = "provider_llm"
             break
-        except (HTTPError, URLError, ValueError, json.JSONDecodeError):
+        except (UrlLibHTTPError, UrlLibURLError, ValueError, json.JSONDecodeError):
             continue
 
     if not expanded:
@@ -836,8 +839,6 @@ def handle_chapter_publish_approval(
     db: Session = Depends(get_db),
 ) -> ChapterPublishStatus:
     """章节发布审批流程：submit/approve/reject"""
-    from requests import Request as FastAPIRequest
-
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise HTTPException(status_code=404, detail="chapter not found")
@@ -976,6 +977,33 @@ def get_chapter_diff(
     )
 
 
+@router.get("/chapters/available-models", response_model=list[dict])
+def get_available_models(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """获取项目内已接入的可用模型列表"""
+    models = db.execute(
+        select(ModelProvider).where(
+            ModelProvider.tenant_id == tenant_id,
+            ModelProvider.project_id == project_id,
+            ModelProvider.deleted_at.is_(None),
+        )
+        .order_by(ModelProvider.created_at.desc())
+    ).scalars().all()
+
+    return [
+        {
+            "id": model.id,
+            "name": model.name,
+            "endpoint": model.endpoint or model.name,
+            "is_default": model.is_default,
+        }
+        for model in models
+    ]
+
+
 @router.post("/chapters/{chapter_id}/ai-expand", response_model=ChapterAssistExpandResponse, status_code=202)
 def ai_expand_chapter_content(
     chapter_id: str,
@@ -994,18 +1022,17 @@ def ai_expand_chapter_content(
     if not original_text:
         raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: chapter content is empty")
 
-    # 获取默认模型档案（从配置中心）
-    default_model = db.execute(
-        select(ModelProvider).where(
-            ModelProvider.tenant_id == body.tenant_id,
-            ModelProvider.project_id == body.project_id,
-            ModelProvider.is_default == True,
-            ModelProvider.deleted_at.is_(None),
-        )
-    ).scalars().first()
+    # 获取用户选择的模型档案（从model_provider_id）
+    selected_model = db.get(ModelProvider, body.model_provider_id)
+    if not selected_model:
+        raise HTTPException(status_code=404, detail="REQ-VALIDATION-002: model provider not found")
 
-    provider_used = default_model.name if default_model else "deepseek"
-    model_name = default_model.endpoint if default_model and hasattr(default_model, "endpoint") else "deepseek-chat"
+    if selected_model.tenant_id != body.tenant_id or selected_model.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN: model scope mismatch")
+
+    # 从用户选择的模型获取provider和model_name
+    provider_used = selected_model.name  # 如 "deepseek", "openai", "claude"
+    model_name = selected_model.endpoint or selected_model.name  # 如 "deepseek-chat", "gpt-4"
 
     # 构建扩展提示词
     expansion_prompt = _build_expansion_prompt(

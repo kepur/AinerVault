@@ -12,22 +12,21 @@
         <div class="ai-assistant-group">
           <!-- 模型选择 -->
           <select
-            v-model="selectedModel"
+            v-model="selectedModelId"
             class="model-selector"
             @change="onModelChanged"
           >
             <option value="" disabled>选择模型...</option>
-            <option value="gpt-4">GPT-4 (推荐)</option>
-            <option value="gpt-3.5">GPT-3.5 Turbo</option>
-            <option value="claude">Claude 3 Sonnet</option>
-            <option value="custom">自定义模型</option>
+            <option v-for="model in availableModels" :key="model.id" :value="model.id">
+              {{ model.name }} ({{ model.endpoint }}){{ model.is_default ? ' [默认]' : '' }}
+            </option>
           </select>
 
           <!-- 扩展模式 -->
           <select
             v-model="expandMode"
             class="expand-mode-selector"
-            :disabled="!selectedModel"
+            :disabled="!selectedModelId"
           >
             <option value="expand">扩写</option>
             <option value="complete">补全</option>
@@ -39,7 +38,7 @@
           <button
             class="btn-ai-assistant"
             @click="openAIAssistantDialog"
-            :disabled="!selectedModel || !selectedText"
+            :disabled="!selectedModelId || !selectedText"
             title="选择文本后点击使用AI助手"
           >
             💡 AI助手
@@ -177,9 +176,11 @@ const router = useRouter()
 const chapter = ref<any>(null)
 const markdownText = ref<string>('')
 const selectedText = ref<string>('')
+const originalMarkdown = ref<string>('')  // 用于取消时恢复
 
 // AI助手状态
-const selectedModel = ref<string>('')
+const selectedModelId = ref<string>('')
+const availableModels = ref<any[]>([])
 const expandMode = ref<string>('expand')
 const styleGuidance = ref<string>('')
 const customInstruction = ref<string>('')
@@ -223,6 +224,10 @@ const onModelChanged = () => {
 }
 
 const openAIAssistantDialog = () => {
+  if (!selectedModelId.value) {
+    alert('请先从下拉框选择一个模型')
+    return
+  }
   if (!selectedText.value) {
     alert('请先在编辑区选中要扩展的文本')
     return
@@ -232,10 +237,12 @@ const openAIAssistantDialog = () => {
 
 const closeAIAssistantDialog = () => {
   showAIDialog.value = false
+  // 取消时，如果AI建议还未被接受，则保持当前编辑内容
+  // 如果要恢复原始内容，可以添加：markdownText.value = originalMarkdown.value
 }
 
 const generateAIExpansion = async () => {
-  if (!selectedModel.value || !selectedText.value) {
+  if (!selectedModelId.value || !selectedText.value) {
     alert('请选择模型并选中文本')
     return
   }
@@ -252,6 +259,7 @@ const generateAIExpansion = async () => {
         body: JSON.stringify({
           tenant_id: 'default-tenant',
           project_id: 'default-project',
+          model_provider_id: selectedModelId.value,  // 传递用户选择的模型ID
           instruction: customInstruction.value || getDefaultInstruction(expandMode.value),
           style_hint: styleGuidance.value || '影视化叙事，保留可分镜细节。',
           target_language: 'zh',
@@ -261,12 +269,13 @@ const generateAIExpansion = async () => {
     )
 
     if (!response.ok) {
-      throw new Error('AI生成失败')
+      const errorData = await response.json()
+      throw new Error(errorData.detail || 'AI生成失败')
     }
 
     const data = await response.json()
     aiSuggestion.value = data.expanded_markdown
-    showAIDialog.value = false
+    showAIDialog.value = false  // 自动关闭对话框，显示建议
   } catch (error) {
     alert('AI生成出错: ' + error)
   } finally {
@@ -274,7 +283,7 @@ const generateAIExpansion = async () => {
   }
 }
 
-const acceptAISuggestion = () => {
+const acceptAISuggestion = async () => {
   if (aiSuggestion.value) {
     const textarea = document.querySelector('.markdown-editor') as HTMLTextAreaElement
     const start = textarea.selectionStart
@@ -283,6 +292,9 @@ const acceptAISuggestion = () => {
     const after = markdownText.value.substring(end)
     markdownText.value = before + aiSuggestion.value + after
     aiSuggestion.value = null
+
+    // 自动保存（可选，取决于用户需求）
+    // 这里暂不自动保存，让用户点击保存按钮
   }
 }
 
@@ -369,9 +381,27 @@ onMounted(async () => {
     if (response.ok) {
       chapter.value = await response.json()
       markdownText.value = chapter.value.markdown_text || ''
+      originalMarkdown.value = markdownText.value  // 保存原始内容用于恢复
     }
   } catch (error) {
     console.error('加载章节失败:', error)
+  }
+
+  // 加载可用的模型列表
+  try {
+    const modelsResponse = await fetch(
+      `/api/v1/chapters/available-models?tenant_id=default-tenant&project_id=default-project`
+    )
+    if (modelsResponse.ok) {
+      availableModels.value = await modelsResponse.json()
+      // 自动选择默认模型（如果有）
+      const defaultModel = availableModels.value.find((m: any) => m.is_default)
+      if (defaultModel) {
+        selectedModelId.value = defaultModel.id
+      }
+    }
+  } catch (error) {
+    console.error('加载模型列表失败:', error)
   }
 })
 </script>

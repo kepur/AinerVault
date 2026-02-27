@@ -16,6 +16,7 @@ export interface Chapter {
 export interface AIExpandRequest {
   tenant_id: string
   project_id: string
+  model_provider_id: string  // 用户选择的模型ID
   instruction: string
   style_hint: string
   target_language?: string
