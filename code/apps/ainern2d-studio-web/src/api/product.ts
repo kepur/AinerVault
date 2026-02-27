@@ -695,7 +695,9 @@ export async function assistExpandChapter(chapterId: string, payload: {
   target_language?: string;
   max_tokens?: number;
 }): Promise<ChapterAssistExpandResponse> {
-  const { data } = await http.post<ChapterAssistExpandResponse>(`/api/v1/chapters/${chapterId}/ai-expand`, payload);
+  const { data } = await http.post<ChapterAssistExpandResponse>(`/api/v1/chapters/${chapterId}/ai-expand`, payload, {
+    timeout: 120000,  // AI 生成可能需要 60-90s，单独设置更长超时
+  });
   return data;
 }
 

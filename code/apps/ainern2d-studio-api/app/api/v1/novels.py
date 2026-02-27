@@ -591,7 +591,7 @@ def _expand_with_provider(
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        timeout=16.0,
+        timeout=90.0,
     )
 
     if response.status_code < 200 or response.status_code >= 300:
