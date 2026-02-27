@@ -190,7 +190,8 @@ skills:
       - "已补回放分页能力（limit/offset）及多 shot API 分页断言"
       - "已补回放总量响应头（X-Prompt-Plan-Total）以支持分页端总量展示"
       - "已补回放查询时延响应头（X-Prompt-Plan-Query-Ms）与大批量 shot API+DB 基线断言"
-      - "下一步补充分位数时延统计（p50/p95）与持续化性能跟踪"
+      - "已补分位数时延基线（p50/p95）：大批量 shot 回放重复采样断言"
+      - "下一步将时延分位数接入持续化观测与趋势告警"
 
   - skill_id: "SKILL_11"
     name: "RAG KB Manager"

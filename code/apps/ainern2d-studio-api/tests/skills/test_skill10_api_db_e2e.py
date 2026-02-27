@@ -1,6 +1,7 @@
 """API+DB E2E for SKILL 10 prompt plan replay consistency."""
 from __future__ import annotations
 
+import math
 import os
 import sys
 from uuid import uuid4
@@ -546,12 +547,17 @@ def test_skill10_prompt_plan_api_replay_latency_baseline_large_batch():
         app.dependency_overrides[get_db] = _override_get_db
         try:
             with TestClient(app) as client:
-                resp = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=20&offset=40")
-                assert resp.status_code == 200
-                assert resp.headers["x-prompt-plan-total"] == str(shot_count)
-                query_ms = int(resp.headers["x-prompt-plan-query-ms"])
-                assert 0 <= query_ms < 8000
-                payload = resp.json()
+                latencies: list[int] = []
+                payload = None
+                for _ in range(9):
+                    resp = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=20&offset=40")
+                    assert resp.status_code == 200
+                    assert resp.headers["x-prompt-plan-total"] == str(shot_count)
+                    query_ms = int(resp.headers["x-prompt-plan-query-ms"])
+                    assert 0 <= query_ms < 8000
+                    latencies.append(query_ms)
+                    payload = resp.json()
+                assert payload is not None
                 assert len(payload) == 20
                 expected_ids = db.execute(
                     select(PromptPlan.shot_id)
@@ -561,6 +567,11 @@ def test_skill10_prompt_plan_api_replay_latency_baseline_large_batch():
                     .limit(20)
                 ).scalars().all()
                 assert [item["shot_id"] for item in payload] == expected_ids
+                ordered = sorted(latencies)
+                p50 = ordered[len(ordered) // 2]
+                p95 = ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
+                assert p50 <= 8000
+                assert p95 <= 8000
         finally:
             app.dependency_overrides.clear()
     finally:
