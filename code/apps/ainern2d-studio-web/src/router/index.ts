@@ -11,6 +11,7 @@ import StudioCulturePackPage from "@/pages/StudioCulturePackPage.vue";
 import StudioLanguageSettingsPage from "@/pages/StudioLanguageSettingsPage.vue";
 import StudioProviderRouterPage from "@/pages/StudioProviderRouterPage.vue";
 import StudioRagPersonaPage from "@/pages/StudioRagPersonaPage.vue";
+import StudioRoleStudioPage from "@/pages/StudioRoleStudioPage.vue";
 import StudioRunCenterPage from "@/pages/StudioRunCenterPage.vue";
 import StudioTimelinePatchPage from "@/pages/StudioTimelinePatchPage.vue";
 import VoiceBindingPage from "@/pages/VoiceBindingPage.vue";
@@ -88,6 +89,16 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "多语言设置",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/roles",
+      name: "studio-roles",
+      component: StudioRoleStudioPage,
+      meta: {
+        requiresAuth: true,
+        title: "角色工作台配置",
         section: "studio",
       },
     },

@@ -84,6 +84,7 @@ const collapsed = ref(false);
 const expandedKeys = ref<string[]>([
   "group-overview",
   "group-auth",
+  "group-roles",
   "group-content",
   "group-config",
   "group-assets",
@@ -107,6 +108,16 @@ const menuOptions: MenuOption[] = [
       {
         key: "/studio/auth/users",
         label: "23 账号与权限",
+      },
+    ],
+  },
+  {
+    key: "group-roles",
+    label: "角色能力中台",
+    children: [
+      {
+        key: "/studio/roles",
+        label: "Role Studio",
       },
     ],
   },

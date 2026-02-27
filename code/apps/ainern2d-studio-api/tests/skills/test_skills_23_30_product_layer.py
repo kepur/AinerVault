@@ -477,6 +477,107 @@ def test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow():
                 )
                 assert profile_list.status_code == 200
                 assert any(item["id"] == profile_id for item in profile_list.json())
+                assert profile.json()["capability_tags"] == []
+
+                role_profile = client.put(
+                    "/api/v1/config/role-profiles/director",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "role_id": "director",
+                        "prompt_style": "cinematic structured output",
+                        "default_skills": ["shot_planner", "dialogue_director"],
+                        "default_knowledge_scopes": ["director_basic", "project_novel"],
+                        "default_model_profile": profile_id,
+                        "permissions": {
+                            "can_import_data": True,
+                            "can_publish_task": True,
+                            "can_edit_global_knowledge": False,
+                            "can_manage_model_router": False,
+                        },
+                        "enabled": True,
+                        "schema_version": "1.0",
+                    },
+                )
+                assert role_profile.status_code == 200
+                assert role_profile.json()["role_id"] == "director"
+
+                skill_registry = client.put(
+                    "/api/v1/config/skill-registry/shot_planner",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "skill_id": "shot_planner",
+                        "input_schema": {"type": "object", "properties": {"chapter_id": {"type": "string"}}},
+                        "output_schema": {"type": "object", "properties": {"shot_plan": {"type": "array"}}},
+                        "required_knowledge_scopes": ["director_basic", "visual_grammar"],
+                        "default_model_profile": profile_id,
+                        "tools_required": ["search", "embedding"],
+                        "ui_renderer": "timeline",
+                        "init_template": "director_bootstrap_v1",
+                        "enabled": True,
+                        "schema_version": "1.0",
+                    },
+                )
+                assert skill_registry.status_code == 200
+                assert skill_registry.json()["skill_id"] == "shot_planner"
+
+                route_map = client.put(
+                    "/api/v1/config/feature-route-maps/route_scene_board",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "route_id": "route_scene_board",
+                        "path": "/studio/scene-board",
+                        "component": "StudioSceneBoardPage",
+                        "feature_id": "shot_planner",
+                        "allowed_roles": ["director", "script_supervisor"],
+                        "ui_mode": "timeline",
+                        "depends_on": ["rag", "embedding", "minio"],
+                        "enabled": True,
+                        "schema_version": "1.0",
+                    },
+                )
+                assert route_map.status_code == 200
+                assert route_map.json()["route_id"] == "route_scene_board"
+
+                role_profile_list = client.get(
+                    "/api/v1/config/role-profiles",
+                    params={"tenant_id": tenant_id, "project_id": project_id},
+                )
+                assert role_profile_list.status_code == 200
+                assert any(item["role_id"] == "director" for item in role_profile_list.json())
+
+                skill_registry_list = client.get(
+                    "/api/v1/config/skill-registry",
+                    params={"tenant_id": tenant_id, "project_id": project_id},
+                )
+                assert skill_registry_list.status_code == 200
+                assert any(item["skill_id"] == "shot_planner" for item in skill_registry_list.json())
+
+                route_map_list = client.get(
+                    "/api/v1/config/feature-route-maps",
+                    params={"tenant_id": tenant_id, "project_id": project_id, "role_id": "director"},
+                )
+                assert route_map_list.status_code == 200
+                assert any(item["route_id"] == "route_scene_board" for item in route_map_list.json())
+
+                resolved = client.post(
+                    "/api/v1/config/role-studio/resolve",
+                    json={
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "role_id": "director",
+                        "skill_id": "shot_planner",
+                        "context": {},
+                    },
+                )
+                assert resolved.status_code == 200
+                assert resolved.json()["role_profile"]["role_id"] == "director"
+                assert resolved.json()["skill_profile"]["skill_id"] == "shot_planner"
+                assert resolved.json()["resolved_model_profile"]["id"] == profile_id
+                assert "director_basic" in resolved.json()["resolved_knowledge_scopes"]
+                assert any(item["route_id"] == "route_scene_board" for item in resolved.json()["visible_routes"])
 
                 routing = client.put(
                     "/api/v1/config/stage-routing",

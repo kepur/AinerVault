@@ -5,6 +5,7 @@
         <NText depth="3">覆盖 SKILL 23~30：鉴权、内容管理、任务运行、配置中心、素材与时间线。</NText>
         <NSpace wrap>
           <NButton type="primary" @click="goTo('studio-auth-users')">23 账号与权限</NButton>
+          <NButton @click="goTo('studio-roles')">角色能力中台</NButton>
           <NButton @click="goTo('studio-chapters')">24 章节管理</NButton>
           <NButton @click="goTo('studio-runs')">28 任务运行中心</NButton>
           <NButton @click="goTo('studio-providers')">25 Provider路由</NButton>

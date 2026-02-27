@@ -147,6 +147,11 @@ export interface ModelProfileResponse {
   purpose: string;
   name: string;
   params_json: Record<string, unknown>;
+  capability_tags?: string[];
+  default_params?: Record<string, unknown>;
+  cost_rate_limit?: Record<string, unknown>;
+  guardrails?: Record<string, unknown>;
+  routing_policy?: Record<string, unknown>;
 }
 
 export interface StageRoutingResponse {
@@ -171,6 +176,68 @@ export interface FeatureMatrixResponse {
       model_name: string;
     }>;
   }>;
+}
+
+export interface RoleProfileResponse {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  prompt_style: string;
+  default_skills: string[];
+  default_knowledge_scopes: string[];
+  default_model_profile?: string | null;
+  permissions: {
+    can_import_data: boolean;
+    can_publish_task: boolean;
+    can_edit_global_knowledge: boolean;
+    can_manage_model_router: boolean;
+  };
+  enabled: boolean;
+  schema_version: string;
+  updated_at?: string | null;
+}
+
+export interface SkillRegistryResponse {
+  tenant_id: string;
+  project_id: string;
+  skill_id: string;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  required_knowledge_scopes: string[];
+  default_model_profile?: string | null;
+  tools_required: string[];
+  ui_renderer: string;
+  init_template?: string | null;
+  enabled: boolean;
+  schema_version: string;
+  updated_at?: string | null;
+}
+
+export interface FeatureRouteMapResponse {
+  tenant_id: string;
+  project_id: string;
+  route_id: string;
+  path: string;
+  component: string;
+  feature_id: string;
+  allowed_roles: string[];
+  ui_mode: string;
+  depends_on: string[];
+  enabled: boolean;
+  schema_version: string;
+  updated_at?: string | null;
+}
+
+export interface RoleStudioResolveResponse {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  skill_id: string;
+  resolved_model_profile: Record<string, unknown>;
+  resolved_knowledge_scopes: string[];
+  visible_routes: FeatureRouteMapResponse[];
+  role_profile: RoleProfileResponse;
+  skill_profile: SkillRegistryResponse;
 }
 
 export interface ProviderConnectionTestResponse {
@@ -587,6 +654,11 @@ export async function upsertModelProfile(payload: {
   purpose: string;
   name: string;
   params_json?: Record<string, unknown>;
+  capability_tags?: string[];
+  default_params?: Record<string, unknown>;
+  cost_rate_limit?: Record<string, unknown>;
+  guardrails?: Record<string, unknown>;
+  routing_policy?: Record<string, unknown>;
 }): Promise<ModelProfileResponse> {
   const { data } = await http.post<ModelProfileResponse>("/api/v1/config/profiles", payload);
   return data;
@@ -606,6 +678,122 @@ export async function deleteModelProfile(profileId: string, params: {
   project_id: string;
 }): Promise<void> {
   await http.delete(`/api/v1/config/profiles/${profileId}`, { params });
+}
+
+export async function upsertRoleProfile(roleId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  prompt_style: string;
+  default_skills: string[];
+  default_knowledge_scopes: string[];
+  default_model_profile?: string;
+  permissions: {
+    can_import_data: boolean;
+    can_publish_task: boolean;
+    can_edit_global_knowledge: boolean;
+    can_manage_model_router: boolean;
+  };
+  enabled?: boolean;
+  schema_version?: string;
+}): Promise<RoleProfileResponse> {
+  const { data } = await http.put<RoleProfileResponse>(`/api/v1/config/role-profiles/${roleId}`, payload);
+  return data;
+}
+
+export async function listRoleProfiles(params: {
+  tenant_id: string;
+  project_id: string;
+  keyword?: string;
+}): Promise<RoleProfileResponse[]> {
+  const { data } = await http.get<RoleProfileResponse[]>("/api/v1/config/role-profiles", { params });
+  return data;
+}
+
+export async function deleteRoleProfile(roleId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<void> {
+  await http.delete(`/api/v1/config/role-profiles/${roleId}`, { params });
+}
+
+export async function upsertSkillRegistry(skillId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  skill_id: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  required_knowledge_scopes?: string[];
+  default_model_profile?: string;
+  tools_required?: string[];
+  ui_renderer?: string;
+  init_template?: string;
+  enabled?: boolean;
+  schema_version?: string;
+}): Promise<SkillRegistryResponse> {
+  const { data } = await http.put<SkillRegistryResponse>(`/api/v1/config/skill-registry/${skillId}`, payload);
+  return data;
+}
+
+export async function listSkillRegistry(params: {
+  tenant_id: string;
+  project_id: string;
+  keyword?: string;
+}): Promise<SkillRegistryResponse[]> {
+  const { data } = await http.get<SkillRegistryResponse[]>("/api/v1/config/skill-registry", { params });
+  return data;
+}
+
+export async function deleteSkillRegistry(skillId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<void> {
+  await http.delete(`/api/v1/config/skill-registry/${skillId}`, { params });
+}
+
+export async function upsertFeatureRouteMap(routeId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  route_id: string;
+  path: string;
+  component: string;
+  feature_id: string;
+  allowed_roles?: string[];
+  ui_mode?: string;
+  depends_on?: string[];
+  enabled?: boolean;
+  schema_version?: string;
+}): Promise<FeatureRouteMapResponse> {
+  const { data } = await http.put<FeatureRouteMapResponse>(`/api/v1/config/feature-route-maps/${routeId}`, payload);
+  return data;
+}
+
+export async function listFeatureRouteMaps(params: {
+  tenant_id: string;
+  project_id: string;
+  role_id?: string;
+  keyword?: string;
+}): Promise<FeatureRouteMapResponse[]> {
+  const { data } = await http.get<FeatureRouteMapResponse[]>("/api/v1/config/feature-route-maps", { params });
+  return data;
+}
+
+export async function deleteFeatureRouteMap(routeId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<void> {
+  await http.delete(`/api/v1/config/feature-route-maps/${routeId}`, { params });
+}
+
+export async function resolveRoleStudioRuntime(payload: {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+  skill_id: string;
+  context?: Record<string, unknown>;
+}): Promise<RoleStudioResolveResponse> {
+  const { data } = await http.post<RoleStudioResolveResponse>("/api/v1/config/role-studio/resolve", payload);
+  return data;
 }
 
 export async function upsertStageRouting(payload: {

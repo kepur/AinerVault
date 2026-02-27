@@ -427,15 +427,18 @@ skills:
       path: "code/apps/ainern2d-studio-api/app/main.py"
     evidence:
       - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py (provider token+capability 配置、provider/profile CRUD、stage-routing+feature_routes、feature-matrix、telegram-settings、health)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py (RoleProfile/SkillRegistry/FeatureRouteMap/RoleStudio Resolve 配置接口)"
       - "code/apps/ainern2d-studio-api/app/api/v1/tasks.py (run snapshot freeze includes provider/router/language/telegram payload)"
-      - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
+      - "DATABASE_URL=... pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py::test_skill_25_26_27_29_30_config_rag_culture_assets_timeline_patch_flow -q -> 1 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (Provider Token+Capability CRUD、Profile CRUD、Feature Matrix、Stage/Feature 路由、Telegram 配置)"
+      - "code/apps/ainern2d-studio-web/src/pages/StudioRoleStudioPage.vue + src/router/index.ts + src/App.vue + src/pages/DashboardPage.vue (Role Studio 页面与菜单入口)"
       - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py (/language-settings 多语言策略 API) + code/apps/ainern2d-studio-web/src/pages/StudioLanguageSettingsPage.vue (中英/小语种配置 UI)"
       - "code/apps/ainern2d-studio-api/app/api/v1/config_center.py + code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (provider test-connection API + 单条/批量健康探测)"
       - "code/apps/ainern2d-studio-web/src/pages/StudioProviderRouterPage.vue (feature routing 可视化绑定：功能->profile 下拉 + capability 兼容校验)"
       - "npm run build (ainern2d-studio-web) -> PASS"
     next_action:
       - "补充 provider 配额/限流/余额指标接入（在联通探测基础上扩展）"
+      - "补充 Role Studio 的 run_skill 执行入口（按 role+skill 触发任务并回写日志）"
 
   - skill_id: "SKILL_26"
     name: "RAG / KB / Dataset / Persona Console"
@@ -452,6 +455,7 @@ skills:
       - "code/apps/ainern2d-studio-web/src/pages/StudioRagPersonaPage.vue (列表/增删查/过滤 + 初始化导演数据)"
     next_action:
       - "Persona 版本发布/回滚 UI 与评审流接线"
+      - "补 Import Center（txt/pdf/excel）-> 抽取 -> embedding 增量流水线与变化报告"
 
   - skill_id: "SKILL_27"
     name: "World / Culture Pack Manager"
