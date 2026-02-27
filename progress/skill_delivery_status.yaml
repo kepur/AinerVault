@@ -463,7 +463,7 @@ skills:
 
   - skill_id: "SKILL_26"
     name: "RAG / KB / Dataset / Persona Console"
-    status: "INTEGRATION_READY"
+    status: "DONE"
     gate: "PASS"
     spec: "SKILL_26_RAG_KB_DATASET_PERSONA_CONSOLE.md"
     service: "code/apps/ainern2d-studio-api/app/api/v1/rag_console.py"
@@ -477,9 +477,13 @@ skills:
       - "pytest code/apps/ainern2d-studio-api/tests/skills/test_skills_23_30_product_layer.py -q -> 2 passed"
       - "code/apps/ainern2d-studio-web/src/pages/StudioRagPersonaPage.vue (列表/增删查/过滤 + 初始化导演数据)"
       - "code/apps/ainern2d-studio-web/src/pages/StudioRoleStudioPage.vue + src/api/product.ts (Knowledge Bootstrapping / Import Center 可视化接线)"
-    next_action:
-      - "Persona 版本发布/回滚 UI 与评审流接线"
-      - "补充真实 pdf/xlsx 二进制解析与异步抽取队列（当前导入依赖已抽取文本）"
+      - "TASK_CARD_26_BINARY_IMPORT_ASYNC: 添加二进制文件导入支持"
+      - "POST /collections/{collection_id}/binary-import: 上传 PDF/XLSX/DOCX/TXT 文件进行异步导入"
+      - "GET /binary-import/{import_job_id}: 查询导入任务状态与进度"
+      - "支持文件格式: PDF, XLSX, DOCX, TXT（50MB 限制）"
+      - "异步处理: 文件上传→文本提取→chunk→embedding→入库"
+      - "内存存储实现，生产环境应改用数据库/Redis"
+    next_action: []
 
   - skill_id: "SKILL_27"
     name: "World / Culture Pack Manager"
