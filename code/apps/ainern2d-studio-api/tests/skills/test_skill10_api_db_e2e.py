@@ -211,6 +211,8 @@ def test_skill10_prompt_plan_api_db_replay_consistency(monkeypatch):
                 resp1 = client.get(f"/api/v1/runs/{run_id}/prompt-plans")
                 assert resp1.status_code == 200
                 assert resp1.headers["x-prompt-plan-total"] == "1"
+                qms1 = int(resp1.headers["x-prompt-plan-query-ms"])
+                assert 0 <= qms1 < 5000
                 payload1 = resp1.json()
                 assert len(payload1) == 1
                 assert payload1[0]["run_id"] == run_id
@@ -414,12 +416,16 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
                 full = client.get(f"/api/v1/runs/{run_id}/prompt-plans")
                 assert full.status_code == 200
                 assert full.headers["x-prompt-plan-total"] == "2"
+                full_qms = int(full.headers["x-prompt-plan-query-ms"])
+                assert 0 <= full_qms < 5000
                 full_payload = full.json()
                 assert len(full_payload) == 2
 
                 page = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=1&offset=1")
                 assert page.status_code == 200
                 assert page.headers["x-prompt-plan-total"] == "2"
+                page_qms = int(page.headers["x-prompt-plan-query-ms"])
+                assert 0 <= page_qms < 5000
                 page_payload = page.json()
                 assert len(page_payload) == 1
                 assert page_payload[0]["shot_id"] == full_payload[1]["shot_id"]
@@ -432,6 +438,136 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
         db.execute(delete(PromptPlan).where(PromptPlan.run_id == run_id))
         db.execute(delete(RenderRun).where(RenderRun.id == run_id))
         db.execute(delete(Shot).where(Shot.id.in_([shot_id_1, shot_id_2])))
+        db.execute(delete(Chapter).where(Chapter.id == chapter_id))
+        db.execute(delete(Novel).where(Novel.id == novel_id))
+        db.commit()
+        db.close()
+
+
+@pytest.mark.skipif(
+    not os.getenv("DATABASE_URL"),
+    reason="requires DATABASE_URL for API+DB E2E",
+)
+def test_skill10_prompt_plan_api_replay_latency_baseline_large_batch():
+    suffix = uuid4().hex[:8]
+    tenant_id = f"t_skill10_l_{suffix}"
+    project_id = f"p_skill10_l_{suffix}"
+    run_id = f"run_skill10_l_{suffix}"
+    novel_id = f"novel_l_{suffix}"
+    chapter_id = f"chapter_l_{suffix}"
+    shot_count = 80
+    shot_ids = [f"shot_l_{i}_{suffix}" for i in range(shot_count)]
+
+    db = SessionLocal()
+    try:
+        db.add(Novel(
+            id=novel_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            trace_id=f"tr_{suffix}",
+            correlation_id=f"co_{suffix}",
+            idempotency_key=f"idem_novel_l_{suffix}",
+            title=f"Skill10 Latency Novel {suffix}",
+            summary="test",
+        ))
+        db.commit()
+        db.add(Chapter(
+            id=chapter_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            trace_id=f"tr_{suffix}",
+            correlation_id=f"co_{suffix}",
+            idempotency_key=f"idem_chapter_l_{suffix}",
+            novel_id=novel_id,
+            chapter_no=1,
+            language_code="zh",
+            raw_text="chapter raw text",
+        ))
+        db.commit()
+        db.add_all([
+            Shot(
+                id=shot_id,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                trace_id=f"tr_{suffix}",
+                correlation_id=f"co_{suffix}",
+                idempotency_key=f"idem_{shot_id}",
+                chapter_id=chapter_id,
+                shot_no=i + 1,
+                status=RunStatus.queued,
+                prompt_json={},
+            )
+            for i, shot_id in enumerate(shot_ids)
+        ])
+        db.commit()
+        db.add(RenderRun(
+            id=run_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            trace_id=f"tr_{suffix}",
+            correlation_id=f"co_{suffix}",
+            idempotency_key=f"idem_run_l_{suffix}",
+            chapter_id=chapter_id,
+            status=RunStatus.running,
+            stage=RenderStage.plan,
+            progress=60,
+        ))
+        db.commit()
+        db.add_all([
+            PromptPlan(
+                id=f"pp_l_{i}_{suffix}",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                trace_id=f"tr_{suffix}",
+                correlation_id=f"co_{suffix}",
+                idempotency_key=f"idem_pp_{shot_id}",
+                run_id=run_id,
+                shot_id=shot_id,
+                prompt_text=f"prompt for {shot_id}",
+                negative_prompt_text="low quality",
+                model_hint_json={"consistency_anchors": ["CHAR_0001"]},
+            )
+            for i, shot_id in enumerate(shot_ids)
+        ])
+        db.commit()
+
+        from app.api.deps import get_db
+        from app.api.v1.tasks import router as task_router
+
+        def _override_get_db():
+            local = SessionLocal()
+            try:
+                yield local
+            finally:
+                local.close()
+
+        app = FastAPI()
+        app.include_router(task_router)
+        app.dependency_overrides[get_db] = _override_get_db
+        try:
+            with TestClient(app) as client:
+                resp = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=20&offset=40")
+                assert resp.status_code == 200
+                assert resp.headers["x-prompt-plan-total"] == str(shot_count)
+                query_ms = int(resp.headers["x-prompt-plan-query-ms"])
+                assert 0 <= query_ms < 8000
+                payload = resp.json()
+                assert len(payload) == 20
+                expected_ids = db.execute(
+                    select(PromptPlan.shot_id)
+                    .where(PromptPlan.run_id == run_id, PromptPlan.deleted_at.is_(None))
+                    .order_by(PromptPlan.shot_id.asc())
+                    .offset(40)
+                    .limit(20)
+                ).scalars().all()
+                assert [item["shot_id"] for item in payload] == expected_ids
+        finally:
+            app.dependency_overrides.clear()
+    finally:
+        db.rollback()
+        db.execute(delete(PromptPlan).where(PromptPlan.run_id == run_id))
+        db.execute(delete(RenderRun).where(RenderRun.id == run_id))
+        db.execute(delete(Shot).where(Shot.id.in_(shot_ids)))
         db.execute(delete(Chapter).where(Chapter.id == chapter_id))
         db.execute(delete(Novel).where(Novel.id == novel_id))
         db.commit()

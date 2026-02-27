@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -134,6 +135,7 @@ def get_run_prompt_plans(
 	if run is None:
 		raise HTTPException(status_code=404, detail="run not found")
 
+	start = perf_counter()
 	total = db.execute(
 		select(func.count(PromptPlan.id)).where(
 			PromptPlan.run_id == run_id,
@@ -152,6 +154,8 @@ def get_run_prompt_plans(
 		.offset(offset)
 		.limit(limit)
 	).scalars().all()
+	elapsed_ms = int((perf_counter() - start) * 1000)
+	response.headers["X-Prompt-Plan-Query-Ms"] = str(elapsed_ms)
 
 	return [
 		PromptPlanReplayItem(
