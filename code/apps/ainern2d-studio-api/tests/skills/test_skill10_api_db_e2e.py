@@ -210,6 +210,7 @@ def test_skill10_prompt_plan_api_db_replay_consistency(monkeypatch):
             with TestClient(app) as client:
                 resp1 = client.get(f"/api/v1/runs/{run_id}/prompt-plans")
                 assert resp1.status_code == 200
+                assert resp1.headers["x-prompt-plan-total"] == "1"
                 payload1 = resp1.json()
                 assert len(payload1) == 1
                 assert payload1[0]["run_id"] == run_id
@@ -412,11 +413,13 @@ def test_skill10_multishot_replay_consistency_with_microshot_input():
             with TestClient(app) as client:
                 full = client.get(f"/api/v1/runs/{run_id}/prompt-plans")
                 assert full.status_code == 200
+                assert full.headers["x-prompt-plan-total"] == "2"
                 full_payload = full.json()
                 assert len(full_payload) == 2
 
                 page = client.get(f"/api/v1/runs/{run_id}/prompt-plans?limit=1&offset=1")
                 assert page.status_code == 200
+                assert page.headers["x-prompt-plan-total"] == "2"
                 page_payload = page.json()
                 assert len(page_payload) == 1
                 assert page_payload[0]["shot_id"] == full_payload[1]["shot_id"]

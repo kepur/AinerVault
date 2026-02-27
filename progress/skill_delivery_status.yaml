@@ -188,6 +188,7 @@ skills:
       - "已补 API+DB E2E：/api/v1/runs/{run_id}/prompt-plans 回放与持久化一致性"
       - "已补跨多 shot + microshot 输入的回放一致性 E2E（持久化记录稳定）"
       - "已补回放分页能力（limit/offset）及多 shot API 分页断言"
+      - "已补回放总量响应头（X-Prompt-Plan-Total）以支持分页端总量展示"
       - "下一步补充时延性能指标（大批量 shot 压测基线）"
 
   - skill_id: "SKILL_11"

@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import PromptPlan
@@ -124,6 +124,7 @@ def get_run_detail(run_id: str, db: Session = Depends(get_db)) -> RunDetailRespo
 @router.get("/runs/{run_id}/prompt-plans", response_model=list[PromptPlanReplayItem])
 def get_run_prompt_plans(
 	run_id: str,
+	response: Response,
 	limit: int = Query(default=100, ge=1, le=500),
 	offset: int = Query(default=0, ge=0),
 	db: Session = Depends(get_db),
@@ -132,6 +133,14 @@ def get_run_prompt_plans(
 	run = run_repo.get(run_id)
 	if run is None:
 		raise HTTPException(status_code=404, detail="run not found")
+
+	total = db.execute(
+		select(func.count(PromptPlan.id)).where(
+			PromptPlan.run_id == run_id,
+			PromptPlan.deleted_at.is_(None),
+		)
+	).scalar_one()
+	response.headers["X-Prompt-Plan-Total"] = str(total)
 
 	plans = db.execute(
 		select(PromptPlan)
