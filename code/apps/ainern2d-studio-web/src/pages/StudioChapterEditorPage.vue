@@ -18,7 +18,7 @@
           >
             <option value="" disabled>选择模型...</option>
             <option v-for="model in availableModels" :key="model.id" :value="model.id">
-              {{ model.name }} ({{ model.endpoint }}){{ model.is_default ? ' [默认]' : '' }}
+              {{ model.name }}{{ model.endpoint ? ` (${model.endpoint})` : '' }}
             </option>
           </select>
 

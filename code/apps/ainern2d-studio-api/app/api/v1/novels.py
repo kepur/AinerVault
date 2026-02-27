@@ -129,9 +129,8 @@ class ChapterAssistExpandRequest(BaseModel):
 class ModelProviderResponse(BaseModel):
     id: str
     name: str
-    provider_type: str
     endpoint: str | None = None
-    is_default: bool = False
+    auth_mode: str | None = None
 
 
 class ChapterAssistExpandResponse(BaseModel):
@@ -328,9 +327,8 @@ def list_available_models(
         ModelProviderResponse(
             id=row.id,
             name=row.name,
-            provider_type=row.provider_type,
             endpoint=row.endpoint,
-            is_default=row.is_default or False,
+            auth_mode=row.auth_mode,
         )
         for row in rows
     ]
