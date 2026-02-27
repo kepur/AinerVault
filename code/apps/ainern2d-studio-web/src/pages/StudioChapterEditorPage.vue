@@ -394,10 +394,9 @@ onMounted(async () => {
     )
     if (modelsResponse.ok) {
       availableModels.value = await modelsResponse.json()
-      // 自动选择默认模型（如果有）
-      const defaultModel = availableModels.value.find((m: any) => m.is_default)
-      if (defaultModel) {
-        selectedModelId.value = defaultModel.id
+      // 自动选择第一个模型
+      if (availableModels.value.length > 0) {
+        selectedModelId.value = availableModels.value[0].id
       }
     }
   } catch (error) {

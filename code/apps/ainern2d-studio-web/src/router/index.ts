@@ -7,6 +7,7 @@ import StudioAssetLibraryPage from "@/pages/StudioAssetLibraryPage.vue";
 import StudioAssetBindingConsistencyPage from "@/pages/StudioAssetBindingConsistencyPage.vue";
 import StudioAuthPage from "@/pages/StudioAuthPage.vue";
 import StudioChapterWorkspacePage from "@/pages/StudioChapterWorkspacePage.vue";
+import StudioChapterEditorPage from "@/pages/StudioChapterEditorPage.vue";
 import StudioCulturePackPage from "@/pages/StudioCulturePackPage.vue";
 import StudioLanguageSettingsPage from "@/pages/StudioLanguageSettingsPage.vue";
 import StudioModelRoutingPage from "@/pages/StudioModelRoutingPage.vue";
@@ -76,6 +77,17 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "章节工作区",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/novels/:novelId/chapters/:chapterId/editor",
+      name: "studio-chapter-editor",
+      component: StudioChapterEditorPage,
+      props: true,
+      meta: {
+        requiresAuth: true,
+        title: "章节编辑",
         section: "studio",
       },
     },
