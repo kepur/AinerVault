@@ -302,14 +302,6 @@ def list_chapters(novel_id: str, db: Session = Depends(get_db)) -> list[ChapterR
     return [_chapter_to_response(row) for row in rows]
 
 
-@router.get("/chapters/{chapter_id}", response_model=ChapterResponse)
-def get_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterResponse:
-    row = db.get(Chapter, chapter_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="chapter not found")
-    return _chapter_to_response(row)
-
-
 @router.get("/chapters/available-models", response_model=list[ModelProviderResponse])
 def list_available_models(
     tenant_id: str = Query(...),
@@ -332,6 +324,14 @@ def list_available_models(
         )
         for row in rows
     ]
+
+
+@router.get("/chapters/{chapter_id}", response_model=ChapterResponse)
+def get_chapter(chapter_id: str, db: Session = Depends(get_db)) -> ChapterResponse:
+    row = db.get(Chapter, chapter_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    return _chapter_to_response(row)
 
 
 @router.put("/chapters/{chapter_id}", response_model=ChapterResponse)
@@ -631,34 +631,29 @@ def ai_expand_chapter(
     model_name = "template_v1"
     mode = "template"
 
-    providers = db.execute(
-        select(ModelProvider).where(
-            ModelProvider.tenant_id == body.tenant_id,
-            ModelProvider.project_id == body.project_id,
-            ModelProvider.deleted_at.is_(None),
-        )
-    ).scalars().all()
+    # 使用用户选择的指定 provider
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+    if provider.tenant_id != body.tenant_id or provider.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="model provider scope mismatch")
 
-    for provider in providers:
-        settings = _load_provider_settings(
-            db,
-            tenant_id=body.tenant_id,
-            project_id=body.project_id,
-            provider_id=provider.id,
+    settings = _load_provider_settings(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+    try:
+        expanded, provider_used, model_name = _expand_with_provider(
+            provider=provider,
+            provider_settings=settings,
+            prompt=prompt,
+            max_tokens=body.max_tokens,
         )
-        if not settings.get("enabled", True):
-            continue
-        try:
-            expanded, provider_used, model_name = _expand_with_provider(
-                provider=provider,
-                provider_settings=settings,
-                prompt=prompt,
-                max_tokens=body.max_tokens,
-            )
-            mode = "provider_llm"
-            break
-        except (requests.RequestException, ValueError, json.JSONDecodeError):
-            continue
+        mode = "provider_llm"
+    except (requests.RequestException, ValueError, json.JSONDecodeError):
+        expanded = _template_expand(markdown_text, body.instruction)
 
     if not expanded:
         expanded = _template_expand(markdown_text, body.instruction)
@@ -1005,430 +1000,3 @@ def get_chapter_diff(
         deletions=deletions,
     )
 
-
-@router.get("/chapters/available-models", response_model=list[dict])
-def get_available_models(
-    tenant_id: str = Query(...),
-    project_id: str = Query(...),
-    db: Session = Depends(get_db),
-) -> list[dict]:
-    """获取项目内已接入的可用模型列表"""
-    models = db.execute(
-        select(ModelProvider).where(
-            ModelProvider.tenant_id == tenant_id,
-            ModelProvider.project_id == project_id,
-            ModelProvider.deleted_at.is_(None),
-        )
-        .order_by(ModelProvider.created_at.desc())
-    ).scalars().all()
-
-    return [
-        {
-            "id": model.id,
-            "name": model.name,
-            "endpoint": model.endpoint or model.name,
-            "is_default": model.is_default,
-        }
-        for model in models
-    ]
-
-
-@router.post("/chapters/{chapter_id}/ai-expand", response_model=ChapterAssistExpandResponse, status_code=202)
-def ai_expand_chapter_content(
-    chapter_id: str,
-    body: ChapterAssistExpandRequest,
-    db: Session = Depends(get_db),
-) -> ChapterAssistExpandResponse:
-    """一键AI智能扩展章节剧情"""
-    chapter = db.get(Chapter, chapter_id)
-    if chapter is None:
-        raise HTTPException(status_code=404, detail="chapter not found")
-
-    if chapter.tenant_id != body.tenant_id or chapter.project_id != body.project_id:
-        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN: scope mismatch")
-
-    original_text = chapter.raw_text or ""
-    if not original_text:
-        raise HTTPException(status_code=400, detail="REQ-VALIDATION-001: chapter content is empty")
-
-    # 获取用户选择的模型档案（从model_provider_id）
-    selected_model = db.get(ModelProvider, body.model_provider_id)
-    if not selected_model:
-        raise HTTPException(status_code=404, detail="REQ-VALIDATION-002: model provider not found")
-
-    if selected_model.tenant_id != body.tenant_id or selected_model.project_id != body.project_id:
-        raise HTTPException(status_code=403, detail="AUTH-FORBIDDEN: model scope mismatch")
-
-    # 从用户选择的模型获取provider和model_name
-    provider_used = selected_model.name  # 如 "deepseek", "openai", "claude"
-    model_name = selected_model.endpoint or selected_model.name  # 如 "deepseek-chat", "gpt-4"
-
-    # 构建扩展提示词
-    expansion_prompt = _build_expansion_prompt(
-        original_text=original_text,
-        instruction=body.instruction,
-        style_hint=body.style_hint,
-        target_language=body.target_language or "zh",
-    )
-
-    # 调用真实LLM API进行内容扩展
-    try:
-        expanded_text, prompt_tokens, completion_tokens = _call_llm_api(
-            model_provider=provider_used,
-            model_name=model_name,
-            prompt=expansion_prompt,
-            max_tokens=body.max_tokens,
-            temperature=0.7,
-        )
-    except Exception as e:
-        # 如果LLM调用失败，返回错误信息
-        raise HTTPException(
-            status_code=503,
-            detail=f"[SYS-LLM-001] LLM service error: {str(e)}",
-        )
-
-    # 提取新增部分
-    appended_excerpt = expanded_text[len(original_text):] if len(expanded_text) > len(original_text) else expanded_text[:200]
-
-    # 记录AI扩展事件
-    now = datetime.now(timezone.utc)
-    event = WorkflowEvent(
-        id=f"evt_{uuid4().hex[:24]}",
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
-        trace_id=chapter.trace_id or f"tr_expand_{uuid4().hex[:12]}",
-        correlation_id=chapter.correlation_id or f"cr_expand_{uuid4().hex[:12]}",
-        idempotency_key=f"idem_expand_{chapter_id}_{uuid4().hex[:8]}",
-        run_id=None,
-        event_type="chapter.ai_expansion",
-        event_version="1.0",
-        producer="studio_api",
-        occurred_at=now,
-        payload_json={
-            "chapter_id": chapter_id,
-            "instruction": body.instruction,
-            "style_hint": body.style_hint,
-            "original_length": len(original_text),
-            "expanded_length": len(expanded_text),
-            "model": model_name,
-            "provider": provider_used,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-        },
-    )
-    db.add(event)
-    db.commit()
-
-    notify_telegram_event(
-        db=db,
-        tenant_id=body.tenant_id,
-        project_id=body.project_id,
-        event_type="chapter.ai_expansion",
-        summary=f"AI扩展章节 {chapter.title or 'Chapter'}",
-        run_id=None,
-        trace_id=chapter.trace_id or f"tr_expand_{uuid4().hex[:12]}",
-        correlation_id=chapter.correlation_id or f"cr_expand_{uuid4().hex[:12]}",
-        extra={
-            "chapter_id": chapter_id,
-            "original_length": len(original_text),
-            "expanded_length": len(expanded_text),
-        },
-    )
-
-    return ChapterAssistExpandResponse(
-        chapter_id=chapter_id,
-        original_length=len(original_text),
-        expanded_length=len(expanded_text),
-        expanded_markdown=expanded_text,
-        appended_excerpt=appended_excerpt,
-        provider_used=provider_used,
-        model_name=model_name,
-        mode="expand",
-        prompt_tokens_estimate=prompt_tokens,
-        completion_tokens_estimate=completion_tokens,
-    )
-
-
-def _build_expansion_prompt(
-    original_text: str,
-    instruction: str,
-    style_hint: str,
-    target_language: str = "zh",
-) -> str:
-    """构建AI扩展提示词"""
-    return f"""你是一位专业的网络小说编剧助手。
-当前任务：{instruction}
-
-原始文本：
-```
-{original_text}
-```
-
-写作风格指引：{style_hint}
-
-要求：
-1. 保持原有故事主线和人物设定
-2. 增加细节描写、心理活动、对话等元素
-3. 提升情节节奏和阅读体验
-4. 保持一致的叙事风格
-5. 只输出扩展后的完整文本，不要包含任何解释或标记
-
-输出语言：{target_language}
-"""
-
-
-def _call_llm_api(
-    model_provider: str,
-    model_name: str,
-    prompt: str,
-    max_tokens: int = 900,
-    temperature: float = 0.7,
-) -> tuple[str, int, int]:
-    """
-    调用真实的LLM API进行内容扩展
-
-    Returns:
-        (expanded_text, prompt_tokens, completion_tokens)
-    """
-    try:
-        # DeepSeek API 调用
-        if model_provider.lower() in ["deepseek", "deep-seek"]:
-            return _call_deepseek_api(model_name, prompt, max_tokens, temperature)
-
-        # OpenAI API 调用
-        elif model_provider.lower() in ["openai", "gpt"]:
-            return _call_openai_api(model_name, prompt, max_tokens, temperature)
-
-        # Claude API 调用
-        elif model_provider.lower() in ["anthropic", "claude"]:
-            return _call_claude_api(model_name, prompt, max_tokens, temperature)
-
-        # 其他API调用
-        else:
-            return _call_generic_api(model_provider, model_name, prompt, max_tokens, temperature)
-
-    except Exception as e:
-        # 如果API调用失败，使用fallback方法
-        print(f"⚠️ LLM API 调用失败: {str(e)}, 使用 fallback 方法")
-        return _fallback_llm_expansion(prompt, max_tokens)
-
-
-def _call_deepseek_api(
-    model_name: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> tuple[str, int, int]:
-    """调用 DeepSeek API"""
-    import os
-
-    api_key = os.getenv("DEEPSEEK_API_KEY", "")
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY 环境变量未设置")
-
-    url = "https://api.deepseek.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": model_name or "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    response = requests.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-
-    result = response.json()
-    expanded_text = result["choices"][0]["message"]["content"]
-    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
-    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
-
-    return expanded_text, prompt_tokens, completion_tokens
-
-
-def _call_openai_api(
-    model_name: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> tuple[str, int, int]:
-    """调用 OpenAI API"""
-    import os
-
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY 环境变量未设置")
-
-    url = "https://api.openai.com/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": model_name or "gpt-4",
-        "messages": [
-            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    response = requests.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-
-    result = response.json()
-    expanded_text = result["choices"][0]["message"]["content"]
-    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
-    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
-
-    return expanded_text, prompt_tokens, completion_tokens
-
-
-def _call_claude_api(
-    model_name: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> tuple[str, int, int]:
-    """调用 Claude API (Anthropic)"""
-    import os
-
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
-
-    url = "https://api.anthropic.com/v1/messages"
-
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": model_name or "claude-3-sonnet-20240229",
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "user", "content": prompt},
-        ],
-    }
-
-    response = requests.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-
-    result = response.json()
-    expanded_text = result["content"][0]["text"]
-    prompt_tokens = result.get("usage", {}).get("input_tokens", 0)
-    completion_tokens = result.get("usage", {}).get("output_tokens", 0)
-
-    return expanded_text, prompt_tokens, completion_tokens
-
-
-def _call_generic_api(
-    provider: str,
-    model_name: str,
-    prompt: str,
-    max_tokens: int,
-    temperature: float,
-) -> tuple[str, int, int]:
-    """调用通用的 OpenAI 兼容 API"""
-    import os
-
-    api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
-    if not api_key:
-        # 如果没有API key，使用fallback
-        return _fallback_llm_expansion(prompt, max_tokens)
-
-    base_url = os.getenv(f"{provider.upper()}_API_BASE", f"https://api.{provider.lower()}.com/v1")
-
-    url = f"{base_url}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": "你是一位专业的网络小说编剧助手。"},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    response = requests.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-
-    result = response.json()
-    expanded_text = result["choices"][0]["message"]["content"]
-    prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
-    completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
-
-    return expanded_text, prompt_tokens, completion_tokens
-
-
-def _fallback_llm_expansion(prompt: str, max_tokens: int) -> tuple[str, int, int]:
-    """
-    Fallback: 当LLM API不可用时使用本地简单扩展算法
-
-    Returns:
-        (expanded_text, prompt_tokens, completion_tokens)
-    """
-    # 从prompt中提取原始文本
-    original_text = prompt.split("原始文本：")[1].split("```")[1] if "原始文本：" in prompt else ""
-
-    if not original_text:
-        # 如果提取失败，直接返回一个简单的扩展
-        target_length = min(300, max_tokens * 4)
-        expanded_text = "这是一段AI生成的扩展文本。" + ("" * (target_length - 20))
-        return expanded_text, len(prompt) // 4, 75
-
-    # 简单的扩展算法：在原文基础上增加描写
-    sentences = original_text.split('。')
-    expanded_sentences = []
-    target_length = min(len(original_text) * 2, len(original_text) + max_tokens * 4)
-
-    for i, sentence in enumerate(sentences):
-        if sentence.strip():
-            expanded_sentences.append(sentence + '。')
-            # 在某些句子后面添加扩展内容
-            if i % 3 == 1 and len('。'.join(expanded_sentences)) < target_length:
-                expansion = _generate_sentence_expansion(sentence)
-                expanded_sentences.append(expansion)
-
-    expanded_text = ''.join(expanded_sentences)
-    expanded_text = expanded_text[:target_length] if len(expanded_text) > target_length else expanded_text
-
-    prompt_tokens = len(prompt) // 4
-    completion_tokens = len(expanded_text) // 4
-
-    return expanded_text, prompt_tokens, completion_tokens
-
-
-def _generate_sentence_expansion(sentence: str) -> str:
-    """为句子生成扩展描写"""
-    # 简单的扩展模板
-    expansions = {
-        "发生": "这时，一股不可名状的感觉涌上心头。",
-        "走": "缓缓踱步，脚步声在寂静中显得格外清晰。",
-        "说": "他停顿了片刻，用低沉的嗓音说道。",
-        "看": "眼神中闪烁着复杂的光芒，仔细打量着眼前的一切。",
-    }
-
-    for key, value in expansions.items():
-        if key in sentence:
-            return value
-
-    return "一时间，气氛变得凝重起来。"

@@ -48,19 +48,65 @@
           <NGridItem span="0:2 900:1"><NFormItem label="Title"><NInput v-model:value="editChapterTitle" /></NFormItem></NGridItem>
         </NGrid>
 
-        <NSpace>
+        <!-- AI 扩写工具栏 -->
+        <NCard size="small" style="margin-bottom: 10px; background: #f8f9fa; border: 1px solid #e8e8e8;">
+          <NSpace align="center" wrap>
+            <span style="font-weight: 600; color: #333;">💡 AI 扩写剧情</span>
+            <NFormItem label="选择模型" style="margin-bottom: 0;">
+              <NSelect
+                v-model:value="selectedModelId"
+                :options="modelOptions"
+                placeholder="请选择 AI 模型"
+                style="min-width: 260px;"
+                filterable
+              />
+            </NFormItem>
+            <NButton
+              type="primary"
+              :loading="isExpanding"
+              :disabled="!selectedModelId || isExpanding"
+              @click="onAssistExpandChapter"
+            >
+              {{ isExpanding ? '生成中...' : '一键 AI 扩写剧情' }}
+            </NButton>
+            <NTag v-if="availableModels.length === 0" type="warning" size="small">
+              未检测到可用模型，请先在 Provider 中配置
+            </NTag>
+          </NSpace>
+        </NCard>
+
+        <NSpace style="margin-bottom: 8px;">
           <NButton type="warning" @click="onUpdateChapter">保存</NButton>
           <NButton type="info" @click="onPreview(selectedChapterId)">预览 01~03</NButton>
           <NButton @click="onLoadRevisions(selectedChapterId)">修订历史</NButton>
-          <NButton type="primary" @click="onAssistExpandChapter">一键 AI 扩写剧情</NButton>
         </NSpace>
 
+        <!-- 编辑区 + 预览区 -->
         <div class="editor-split">
           <div class="editor-pane">
             <NFormItem label="Markdown 编辑"><NInput v-model:value="editChapterMarkdown" type="textarea" :autosize="{ minRows: 30, maxRows: 60 }" /></NFormItem>
           </div>
           <div class="preview-pane">
-            <div class="markdown-preview" v-html="markdownPreviewHtml" />
+            <!-- AI 扩写结果预览（实时显示，确认/取消） -->
+            <div v-if="aiExpandedMarkdown" class="ai-preview-panel">
+              <NSpace justify="space-between" align="center" style="margin-bottom: 8px;">
+                <span style="font-weight: 600; color: #1677ff;">🤖 AI 扩写预览</span>
+                <NSpace>
+                  <NButton type="primary" size="small" @click="onAcceptExpand">✅ 确认保存</NButton>
+                  <NButton size="small" @click="onCancelExpand">❌ 取消</NButton>
+                </NSpace>
+              </NSpace>
+              <NDivider style="margin: 6px 0;" />
+              <div class="markdown-preview" v-html="renderMarkdownToHtml(aiExpandedMarkdown)" />
+            </div>
+            <!-- 正常预览 -->
+            <div v-else>
+              <div v-if="isExpanding" style="text-align: center; padding: 40px;">
+                <NSpin size="large" />
+                <p style="color: #999; margin-top: 10px;">AI 正在创作中，请稍候...</p>
+              </div>
+              <div v-else class="markdown-preview" v-html="markdownPreviewHtml" />
+            </div>
           </div>
         </div>
 
@@ -95,6 +141,9 @@ import {
   NSpace,
   NTabPane,
   NTabs,
+  NDivider,
+  NTag,
+  NSpin,
   type DataTableColumns,
 } from "naive-ui";
 
@@ -102,6 +151,7 @@ import {
   assistExpandChapter,
   createChapter,
   getLanguageSettings,
+  listAvailableModels,
   listChapterRevisions,
   listChapters,
   listNovels,
@@ -151,9 +201,22 @@ const assistText = ref("{}");
 const message = ref("");
 const errorMessage = ref("");
 
+// AI 扩写相关状态
+const availableModels = ref<{ id: string; name: string; endpoint: string | null; auth_mode: string | null }[]>([]);
+const selectedModelId = ref("");
+const aiExpandedMarkdown = ref("");  // AI 扩写结果暂存（实时预览）
+const isExpanding = ref(false);
+
 const novelOptions = computed(() => novels.value.map((item) => ({ label: item.title, value: item.id })));
 
 const selectedNovelTitle = computed(() => novels.value.find((item) => item.id === selectedNovelId.value)?.title || "");
+
+const modelOptions = computed(() =>
+  availableModels.value.map((m) => ({
+    label: `${m.name}${m.endpoint ? ` (${m.endpoint})` : ""}`,
+    value: m.id,
+  }))
+);
 
 const filteredChapters = computed(() => {
   const keyword = chapterKeyword.value.trim().toLowerCase();
@@ -396,27 +459,60 @@ async function onUpdateChapter(): Promise<void> {
   }
 }
 
+async function onLoadModels(): Promise<void> {
+  try {
+    availableModels.value = await listAvailableModels(tenantId.value, projectId.value);
+    if (availableModels.value.length > 0 && !selectedModelId.value) {
+      selectedModelId.value = availableModels.value[0].id;
+    }
+  } catch (error) {
+    errorMessage.value = `load models failed: ${stringifyError(error)}`;
+  }
+}
+
 async function onAssistExpandChapter(): Promise<void> {
   clearNotice();
   if (!selectedChapterId.value) {
-    errorMessage.value = "select chapter first";
+    errorMessage.value = "请先选择章节";
     return;
   }
+  if (!selectedModelId.value) {
+    errorMessage.value = "请先选择 AI 模型";
+    return;
+  }
+  isExpanding.value = true;
+  aiExpandedMarkdown.value = "";
   try {
     const expanded = await assistExpandChapter(selectedChapterId.value, {
       tenant_id: tenantId.value,
       project_id: projectId.value,
+      model_provider_id: selectedModelId.value,
       instruction: "扩展冲突与反转，增加镜头化动作细节和角色心理层次",
       style_hint: "电影化叙事，段落清晰",
       target_language: editChapterLang.value,
       max_tokens: 900,
     });
-    editChapterMarkdown.value = expanded.expanded_markdown;
+    aiExpandedMarkdown.value = expanded.expanded_markdown;
     assistText.value = toPrettyJson(expanded);
-    message.value = `AI 扩写完成 (${expanded.mode}/${expanded.provider_used})`;
+    message.value = `AI 扩写完成 (${expanded.mode} · ${expanded.provider_used})`;
   } catch (error) {
     errorMessage.value = `assist expand failed: ${stringifyError(error)}`;
+  } finally {
+    isExpanding.value = false;
   }
+}
+
+async function onAcceptExpand(): Promise<void> {
+  if (!aiExpandedMarkdown.value || !selectedChapterId.value) return;
+  editChapterMarkdown.value = aiExpandedMarkdown.value;
+  aiExpandedMarkdown.value = "";
+  await onUpdateChapter();
+  message.value = "AI 扩写内容已保存";
+}
+
+function onCancelExpand(): void {
+  aiExpandedMarkdown.value = "";
+  clearNotice();
 }
 
 async function onPreview(chapterId: string): Promise<void> {
@@ -452,6 +548,7 @@ onMounted(() => {
   const storedNovelId = localStorage.getItem(STORAGE_KEY) || "";
   selectedNovelId.value = queryNovelId || storedNovelId;
   void onLoadLanguagePolicy();
+  void onLoadModels();
   void onLoadNovels().then(() => {
     if (selectedNovelId.value) {
       void onListChapters();
@@ -490,6 +587,14 @@ onMounted(() => {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
+  padding: 12px;
+  overflow: auto;
+}
+
+.ai-preview-panel {
+  border: 2px solid #1677ff;
+  border-radius: 8px;
+  background: #f0f5ff;
   padding: 12px;
   overflow: auto;
 }

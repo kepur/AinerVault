@@ -689,12 +689,25 @@ export async function previewChapterPlan(chapterId: string, payload: {
 export async function assistExpandChapter(chapterId: string, payload: {
   tenant_id: string;
   project_id: string;
+  model_provider_id: string;
   instruction?: string;
   style_hint?: string;
   target_language?: string;
   max_tokens?: number;
 }): Promise<ChapterAssistExpandResponse> {
-  const { data } = await http.post<ChapterAssistExpandResponse>(`/api/v1/chapters/${chapterId}/assist-expand`, payload);
+  const { data } = await http.post<ChapterAssistExpandResponse>(`/api/v1/chapters/${chapterId}/ai-expand`, payload);
+  return data;
+}
+
+export async function listAvailableModels(tenantId: string, projectId: string): Promise<{
+  id: string;
+  name: string;
+  endpoint: string | null;
+  auth_mode: string | null;
+}[]> {
+  const { data } = await http.get(`/api/v1/chapters/available-models`, {
+    params: { tenant_id: tenantId, project_id: projectId },
+  });
   return data;
 }
 
