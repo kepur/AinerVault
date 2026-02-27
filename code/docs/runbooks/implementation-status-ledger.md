@@ -22,6 +22,7 @@
 | Stage 权威枚举与迁移 | DONE | `code/docs/architecture/stage-enum-authority.md` | 已补齐 |
 | 14~22 E2E 验收矩阵 | IN_PROGRESS | `code/docs/runbooks/e2e-handoff-test-matrix.md` | 已补到 E2E-022；自动化执行与结果归档待补 |
 | CI 门禁执行规范 | DONE | `code/docs/runbooks/ci-gate-execution-spec.md` | 已补齐 |
+| 前置开工门禁（可执行） | DONE | `code/scripts/validate_preimplementation_readiness.py`, `progress/PREIMPLEMENTATION_READINESS_REPORT.md` | 严格模式通过：PASS=6/FAIL=0/WARN=0 |
 | shared 基础骨架 | DONE | `code/shared/ainern2d_shared/` | schemas(8) + queue(3) + utils(3) + telemetry(3) + config(2) + storage(2) + db(4) + services(2) — 全部有实现 |
 | 服务入口骨架 | DONE | `code/apps/*/app/main.py` | 4 服务 main.py + 所有路由注册 + 所有 __init__.py |
 | 业务模块实现 | DONE | `code/apps/*/app/modules/` | 66 个原空文件已全部实现，16 个 __init__.py |

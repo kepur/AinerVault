@@ -46,8 +46,8 @@
 | 18 | Failure Recovery & Degradation | `DONE` | studio-api | `FailureRecoveryService` | 2025-07-24 | Copilot | DTO:234L SVC:746L — 8类故障分类, 8级降级阶梯, 熔断器, 级联影响分析 |
 | 19 | Compute-Aware Shot Budgeter | `DONE` | studio-api | `ComputeBudgetService` | 2025-07-24 | Copilot | DTO:280L SVC:664L — 动态重分配, SLA分层, 成本模型, 后端路由, 并行批次 |
 | 20 | Shot DSL Compiler & Prompt Backend | `DONE` | composer | `DslCompilerService` | 2025-07-24 | Copilot | DTO:200L SVC:1073L — DSL校验, RAG注入, timing验证, 多候选编译, 5种后端payload |
-| 21 | Entity Registry & Continuity Manager | `INTEGRATION_READY` | studio-api | `EntityRegistryContinuityService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；E2E 待补 |
-| 22 | Persona Dataset & Index Manager | `INTEGRATION_READY` | studio-api | `PersonaDatasetIndexService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；E2E 待补 |
+| 21 | Entity Registry & Continuity Manager | `INTEGRATION_READY` | studio-api | `EntityRegistryContinuityService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；服务级 E2E 已通过，API 闭环待补 |
+| 22 | Persona Dataset & Index Manager | `INTEGRATION_READY` | studio-api | `PersonaDatasetIndexService` | 2026-02-27 | Codex | 已新增 DTO/Service/Registry + JobType/DAG/Dispatcher 接线；服务级 E2E 已通过，API+DB 回滚闭环待补 |
 
 ---
 

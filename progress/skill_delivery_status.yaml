@@ -5,6 +5,7 @@ meta:
     - "README_21_22_INTEGRATION_GUIDE.md"
     - "START_HERE_FOR_AGENTS.md"
     - "code/docs/runbooks/implementation-status-ledger.md"
+    - "progress/PREIMPLEMENTATION_READINESS_REPORT.md"
   db_alignment:
     status: "DONE"
     migration:
@@ -30,6 +31,16 @@ meta:
       pass: 11
       fail: 0
       warn: 0
+    latest_warn: []
+  preimplementation_validation:
+    script: "code/scripts/validate_preimplementation_readiness.py"
+    last_run_report: "progress/PREIMPLEMENTATION_READINESS_REPORT.md"
+    latest_result: "GO"
+    latest_summary:
+      pass: 6
+      fail: 0
+      warn: 0
+    mode: "strict"
     latest_warn: []
   status_enum:
     - "NOT_STARTED"

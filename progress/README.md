@@ -15,6 +15,8 @@
   - 基础落地框架（先模型确认，再编码，防跑偏执行顺序）。
 - `progress/MODEL_CONFIRMATION_REPORT.md`
   - 由 `code/scripts/validate_skill_framework.py` 自动生成的模型确认结果。
+- `progress/PREIMPLEMENTATION_READINESS_REPORT.md`
+  - 由 `code/scripts/validate_preimplementation_readiness.py` 自动生成的开工门禁结果（是否可直接编码）。
 - `progress/DOC_CLEANUP_BASELINE.md`
   - 文档保留与清理基线（哪些必须保留，哪些可归档/候选删除）。
 
@@ -25,5 +27,6 @@
 
 ## 4. 当前结论（快照）
 - `SKILL_01~20`：代码文件与调度入口基本存在，但统一门禁状态仍为 `REVIEW_REQUIRED`。
-- `SKILL_21~22`：DTO/Service/调度/DAG 已落地，当前处于 `INTEGRATION_READY`，待 E2E。
+- `SKILL_21~22`：DTO/Service/调度/DAG/消费接线已落地，服务级 E2E 已通过，API/闭环级 E2E 待补。
 - 数据库：已新增 21/22 对齐迁移 `0f2b6c9b0c7f_align_skill_21_22_schema.py`，待在可用 PostgreSQL 环境执行 `alembic upgrade head`。
+- 开工门禁：`PREIMPLEMENTATION_READINESS_REPORT.md` 当前为 `GO`（严格模式 `PASS=6 FAIL=0 WARN=0`）。

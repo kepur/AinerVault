@@ -78,7 +78,7 @@
 - Service 文件边界：
   - `SKILL_01~05,07~19`：`code/apps/ainern2d-studio-api/app/services/skills/skill_XX_*.py`
   - `SKILL_06,20`：`code/apps/ainern2d-composer/app/services/skills/skill_XX_*.py`
-  - `SKILL_21,22`：`code/apps/ainern2d-studio-api/app/services/skills/skill_21_*.py` / `skill_22_*.py`（已落地骨架+调度+DAG，待 E2E）
+  - `SKILL_21,22`：`code/apps/ainern2d-studio-api/app/services/skills/skill_21_*.py` / `skill_22_*.py`（已落地骨架+调度+DAG+服务级 E2E）
 - DTO 文件边界：`code/shared/ainern2d_shared/schemas/skills/skill_XX.py`（`01~22` 已有）
 - 所有 Service 继承 `BaseSkillService`
   - 对外统一调用入口：`run(input_dto, ctx)`
@@ -97,6 +97,9 @@
 - 删除条件：仅当该 skill 的替代 DTO/Service/调度/测试已就位，且 `progress/skill_delivery_status.yaml` 已更新为可接力状态。
 
 ## 5. 验收门禁
+- 统一前置门禁：`python3 code/scripts/validate_preimplementation_readiness.py --strict`
+- 若需要真实库门禁：`DATABASE_URL=postgresql+psycopg2://ainer:ainer_dev_2024@localhost:5432/ainer_dev python3 code/scripts/validate_preimplementation_readiness.py --strict`
+- 报告产物：`progress/PREIMPLEMENTATION_READINESS_REPORT.md`
 - `alembic upgrade -> downgrade -> upgrade` 必须通过。
 - E2E Blocker 用例必须 100% 通过。
 - 术语扫描必须一致（run/job/stage/event/artifact）。

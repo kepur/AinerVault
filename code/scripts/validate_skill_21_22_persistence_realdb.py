@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +62,8 @@ from app.services.skills.skill_22_persona_dataset_index import PersonaDatasetInd
 
 TENANT_ID = "t_e2e"
 PROJECT_ID = "p_e2e"
-RUN_ID = "RUN_E2E_21_22"
+RUN_SCOPE = os.getenv("E2E_RUN_SCOPE", uuid.uuid4().hex[:10].upper())
+RUN_ID = f"RUN_E2E_21_22_{RUN_SCOPE}"
 NOVEL_ID = "NOVEL_E2E_21_22"
 CHAPTER_ID = "CH_E2E_21_22"
 SCENE_ID = "SC_E2E_21_22"
@@ -259,9 +261,9 @@ def run_skill_21(db):
         tenant_id=TENANT_ID,
         project_id=PROJECT_ID,
         run_id=RUN_ID,
-        trace_id="trace_e2e_21",
-        correlation_id="corr_e2e_21",
-        idempotency_key="idem_e2e_21",
+        trace_id=f"trace_e2e_21_{RUN_SCOPE}",
+        correlation_id=f"corr_e2e_21_{RUN_SCOPE}",
+        idempotency_key=f"idem_e2e_21_{RUN_SCOPE}",
         schema_version="1.0",
     )
     inp = Skill21Input(
@@ -318,9 +320,9 @@ def run_skill_22(db):
         tenant_id=TENANT_ID,
         project_id=PROJECT_ID,
         run_id=RUN_ID,
-        trace_id="trace_e2e_22",
-        correlation_id="corr_e2e_22",
-        idempotency_key="idem_e2e_22",
+        trace_id=f"trace_e2e_22_{RUN_SCOPE}",
+        correlation_id=f"corr_e2e_22_{RUN_SCOPE}",
+        idempotency_key=f"idem_e2e_22_{RUN_SCOPE}",
         schema_version="1.0",
     )
     inp = Skill22Input(
@@ -413,6 +415,8 @@ def main() -> int:
 
         payload = {
             "database_url": db_url,
+            "run_scope": RUN_SCOPE,
+            "run_id": RUN_ID,
             "skill21_status": out21.status,
             "skill22_status": out22.status,
             "row_counts": rows,
@@ -421,7 +425,12 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
 
         if failed:
+            print(f"VALIDATION_RESULT: FAIL run_id={RUN_ID} failed_checks={','.join(failed)}")
             return 1
+        print(
+            "VALIDATION_RESULT: PASS "
+            f"run_id={RUN_ID} skill21_status={out21.status} skill22_status={out22.status}"
+        )
         return 0
     finally:
         db.close()

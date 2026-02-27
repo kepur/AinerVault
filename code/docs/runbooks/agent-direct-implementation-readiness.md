@@ -1,76 +1,49 @@
 # Agent 直落地实现就绪规范（2026-02-27）
 
 ## 1. 目标
-- 给其他 AI agent 一个“看文档 + 看模型即可直接编码”的硬约束入口。
-- 明确当前可落地范围、必须先补的骨架、以及禁止跑偏边界。
+- 给 AI agent 提供一个“是否可以直接开始编码”的统一门禁。
+- 把业务流程前提、模型前提、测试前提变成可执行证据，避免只看口头结论。
 
-## 2. 当前就绪结论（2026-02-27 更新）
-- **数据库模型层：✅ 已就绪**  
-  - `code/shared/ainern2d_shared/ainer_db_models/` 已定义核心共享模型（含 21/22 预览与绑定骨架）。
-  - `code/apps/alembic/versions/6f66885e0588_init_baseline.py` 可直接落库。
-- **共享基础设施：✅ 已就绪**  
-  - `schemas`(8) + `queue`(3) + `utils`(3) + `telemetry`(3) + `config`(2) + `storage`(2) + `db`(4) + `services`(2) 全部有实现。
-  - 新增: `schemas/skills/`（20 个基础技能 DTO 已存在，21/22 仍待补）。
-  - 新增: `services/base_skill.py`（BaseSkillService 基类 + SkillContext）。
-- **服务框架层：✅ 已就绪**  
-  - 4 个服务 main.py + 所有路由注册 + 所有 __init__.py 完成。
-  - 180 个 Python 文件全部有实现，零空壳文件。
-- **SKILL Service 层：⚠️ 部分就绪**  
-  - 当前代码以 20 个基础技能实现为主，21/22 仍未完成 Service/DAG/Registry 接入。
-  - SkillRegistry 已实现，但仅覆盖既有技能集合。
-- **结论**  
-  - ⚠️ 可用于“增量实现”，但尚未达到“看文档即可无歧义直落地”。
-  - 在 21/22 接入与契约一致性修复前，必须先做对齐改造。
+## 2. 当前就绪结论（2026-02-27）
+- **总体结论：`GO`（可开始落地编码）**
+- 依据：`progress/PREIMPLEMENTATION_READINESS_REPORT.md`
+  - `PASS=6 FAIL=0 WARN=0`
+  - 覆盖项：规格文件完整性、`SKILL_01~22` 存在性、框架严格校验、skills 测试、`21/22` E2E 服务链、真实数据库持久化验证
+- 当前真实状态：
+  - `SKILL_01~20`：Service/DTO/调度框架已在位，仍需按矩阵补完 API/闭环级 E2E
+  - `SKILL_21~22`：DTO/Service/Registry/Dispatcher/DAG/消费接线已落地，服务级 E2E 已通过
 
 ## 3. 强制边界（不可突破）
-- 运行主对象只能用：`run/job/stage/event/artifact`。
-- 仅 `orchestrator` 可推进 `run.stage.changed`。
-- `worker.*.completed` 只能作执行明细，不可替代 `job.succeeded/job.failed`。
-- 所有写链路必须带：`tenant_id/project_id/trace_id/correlation_id/idempotency_key`。
-- 失败链路必须带：`error_code/retryable/owner_module/trace_id`。
+- 运行主对象只能用：`run/job/stage/event/artifact`
+- 仅 `orchestrator` 可推进 `run.stage.changed`
+- `worker.*.completed` 只能作执行明细，不可替代 `job.succeeded/job.failed`
+- 所有写链路必须带：`tenant_id/project_id/trace_id/correlation_id/idempotency_key`
+- 失败链路必须带：`error_code/retryable/owner_module/trace_id`
 
-## 4. 框架与目录落地规范
-- Web/API：FastAPI（按服务拆分路由与模块）。
-- ORM：SQLAlchemy 2.x Declarative（统一复用 shared models）。
-- 迁移：Alembic（只增 revision，不修改 baseline）。
-- DTO：Pydantic（统一放在 `code/shared/ainern2d_shared/schemas/`）。
-- 消息：RabbitMQ Topic（主题以 `queue-topics-and-retry-policy.md` 为准）。
-- 存储：PostgreSQL + MinIO/S3（产物走对象存储，DB 存元数据）。
+## 4. 框架与目录规范
+- Web/API：FastAPI（按服务拆分路由与模块）
+- ORM：SQLAlchemy 2.x Declarative（统一复用 shared models）
+- 迁移：Alembic（只增 revision，不回改 baseline）
+- DTO：Pydantic（统一 `code/shared/ainern2d_shared/schemas/`）
+- 消息：RabbitMQ Topic（以 `queue-topics-and-retry-policy.md` 为准）
+- 存储：PostgreSQL + MinIO/S3（产物走对象存储，DB 存元数据）
 
-## 5. P0 必补清单（更新）
-以下基础层已实现（截至 2026-02-27）：
-- ✅ `schemas/` (task, timeline, artifact, events, worker, entity, error, base) — 8 文件
-- ⚠️ `schemas/skills/` — 已有 20 个基础技能 DTO；`skill_21.py`/`skill_22.py` 待补
-- ✅ `queue/` (topics, message_contracts, rabbitmq) — 3 文件
-- ✅ `utils/` (time, idempotency, retry) — 3 文件
-- ✅ `telemetry/` (logging, metrics, tracing) — 3 文件
-- ✅ `config/` (setting, enums) — 2 文件
-- ✅ `storage/` (s3, minio) — 2 文件
-- ✅ `services/` (base_skill, __init__) — 2 文件
-- ✅ `pyproject.toml` (shared + apps) — 2 文件
-- ✅ `scripts/` (dev-up, dev-down, migrate, seed_rag, init_storage) — 5 文件
+## 5. 前置门禁（提交前必须通过）
+1. 运行统一门禁脚本  
+   `python3 code/scripts/validate_preimplementation_readiness.py --strict`
+2. 若需要真实库强校验，设置 `DATABASE_URL` 后再执行  
+   `DATABASE_URL=postgresql+psycopg2://ainer:ainer_dev_2024@localhost:5432/ainer_dev python3 code/scripts/validate_preimplementation_readiness.py --strict`
+3. 报告文件必须刷新并可追溯  
+   `progress/PREIMPLEMENTATION_READINESS_REPORT.md`
 
-**当前焦点：补齐 21/22 接入（DTO/Service/JobType/DAG/Dispatcher/Registry）并修复契约冲突。**
+## 6. No-Go 条件
+- 门禁结果出现任一 `FAIL`
+- 严格模式下出现任一 `WARN`
+- 未注册事件类型或错误码（违反 `ainer_event_types.md` / `ainer_error_code.md`）
+- 绕过 orchestrator 直接改写 run 终态
 
-## 6. 模型与契约对齐细则（防跑偏）
-- `schema_version` 是事件/DTO 权威字段；数据库中的结构版本使用 `version`，两者禁止混用语义。
-- 运行态时间字段当前存在字符串列（如 `started_at/finished_at/occurred_at`）；新代码必须统一输出 `ISO-8601 UTC`。
-- 新增事件类型必须同步登记 `ainer_event_types.md`，未登记视为违规实现。
-- 新增错误码必须同步登记 `ainer_error_code.md`，失败事件必须包含错误对象。
-
-## 7. AI Agent 固定实施顺序
-1. 先补 `shared` 空骨架（DTO、队列、时间/幂等/重试、遥测、配置、存储）。
-2. 再补服务入口（studio-api -> orchestrator -> worker-hub -> composer -> observer）。
-3. 最后接增强链路（14~22）与治理闭环。
-
-## 8. 最小验收门禁（提交前必须通过）
-- Alembic：`upgrade -> downgrade -> upgrade` 全通过。
-- 契约：MUST 字段与事件注册检查通过。
-- 术语：`run/job/stage/event/artifact` 一致性检查通过。
-- E2E：`e2e-handoff-test-matrix.md` 的 Blocker 用例 100% 通过。
-
-## 9. No-Go 条件
-- 任一共享骨架仍为空文件。
-- 出现未注册事件类型或未注册错误码。
-- 绕过 orchestrator 直接改写 run 终态。
-- Blocker 门禁未通过。
+## 7. AI Agent 固定执行顺序
+1. 先过门禁并落报告
+2. 读取目标 `SKILL_XX_*.md` 与契约文档
+3. 按 `DTO -> Service -> 调度 -> 测试 -> 进度回写` 实施
+4. 更新 `progress/skill_delivery_status.yaml` 与 `implementation-status-ledger.md`

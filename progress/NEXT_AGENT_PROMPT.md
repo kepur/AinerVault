@@ -26,6 +26,10 @@
   - 覆盖 E2E-021 / E2E-022 的服务链路消费验证
 
 2.1) 开发前强制校验（MUST）：
+- 先运行统一开工门禁：
+  python3 code/scripts/validate_preimplementation_readiness.py --strict
+- 报告必须刷新到：
+  progress/PREIMPLEMENTATION_READINESS_REPORT.md
 - 先运行：
   python3 code/scripts/validate_skill_framework.py --strict --report progress/MODEL_CONFIRMATION_REPORT.md
 - 若出现 FAIL，先修复 FAIL 再编码。
@@ -47,6 +51,7 @@ B. 做 API+DB E2E：`22 lineage/version update -> 10/15/17`，验证消费一致
 - 输出字段符合 ainer_contracts.md
 - 错误码符合 ainer_error_code.md
 - `validate_skill_framework.py --strict` 通过
+- `validate_preimplementation_readiness.py --strict` 通过
 - 更新 progress/skill_delivery_status.yaml 的 status/gate/next_action/evidence
 
 6) 最终输出格式：
