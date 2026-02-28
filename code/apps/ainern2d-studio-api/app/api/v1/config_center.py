@@ -2017,18 +2017,16 @@ def run_role_studio_skill(
 
 def _default_language_settings(tenant_id: str, project_id: str) -> LanguageSettingsResponse:
     defaults = [
-        LanguageDefinition(language_code="zh-CN", label="简体中文", locales=["zh-CN"], enabled=True),
-        LanguageDefinition(language_code="en-US", label="English", locales=["en-US", "en-GB"], enabled=True),
-        LanguageDefinition(language_code="ja-JP", label="日本語", locales=["ja-JP"], enabled=True),
-        LanguageDefinition(language_code="ko-KR", label="한국어", locales=["ko-KR"], enabled=True),
-        LanguageDefinition(language_code="fr-FR", label="Français", locales=["fr-FR"], enabled=True),
-        LanguageDefinition(language_code="de-DE", label="Deutsch", locales=["de-DE"], enabled=True),
-        LanguageDefinition(language_code="es-ES", label="Español", locales=["es-ES", "es-MX"], enabled=True),
-        LanguageDefinition(language_code="ar-SA", label="العربية", locales=["ar-SA"], direction="rtl", enabled=True),
-        LanguageDefinition(language_code="pt-BR", label="Português", locales=["pt-BR", "pt-PT"], enabled=True),
-        LanguageDefinition(language_code="ru-RU", label="Русский", locales=["ru-RU"], enabled=True),
-        LanguageDefinition(language_code="hi-IN", label="हिन्दी", locales=["hi-IN"], enabled=True),
-        LanguageDefinition(language_code="th-TH", label="ไทย", locales=["th-TH"], enabled=True),
+        LanguageDefinition(language_code="en-US", label="English (US/Global)", locales=["en-US", "en-GB", "en-CA"], enabled=True),
+        LanguageDefinition(language_code="zh-CN", label="简体中文 (zh-CN)", locales=["zh-CN"], enabled=True),
+        LanguageDefinition(language_code="ja-JP", label="日本語 (ja-JP)", locales=["ja-JP"], enabled=True),
+        LanguageDefinition(language_code="ar-SA", label="العربية (ar-SA/UAE)", locales=["ar-SA", "ar-AE"], direction="rtl", enabled=True),
+        LanguageDefinition(language_code="es-MX", label="Español (es-MX/ES)", locales=["es-MX", "es-ES"], enabled=True),
+        LanguageDefinition(language_code="vi-VN", label="Tiếng Việt (vi-VN)", locales=["vi-VN"], enabled=True),
+        LanguageDefinition(language_code="pt-BR", label="Português (pt-BR)", locales=["pt-BR", "pt-PT"], enabled=True),
+        LanguageDefinition(language_code="hi-IN", label="हिन्दी (hi-IN)", locales=["hi-IN"], enabled=True),
+        LanguageDefinition(language_code="de-DE", label="Deutsch (de-DE)", locales=["de-DE", "de-AT"], enabled=True),
+        LanguageDefinition(language_code="tl-PH", label="Filipino/English (ph-PH)", locales=["tl-PH", "en-PH"], enabled=True),
     ]
     return LanguageSettingsResponse(
         tenant_id=tenant_id,

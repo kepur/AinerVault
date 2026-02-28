@@ -192,6 +192,10 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+        import traceback
+        import sys
+        print(f"UNEXPECTED EXCEPTION: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return _build_error_response(
             request=request,
             status_code=500,

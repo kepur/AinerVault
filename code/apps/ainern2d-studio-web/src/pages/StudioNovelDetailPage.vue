@@ -47,26 +47,46 @@
       <NTabPane name="team" :tab="t('novels.filmCrew')">
         <NCard>
           <NText depth="3" style="display:block;margin-bottom:16px">
-            为本小说每个职位绑定 Persona 实例。团队配置存储在小说的 team_json 字段中。
+            第一步：勾选本项目需要的职位。第二步：为每个职位指定 Persona 实例。
           </NText>
 
-          <NGrid :cols="2" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
-            <NGridItem v-for="role in TEAM_ROLES" :key="role.key" span="0:2 900:1">
-              <NFormItem :label="role.label">
-                <NSelect
-                  v-model:value="teamBindings[role.key]"
-                  :options="personaOptions"
-                  :placeholder="`选择${role.label} Persona`"
-                  clearable
-                  filterable
-                  style="flex:1"
-                />
-              </NFormItem>
-            </NGridItem>
-          </NGrid>
+          <!-- Step 1: 选择需要哪些职位 -->
+          <NDivider>第一步：选择职位</NDivider>
+          <NSpace style="margin-bottom:8px" align="center">
+            <NButton size="small" @click="onSelectAllRoles">全选</NButton>
+            <NButton size="small" @click="onClearAllRoles">清空</NButton>
+            <NText depth="3" style="font-size:12px">共 {{ ALL_ROLE_TEMPLATES.length }} 个可用职位，已选 {{ selectedRoleKeys.length }} 个</NText>
+          </NSpace>
+          <NCheckboxGroup v-model:value="selectedRoleKeys" style="margin-bottom:16px">
+            <NGrid :cols="4" :x-gap="8" :y-gap="6" responsive="screen" item-responsive>
+              <NGridItem v-for="role in ALL_ROLE_TEMPLATES" :key="role.id" span="0:4 640:2 1100:1">
+                <NCheckbox :value="role.id" :label="`${role.label} (${role.id})`" />
+              </NGridItem>
+            </NGrid>
+          </NCheckboxGroup>
 
-          <NSpace style="margin-top:8px">
-            <NButton type="primary" :loading="isSavingTeam" @click="onSaveTeam">保存团队绑定</NButton>
+          <!-- Step 2: 为选中职位指定 Persona -->
+          <template v-if="selectedRoleKeys.length > 0">
+            <NDivider>第二步：绑定 Persona</NDivider>
+            <NGrid :cols="2" :x-gap="12" :y-gap="10" responsive="screen" item-responsive>
+              <NGridItem v-for="roleKey in selectedRoleKeys" :key="roleKey" span="0:2 900:1">
+                <NFormItem :label="roleLabelMap[roleKey] ?? roleKey">
+                  <NSelect
+                    v-model:value="teamBindings[roleKey]"
+                    :options="personaOptions"
+                    :placeholder="`选择 ${roleLabelMap[roleKey] ?? roleKey} 的 Persona`"
+                    clearable
+                    filterable
+                    style="flex:1"
+                  />
+                </NFormItem>
+              </NGridItem>
+            </NGrid>
+          </template>
+          <NEmpty v-else description="请在上方勾选需要的职位" style="margin:24px 0" />
+
+          <NSpace style="margin-top:12px">
+            <NButton type="primary" :loading="isSavingTeam" :disabled="selectedRoleKeys.length === 0" @click="onSaveTeam">保存团队绑定</NButton>
             <NButton @click="onLoadTeam">重新加载</NButton>
           </NSpace>
           <pre v-if="teamSaveResult" class="json-panel" style="margin-top:12px">{{ teamSaveResult }}</pre>
@@ -188,8 +208,11 @@ import {
   NAlert,
   NButton,
   NCard,
+  NCheckbox,
+  NCheckboxGroup,
   NDataTable,
   NDivider,
+  NEmpty,
   NForm,
   NFormItem,
   NGrid,
@@ -235,14 +258,44 @@ const { t } = useI18n();
 const router = useRouter();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const TEAM_ROLES = [
-  { key: "director",   label: "导演" },
-  { key: "art",        label: "美术指导" },
-  { key: "photo",      label: "摄影指导" },
-  { key: "stunt",      label: "武术指导" },
-  { key: "translator", label: "翻译" },
-  { key: "voice",      label: "配音导演" },
+// All available role templates (same list as RoleConfigPage)
+const ALL_ROLE_TEMPLATES = [
+  { id: "director",           label: "导演" },
+  { id: "art_director",       label: "美术指导" },
+  { id: "dop",                label: "摄影指导" },
+  { id: "stunt_coordinator",  label: "武术指导" },
+  { id: "script_supervisor",  label: "剧本督导" },
+  { id: "translator",         label: "翻译" },
+  { id: "voice_director",     label: "配音导演" },
+  { id: "sound_designer",     label: "音效设计" },
+  { id: "vfx_supervisor",     label: "视效监督" },
+  { id: "editor",             label: "剪辑师" },
+  { id: "colorist",           label: "调色师" },
+  { id: "producer",           label: "制片人" },
+  { id: "casting_director",   label: "选角导演" },
+  { id: "prop_master",        label: "道具师" },
+  { id: "costume_designer",   label: "服装设计" },
+  { id: "makeup_artist",      label: "化妆师" },
+  { id: "set_designer",       label: "场景设计" },
+  { id: "storyboard_artist",  label: "分镜师" },
+  { id: "concept_artist",     label: "概念设计师" },
+  { id: "music_director",     label: "音乐总监" },
+  { id: "narrator",           label: "旁白" },
+  { id: "dialogue_writer",    label: "台词作家" },
+  { id: "action_director",    label: "动作导演" },
+  { id: "post_supervisor",    label: "后期监督" },
+  { id: "qa_reviewer",        label: "质量审核" },
+  { id: "localization_lead",  label: "本地化主管" },
+  { id: "ai_supervisor",      label: "AI 监督" },
+  { id: "technical_director", label: "技术总监" },
+  { id: "executive_producer", label: "执行制片" },
+  { id: "creative_director",  label: "创意总监" },
 ] as const;
+
+// Fast label lookup
+const roleLabelMap: Record<string, string> = Object.fromEntries(
+  ALL_ROLE_TEMPLATES.map(r => [r.id, r.label])
+);
 
 const languageOptions = [
   { label: "简体中文 (zh-CN)", value: "zh-CN" },
@@ -269,13 +322,21 @@ const newChapterLanguage = ref("zh-CN");
 const newChapterTitle = ref("");
 const newChapterContent = ref("");
 
-// Team
+// Team — dynamic role selection
 const personaPacks = ref<PersonaPackResponse[]>([]);
 const isSavingTeam = ref(false);
 const teamSaveResult = ref("");
-const teamBindings = reactive<Record<string, string | null>>({
-  director: null, art: null, photo: null, stunt: null, translator: null, voice: null,
-});
+// Which role keys the user has checked
+const selectedRoleKeys = ref<string[]>(["director", "translator", "voice_director"]);
+// Persona binding per role key (grows dynamically)
+const teamBindings = reactive<Record<string, string | null>>({});
+
+function onSelectAllRoles(): void {
+  selectedRoleKeys.value = ALL_ROLE_TEMPLATES.map(r => r.id);
+}
+function onClearAllRoles(): void {
+  selectedRoleKeys.value = [];
+}
 
 // Entities
 const providers = ref<ProviderResponse[]>([]);
@@ -452,11 +513,16 @@ async function onReloadAll(): Promise<void> {
 async function onLoadTeam(): Promise<void> {
   try {
     const resp = await getNovelTeam(props.novelId, { tenant_id: tenantId.value, project_id: projectId.value });
-    for (const key of Object.keys(teamBindings)) {
-      teamBindings[key] = resp.team[key]?.persona_pack_id ?? null;
+    const savedKeys = Object.keys(resp.team || {});
+    if (savedKeys.length > 0) {
+      // Restore selected roles from saved team
+      selectedRoleKeys.value = savedKeys;
+      for (const key of savedKeys) {
+        teamBindings[key] = resp.team[key]?.persona_pack_id ?? null;
+      }
     }
   } catch {
-    // team not set yet
+    // team not set yet — keep defaults
   }
 }
 
@@ -497,11 +563,15 @@ async function onSaveTeam(): Promise<void> {
   isSavingTeam.value = true;
   try {
     const team: Record<string, NovelTeamMember> = {};
-    for (const role of TEAM_ROLES) {
-      const packId = teamBindings[role.key];
+    // Only save roles that are both selected AND have a persona bound
+    for (const roleKey of selectedRoleKeys.value) {
+      const packId = teamBindings[roleKey] ?? null;
       if (packId) {
         const pack = personaPacks.value.find(p => p.id === packId);
-        team[role.key] = { persona_pack_id: packId, persona_pack_name: pack?.name ?? "" };
+        team[roleKey] = { persona_pack_id: packId, persona_pack_name: pack?.name ?? "" };
+      } else {
+        // Role selected but no persona — save as slot placeholder
+        team[roleKey] = { persona_pack_id: "", persona_pack_name: roleLabelMap[roleKey] ?? roleKey };
       }
     }
     const result = await setNovelTeam(props.novelId, {
@@ -510,7 +580,7 @@ async function onSaveTeam(): Promise<void> {
       team,
     });
     teamSaveResult.value = JSON.stringify(result, null, 2);
-    message.value = "团队绑定已保存";
+    message.value = `团队绑定已保存 (${selectedRoleKeys.value.length} 个职位)`;
   } catch (error) {
     errorMessage.value = `save team failed: ${stringifyError(error)}`;
   } finally {

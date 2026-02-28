@@ -670,11 +670,48 @@ def _expand_with_provider(
     max_tokens: int,
 ) -> tuple[str, str, str]:
     endpoint = (provider.endpoint or "").strip().rstrip("/")
-    token = str(provider_settings.get("access_token") or "").strip()
-    model_catalog = list(provider_settings.get("model_catalog") or [])
-    model_name = model_catalog[0] if model_catalog else "gpt-4o-mini"
+
+    # Priority: ModelProvider.access_token (set via Provider form) > policy override
+    token = (
+        str(getattr(provider, "access_token", None) or "").strip()
+        or str(provider_settings.get("access_token") or "").strip()
+    )
+
+    # Priority: ModelProvider.model_catalog > policy override, pick first available model
+    model_catalog_from_provider: list = list(getattr(provider, "model_catalog", None) or [])
+    model_catalog_from_settings: list = list(provider_settings.get("model_catalog") or [])
+    model_catalog = model_catalog_from_provider or model_catalog_from_settings
+
+    # DeepSeek-aware default: if provider name looks like deepseek, use its flagship model
+    if not model_catalog:
+        pname = (provider.name or "").lower()
+        if "deepseek" in pname:
+            model_catalog = ["deepseek-chat"]
+        elif "anthropic" in pname or "claude" in pname:
+            model_catalog = ["claude-3-5-sonnet-20241022"]
+        elif "gemini" in pname or "google" in pname:
+            model_catalog = ["gemini-1.5-pro"]
+        elif "qwen" in pname or "alibaba" in pname or "aliyun" in pname:
+            model_catalog = ["qwen-turbo"]
+        elif "zhipu" in pname or "chatglm" in pname:
+            model_catalog = ["glm-4"]
+        elif "baidu" in pname or "ernie" in pname:
+            model_catalog = ["ernie-3.5-8k"]
+        elif "moonshot" in pname or "kimi" in pname:
+            model_catalog = ["moonshot-v1-8k"]
+        elif "minimax" in pname:
+            model_catalog = ["abab6.5s-chat"]
+        elif "stepfun" in pname or "step" in pname:
+            model_catalog = ["step-1v-32k"]
+        elif "openai" in pname or "gpt" in pname:
+            model_catalog = ["gpt-4o-mini"]
+        else:
+            model_catalog = ["gpt-4o-mini"]
+
+    model_name = model_catalog[0]
+
     if not endpoint or not token:
-        raise ValueError("missing provider endpoint/token")
+        raise ValueError(f"missing provider endpoint/token for provider '{provider.name}'")
 
     payload = {
         "model": model_name,
@@ -1118,18 +1155,101 @@ class EntityExtractionResponse(BaseModel):
     aliases_count: int
     events_count: int
     preview: dict = Field(default_factory=dict)
+    raw_response: str = ""
 
 
-_ENTITY_EXTRACTION_PROMPT = """请从以下章节内容中提取实体信息，以JSON格式输出，不要输出其他内容。
+class DebugEntityExtractionRequest(BaseModel):
+    text: str = Field(..., min_length=200)
+    tenant_id: str = "default"
+    project_id: str = "default"
+    model_provider_id: str = "provider_deepseek"
 
-输出格式：
-{
-  "characters": [{"name": "人物名", "aliases": ["别名1", "别名2"], "role": "主角/配角/反派", "traits": ["特征1"]}],
-  "locations": [{"name": "地点名", "description": "描述", "type": "城市/山脉/建筑"}],
-  "events": [{"title": "事件标题", "participants": ["人物名"], "summary": "事件摘要"}]
-}
+@router.post("/debug/entity-extract")
+def debug_entity_extract(
+    body: DebugEntityExtractionRequest,
+    db: Session = Depends(get_db),
+):
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+        
+    prompt = _ENTITY_EXTRACTION_PROMPT.format(content=body.text)
+    settings = _load_provider_settings(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+    
+    import re as _re
+    from loguru import logger
 
-章节内容：
+    extracted = None
+    last_error = ""
+    last_raw = ""
+    current_prompt = prompt
+    
+    for attempt in range(2):  # 1 initial + 1 retry
+        try:
+            content, _, _ = _expand_with_provider(
+                provider=provider,
+                provider_settings=settings,
+                prompt=current_prompt,
+                max_tokens=2000,
+            )
+            last_raw = content
+            json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
+            if json_match:
+                extracted = json.loads(json_match.group())
+                if isinstance(extracted, dict):
+                    break
+                else:
+                    raise ValueError("Extracted JSON is not a dictionary/object.")
+            else:
+                raise ValueError("No JSON object found in output.")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Debug entity extraction iteration {attempt} failed: {e}. Raw content: {last_raw}")
+            
+            # If the error is an HTTP API error from the provider (like 401), fail immediately with a clear message
+            if "provider_http_status_401" in last_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail="模型提供商身份鉴权失败（HTTP 401）。请前往「模型资产管理」确保证您的 API Key (Access Token) 配置正确且有效！"
+                )
+            elif "provider_http_status_" in last_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"调用模型提供商 API 时遇到网络或服务端异常: {last_error}"
+                )
+                
+            current_prompt += f"\n\n注意：你的上一次输出无法解析为JSON ({e})。请务必核对并**只**输出合法的 JSON 格式，请不要随意转义或输出任何多余文字。"
+
+    if not isinstance(extracted, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract valid JSON after 1 retry. Last error: {last_error}",
+        )
+        
+    return {
+        "success": True,
+        "raw_response": last_raw,
+        "extracted": extracted,
+    }
+
+
+
+_ENTITY_EXTRACTION_PROMPT = """请从以下章节内提取实体信息，以严格的 JSON 格式输出，不要输出任何多余内容（不带 Markdown 标记）。如果文本长度超过 200 字，必须至少提取出主要角色和事件！
+
+输出格式限定为：
+{{
+  "characters": [{{"name": "真实姓名", "aliases": ["其他称呼"], "role": "主角/核心配角/边缘配角/反派", "traits": ["性格特征或外貌"]}}],
+  "locations": [{{"name": "地点名称", "description": "详细描述", "type": "室内/室外/城市/建筑"}}],
+  "events": [{{"title": "核心事件概括", "participants": ["人物姓名"], "summary": "事件详细摘要"}}]
+}}
+
+注意：绝对不能返回空数组（除非文本毫无内容）。请务必仔细阅读以下章节内容进行抽取：
+
 {content}
 """
 
@@ -1179,26 +1299,73 @@ def extract_novel_entities(
         provider_id=provider.id,
     )
 
-    try:
-        content, _, _ = _expand_with_provider(
-            provider=provider,
-            provider_settings=settings,
-            prompt=prompt,
-            max_tokens=2000,
-        )
-        # Parse JSON response
-        import re as _re
-        json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
-        if json_match:
-            extracted = json.loads(json_match.group())
-        else:
-            extracted = {}
-    except (requests.RequestException, ValueError, json.JSONDecodeError):
-        extracted = {}
+    import re as _re
+    from loguru import logger
 
-    entities_count = 0
+    extracted = None
+    last_error = ""
+    last_raw = ""
+    current_prompt = prompt
+    
+    for attempt in range(2):  # 1 initial + 1 retry
+        try:
+            content, _, _ = _expand_with_provider(
+                provider=provider,
+                provider_settings=settings,
+                prompt=current_prompt,
+                max_tokens=2000,
+            )
+            last_raw = content
+            json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
+            if json_match:
+                extracted = json.loads(json_match.group())
+                if isinstance(extracted, dict):
+                    break
+                else:
+                    raise ValueError("Extracted JSON is not a dictionary/object.")
+            else:
+                raise ValueError("No JSON object found in output.")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Entity extraction iteration {attempt} for novel {novel_id} failed: {e}. Raw content: {last_raw}")
+            
+            # If the error is an HTTP API error from the provider (like 401), fail immediately with a clear message
+            if "provider_http_status_401" in last_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail="模型提供商身份鉴权失败（HTTP 401）。请前往「模型资产管理」确保证您的 API Key (Access Token) 配置正确且有效！"
+                )
+            elif "provider_http_status_" in last_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"调用模型提供商 API 时遇到网络或服务端异常: {last_error}"
+                )
+                
+            # Append warning message strictly pointing back to original shape for retry
+            current_prompt += f"\n\n注意：你的上一次输出无法解析为JSON ({e})。请仔细核查上一次输出错误的地方并**只**输出合法的 JSON 格式。"
+
+    if not isinstance(extracted, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=f"实体提取失败：与大模型交互后提取到的结果无法解析为有效 JSON。内部错误：{last_error}"
+        )
+
+    # Calculate total parsed units for UI display/validation
+    parsed_characters = len(extracted.get("characters", []))
+    parsed_locations = len(extracted.get("locations", []))
+    parsed_events = len(extracted.get("events", []))
+    parsed_entity_count = parsed_characters + parsed_locations + parsed_events
+
+    # Hard guard: 200+ len content typically shouldn't yield ZERO of everything
+    if parsed_entity_count == 0 and len(combined_content) >= 200:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Parsed 0 entities from 200+ length text. Extraction may have failed. Raw: {last_raw}"
+        )
+
+    entities_count = parsed_entity_count
     aliases_count = 0
-    events_count = 0
+    events_count = parsed_events
 
     # Store characters
     for char in extracted.get("characters", []):
@@ -1343,4 +1510,5 @@ def extract_novel_entities(
         aliases_count=aliases_count,
         events_count=events_count,
         preview=preview,
+        raw_response=last_raw,
     )
