@@ -154,6 +154,8 @@ import {
   NTag,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type ChapterResponse,
@@ -175,6 +177,8 @@ interface SelectOption {
   label: string;
   value: string;
 }
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

@@ -34,16 +34,22 @@ class JobLoop:
     def _on_message(self, payload: dict) -> None:
         asyncio.run(self._handle_message(payload))
 
-    async def _handle_message(self, payload: dict) -> None:
+    async def _handle_message(self, message: dict) -> None:
         """Deserialize an incoming job message, execute, and report the outcome."""
-        job_id: str = payload.get("job_id", "unknown")
-        run_id: str | None = payload.get("run_id")
+        job_id: str = message.get("job_id", "unknown")
+        run_id: str | None = message.get("run_id")
+        
+        # The message is an EventEnvelope, the actual job payload is enclosed inside it.
+        payload: dict = message.get("payload", {})
 
         # Only process jobs targeted at this worker type
         if payload.get("worker_type") != self.worker.worker_type:
             return
 
         try:
+            # Pass the inner generic payload along with essential identifiers to the worker
+            payload["job_id"] = job_id
+            payload["run_id"] = run_id
             result: WorkerResult = await self.worker.execute(payload)
             await self.worker.report_result(result)
             logger.info("job %s succeeded", job_id)

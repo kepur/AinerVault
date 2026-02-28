@@ -15,8 +15,10 @@ from app.api.deps import has_required_role
 from app.api.error_mapping import build_error_response, register_error_handlers
 from app.api.v1.assets import router as assets_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.auto_router import router as auto_router_router
 from app.api.v1.config_center import router as config_center_router
 from app.api.v1.culture_packs import router as culture_packs_router
+from app.api.v1.init import router as init_router
 from app.api.v1.novels import router as novels_router
 from app.api.v1.observer import router as observer_router
 from app.api.v1.orchestrator import consume_orchestrator_topic
@@ -27,29 +29,38 @@ from app.api.v1.rag_console import router as rag_console_router
 from app.api.v1.regenerate import router as regenerate_router
 from app.api.v1.tasks import router as task_router
 from app.api.v1.timesline import router as timeline_router
+from app.api.v1.translation import router as translation_router
+from app.api.v1.kb_assets import router as kb_assets_router
+from app.api.v1.nle_projects import router as nle_projects_router
 from app.security.auth_token import decode_access_token, extract_bearer_token
 from ainern2d_shared.db.session import SessionLocal
 
 app = FastAPI(title="ainern2d-studio-api", version="0.1.0")
 register_error_handlers(app)
 app.include_router(auth_router)
+app.include_router(init_router)
 app.include_router(task_router)
 app.include_router(orchestrator_router)
 app.include_router(observer_router)
 app.include_router(projects_router)
 app.include_router(novels_router)
 app.include_router(config_center_router)
+app.include_router(auto_router_router)
 app.include_router(rag_console_router)
 app.include_router(culture_packs_router)
 app.include_router(assets_router)
 app.include_router(timeline_router)
 app.include_router(regenerate_router)
 app.include_router(preview_router)
+app.include_router(translation_router)
+app.include_router(kb_assets_router)
+app.include_router(nle_projects_router)
 
 _PUBLIC_PATHS = {
 	"/healthz",
 	"/api/v1/auth/login",
 	"/api/v1/auth/register",
+	"/api/v1/init/bootstrap-all",
 }
 
 _PUBLIC_PREFIXES = (
@@ -62,6 +73,8 @@ _ADMIN_PREFIXES = (
 	"/api/v1/config/",
 	"/api/v1/auth/projects/",
 	"/api/v1/auth/audit/",
+	"/api/v1/auth/users",
+	"/api/v1/init/",
 )
 
 _ADMIN_ROUTES = {

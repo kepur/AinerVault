@@ -41,9 +41,9 @@
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="primary" @click="onCreateTask">创建 Task / Run</NButton>
-        <NButton @click="onLoadSnapshot" :disabled="!runId">加载 Run Snapshot</NButton>
-        <NButton type="info" @click="onLoadRunObservability" :disabled="!runId">加载运行观测</NButton>
+        <NButton type="primary" @click="onCreateTask">{{ t('runs.createRun') }}</NButton>
+        <NButton @click="onLoadSnapshot" :disabled="!runId">{{ t('common.details') }}</NButton>
+        <NButton type="info" @click="onLoadRunObservability" :disabled="!runId">{{ t('runs.loadObs') }}</NButton>
       </NSpace>
       <NSpace>
         <NTag type="success" :bordered="false">Run ID: {{ runId || "(none)" }}</NTag>
@@ -113,6 +113,8 @@ import {
   NText,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type ChapterResponse,
@@ -128,6 +130,8 @@ import {
   listChapters,
   listNovels,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

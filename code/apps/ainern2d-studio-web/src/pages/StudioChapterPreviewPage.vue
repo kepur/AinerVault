@@ -218,6 +218,10 @@ interface PreviewResult {
   shot_plan: Array<{ description?: string; shot_type?: string }>
 }
 
+import { useI18n } from "@/composables/useI18n";
+
+const { t } = useI18n();
+
 const route = useRoute()
 const router = useRouter()
 

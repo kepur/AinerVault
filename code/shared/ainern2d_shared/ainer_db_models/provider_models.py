@@ -16,6 +16,26 @@ class ModelProvider(Base, StandardColumnsMixin):
 	auth_mode: Mapped[str | None] = mapped_column(String(64))
 
 
+class ProviderAdapter(Base, StandardColumnsMixin):
+	__tablename__ = "provider_adapters"
+	__table_args__ = (
+		Index("ix_provider_adapters_scope_provider", "tenant_id", "project_id", "provider_id"),
+		UniqueConstraint("tenant_id", "project_id", "provider_id", "feature", name="uq_provider_adapters_feature"),
+	)
+
+	provider_id: Mapped[str] = mapped_column(ForeignKey("model_providers.id", ondelete="CASCADE"), nullable=False)
+	feature: Mapped[str] = mapped_column(String(64), nullable=False)
+	
+	endpoint_json: Mapped[dict | None] = mapped_column(JSONB)
+	auth_json: Mapped[dict | None] = mapped_column(JSONB)
+	request_json: Mapped[dict | None] = mapped_column(JSONB)
+	response_json: Mapped[dict | None] = mapped_column(JSONB)
+	
+	timeout_sec: Mapped[int] = mapped_column(default=60)
+	retry_json: Mapped[dict | None] = mapped_column(JSONB)
+	version: Mapped[str] = mapped_column(String(32), default="v1")
+
+
 class ModelProfile(Base, StandardColumnsMixin):
 	__tablename__ = "model_profiles"
 	__table_args__ = (
@@ -24,6 +44,7 @@ class ModelProfile(Base, StandardColumnsMixin):
 	)
 
 	provider_id: Mapped[str] = mapped_column(ForeignKey("model_providers.id", ondelete="CASCADE"), nullable=False)
+	adapter_id: Mapped[str | None] = mapped_column(ForeignKey("provider_adapters.id", ondelete="SET NULL"))
 	purpose: Mapped[str] = mapped_column(String(64), nullable=False)
 	name: Mapped[str] = mapped_column(String(128), nullable=False)
 	params_json: Mapped[dict | None] = mapped_column(JSONB)

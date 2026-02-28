@@ -75,8 +75,26 @@
           </NSpace>
         </NCard>
 
+        <!-- 实体抽离工具栏 -->
+        <NCard size="small" style="margin-bottom: 10px; background: #f0f7ff; border: 1px solid #c0d8f0;">
+          <NSpace align="center" wrap>
+            <span style="font-weight: 600; color: #0052cc;">🧬 LLM 实体抽离</span>
+            <NButton
+              type="info"
+              :loading="isExtractingEntities"
+              :disabled="!selectedModelId || !selectedNovelId || isExtractingEntities"
+              @click="onExtractEntities"
+            >
+              {{ isExtractingEntities ? '抽离中...' : '提取人物/地点/事件' }}
+            </NButton>
+            <NTag v-if="entityExtractionResult" type="success" size="small">
+              ✓ 人物: {{ entityExtractionResult.entities_count }} 别名: {{ entityExtractionResult.aliases_count }} 事件: {{ entityExtractionResult.events_count }}
+            </NTag>
+          </NSpace>
+        </NCard>
+
         <NSpace style="margin-bottom: 8px;">
-          <NButton type="warning" @click="onUpdateChapter">保存</NButton>
+          <NButton type="warning" @click="onUpdateChapter">{{ t('common.save') }}</NButton>
           <NButton type="info" @click="onPreview(selectedChapterId)">预览 01~03</NButton>
           <NButton @click="onLoadRevisions(selectedChapterId)">修订历史</NButton>
         </NSpace>
@@ -111,9 +129,9 @@
         </div>
 
         <NTabs type="line" animated>
-          <NTabPane name="preview" tab="预览结果"><pre class="json-panel">{{ previewText }}</pre></NTabPane>
-          <NTabPane name="revision" tab="修订历史"><pre class="json-panel">{{ revisionsText }}</pre></NTabPane>
-          <NTabPane name="assistant" tab="AI 扩写日志"><pre class="json-panel">{{ assistText }}</pre></NTabPane>
+          <NTabPane name="preview" :tab="t('chapter.previewResult')"><pre class="json-panel">{{ previewText }}</pre></NTabPane>
+          <NTabPane name="revision" :tab="t('chapter.revisionHistory')"><pre class="json-panel">{{ revisionsText }}</pre></NTabPane>
+          <NTabPane name="assistant" :tab="t('chapter.aiExpandLog')"><pre class="json-panel">{{ assistText }}</pre></NTabPane>
         </NTabs>
       </NCard>
     </template>
@@ -146,10 +164,13 @@ import {
   NSpin,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   assistExpandChapter,
   createChapter,
+  extractNovelEntities,
   getLanguageSettings,
   listAvailableModels,
   listChapterRevisions,
@@ -158,6 +179,7 @@ import {
   previewChapterPlan,
   updateChapter,
   type ChapterResponse,
+  type EntityExtractionResponse,
   type NovelResponse,
 } from "@/api/product";
 
@@ -167,6 +189,8 @@ interface SelectOption {
   label: string;
   value: string;
 }
+
+const { t } = useI18n();
 
 const route = useRoute();
 const router = useRouter();
@@ -206,6 +230,10 @@ const availableModels = ref<{ id: string; name: string; endpoint: string | null;
 const selectedModelId = ref("");
 const aiExpandedMarkdown = ref("");  // AI 扩写结果暂存（实时预览）
 const isExpanding = ref(false);
+
+// 实体抽离状态
+const isExtractingEntities = ref(false);
+const entityExtractionResult = ref<EntityExtractionResponse | null>(null);
 
 const novelOptions = computed(() => novels.value.map((item) => ({ label: item.title, value: item.id })));
 
@@ -513,6 +541,27 @@ async function onAcceptExpand(): Promise<void> {
 function onCancelExpand(): void {
   aiExpandedMarkdown.value = "";
   clearNotice();
+}
+
+async function onExtractEntities(): Promise<void> {
+  clearNotice();
+  if (!selectedNovelId.value || !selectedModelId.value) {
+    errorMessage.value = "请先选择小说和模型";
+    return;
+  }
+  isExtractingEntities.value = true;
+  try {
+    entityExtractionResult.value = await extractNovelEntities(selectedNovelId.value, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      model_provider_id: selectedModelId.value,
+    });
+    message.value = `实体抽离完成：人物 ${entityExtractionResult.value.entities_count} 个，别名 ${entityExtractionResult.value.aliases_count} 个，事件 ${entityExtractionResult.value.events_count} 个`;
+  } catch (error) {
+    errorMessage.value = `实体抽离失败: ${stringifyError(error)}`;
+  } finally {
+    isExtractingEntities.value = false;
+  }
 }
 
 async function onPreview(chapterId: string): Promise<void> {

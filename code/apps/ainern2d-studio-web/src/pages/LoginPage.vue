@@ -40,10 +40,12 @@ import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpace, NTag
 
 import { getCurrentUser, login } from "@/api/product";
 import { useAuthStore } from "@/stores/auth";
+import { useLocaleStore, type SupportedLocale } from "@/stores/locale";
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const localeStore = useLocaleStore();
 
 const form = reactive({
   username: "demo_user@ainer.ai",
@@ -51,7 +53,10 @@ const form = reactive({
 });
 
 const LOCALE_KEY = "ainer_studio_locale";
-const locale = ref(localStorage.getItem(LOCALE_KEY) || "zh-CN");
+const locale = computed({
+  get: () => localeStore.locale,
+  set: (v: SupportedLocale) => localeStore.setLocale(v),
+});
 
 const localeOptions = [
   { label: "简体中文", value: "zh-CN" },
@@ -134,14 +139,7 @@ const copy = computed(() => loginCopyMap[locale.value] ?? loginCopyMap["en-US"])
 const loading = ref(false);
 const errorMessage = ref("");
 
-watch(
-  locale,
-  (value) => {
-    localStorage.setItem(LOCALE_KEY, value);
-    document.documentElement.lang = value;
-  },
-  { immediate: true }
-);
+// locale watch handled by localeStore.setLocale directly
 
 async function onSubmit(): Promise<void> {
   errorMessage.value = "";

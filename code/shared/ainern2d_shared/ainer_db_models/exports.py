@@ -40,8 +40,8 @@ from .pipeline_models import (
 	RunStageTransition,
 	WorkflowEvent,
 )
-from .provider_models import CostLedger, ModelProfile, ModelProvider, RouteDecision
-from .rag_models import FeedbackEvent, KbProposal, KbRollout, KbVersion, RagCollection, RagDocument, RagEmbedding, RagEvalReport
+from .provider_models import CostLedger, ModelProfile, ModelProvider, ProviderAdapter, RouteDecision
+from .rag_models import FeedbackEvent, KBPack, KBSource, KbProposal, KbRollout, KbVersion, NovelKBMap, PersonaKBMap, RagCollection, RagDocument, RagEmbedding, RagEvalReport, RoleKBMap
 from .governance_models import (
 	CreativePolicyStack,
 	CriticEvaluation,
@@ -64,6 +64,19 @@ from .preview_models import (
 	PersonaIndexBinding,
 	PersonaLineageEdge,
 	PersonaRuntimeManifest,
+)
+from .translation_models import (
+	BlockType,
+	ConsistencyMode,
+	ConsistencyWarning,
+	EntityNameVariant,
+	ScriptBlock,
+	TranslationBlock,
+	TranslationBlockStatus,
+	TranslationProject,
+	TranslationProjectStatus,
+	WarningStatus,
+	WarningType,
 )
 
 __all__ = [
@@ -120,10 +133,16 @@ __all__ = [
 	"AssetCandidate",
 	"ModelProvider",
 	"ModelProfile",
+	"ProviderAdapter",
 	"RouteDecision",
 	"CostLedger",
 	"RagCollection",
 	"KbVersion",
+	"KBPack",
+	"KBSource",
+	"RoleKBMap",
+	"PersonaKBMap",
+	"NovelKBMap",
 	"RagDocument",
 	"RagEmbedding",
 	"FeedbackEvent",
@@ -149,4 +168,16 @@ __all__ = [
 	"PersonaIndexBinding",
 	"PersonaLineageEdge",
 	"PersonaRuntimeManifest",
+	# Translation
+	"TranslationProject",
+	"TranslationProjectStatus",
+	"ConsistencyMode",
+	"ScriptBlock",
+	"BlockType",
+	"TranslationBlock",
+	"TranslationBlockStatus",
+	"EntityNameVariant",
+	"ConsistencyWarning",
+	"WarningType",
+	"WarningStatus",
 ]

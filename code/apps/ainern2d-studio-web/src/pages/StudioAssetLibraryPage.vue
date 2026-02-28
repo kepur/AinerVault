@@ -13,6 +13,30 @@
           </NFormItem>
         </NGridItem>
         <NGridItem span="0:4 900:1">
+          <NFormItem label="小说过滤">
+            <NSelect
+              v-model:value="filterNovelId"
+              :options="novelOptions"
+              placeholder="按小说过滤"
+              clearable
+              filterable
+              @update:value="onNovelFilterChange"
+            />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:4 900:1">
+          <NFormItem label="章节过滤">
+            <NSelect
+              v-model:value="filterChapterId"
+              :options="chapterOptions"
+              placeholder="按章节过滤（可选）"
+              clearable
+              filterable
+              :disabled="!filterNovelId"
+            />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:4 900:1">
           <NFormItem label="Run ID">
             <NInput v-model:value="runId" placeholder="optional" />
           </NFormItem>
@@ -81,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, ref } from "vue";
+import { computed, h, onMounted, ref } from "vue";
 import {
   NAlert,
   NButton,
@@ -95,14 +119,23 @@ import {
   NSpace,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
+
 
 import {
+  type ChapterResponse,
+  type NovelResponse,
   type ProjectAssetItem,
   deleteAsset,
+  listChapters,
+  listNovels,
   listProjectAnchors,
   listProjectAssets,
   markAssetAnchor,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");
@@ -111,6 +144,19 @@ const shotId = ref("");
 const assetType = ref("");
 const keyword = ref("");
 const anchoredFilter = ref("all");
+
+// Novel/chapter filter
+const novels = ref<NovelResponse[]>([]);
+const filterChapters = ref<ChapterResponse[]>([]);
+const filterNovelId = ref<string | null>(null);
+const filterChapterId = ref<string | null>(null);
+
+const novelOptions = computed(() =>
+  novels.value.map(n => ({ label: n.title, value: n.id }))
+);
+const chapterOptions = computed(() =>
+  filterChapters.value.map(c => ({ label: `Ch.${c.chapter_no} ${c.title ?? ""}`, value: c.id }))
+);
 
 const assets = ref<ProjectAssetItem[]>([]);
 const assetId = ref("");
@@ -167,6 +213,17 @@ function clearNotice(): void {
   errorMessage.value = "";
 }
 
+async function onNovelFilterChange(novelId: string | null): Promise<void> {
+  filterChapterId.value = null;
+  filterChapters.value = [];
+  if (!novelId) return;
+  try {
+    filterChapters.value = await listChapters(novelId);
+  } catch {
+    // non-critical
+  }
+}
+
 async function onListAssets(): Promise<void> {
   clearNotice();
   try {
@@ -175,6 +232,7 @@ async function onListAssets(): Promise<void> {
     assets.value = await listProjectAssets({
       tenant_id: tenantId.value,
       project_id: projectId.value,
+      chapter_id: filterChapterId.value || undefined,
       run_id: runId.value || undefined,
       shot_id: shotId.value || undefined,
       asset_type: assetType.value || undefined,
@@ -231,4 +289,12 @@ async function onListAnchors(): Promise<void> {
     errorMessage.value = `list anchors failed: ${stringifyError(error)}`;
   }
 }
+
+onMounted(async () => {
+  try {
+    novels.value = await listNovels(tenantId.value, projectId.value);
+  } catch {
+    // non-critical
+  }
+});
 </script>

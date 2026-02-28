@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import requests
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
+from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 
 from app.api.deps import get_db
 
@@ -535,3 +538,147 @@ def _get_culture_pack_templates() -> list[CulturePackTemplate]:
             },
         ),
     ]
+
+
+class CulturePackLlmExtractRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    model_provider_id: str
+    world_description: str
+    culture_pack_id: str | None = None
+    display_name: str | None = None
+
+
+class CulturePackLlmExtractResponse(BaseModel):
+    culture_pack_id: str
+    version: str
+    display_name: str
+    constraints: dict = Field(default_factory=dict)
+    status: str
+
+
+_CULTURE_PACK_LLM_PROMPT = """从以下世界观描述中提取文化包数据，以JSON格式输出，不要输出其他内容。
+
+输出格式：
+{{
+  "visual_do": ["视觉风格允许元素1", "允许元素2"],
+  "visual_dont": ["视觉禁止元素1", "禁止元素2"],
+  "signage_rules": {{"character_limit": 50, "language": "语言描述", "font_style": "字体风格", "material": "材质"}},
+  "costume_norms": {{"color_palette": ["颜色1", "颜色2"], "fabric_types": ["面料1"], "social_class_indicators": "描述"}},
+  "prop_norms": {{"material_constraints": ["材质1", "材质2"], "common_items": ["道具1", "道具2"]}}
+}}
+
+世界观描述：
+{world_description}
+"""
+
+
+def _load_culture_pack_provider_settings(
+    db: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    provider_id: str,
+) -> dict:
+    row = db.execute(
+        select(CreativePolicyStack).where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name == f"provider_settings:{provider_id}",
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if row is None:
+        return {}
+    return dict(row.stack_json or {})
+
+
+@router.post("/llm-extract", response_model=CulturePackLlmExtractResponse)
+def llm_extract_culture_pack(
+    body: CulturePackLlmExtractRequest,
+    db: Session = Depends(get_db),
+) -> CulturePackLlmExtractResponse:
+    if not body.world_description.strip():
+        raise HTTPException(status_code=400, detail="world_description is required")
+
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+    if provider.tenant_id != body.tenant_id or provider.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="model provider scope mismatch")
+
+    provider_settings = _load_culture_pack_provider_settings(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+
+    endpoint = (provider.endpoint or "").strip().rstrip("/")
+    token = str(provider_settings.get("access_token") or "").strip()
+    model_catalog = list(provider_settings.get("model_catalog") or [])
+    model_name = model_catalog[0] if model_catalog else "gpt-4o-mini"
+
+    if not endpoint or not token:
+        raise HTTPException(status_code=422, detail="provider endpoint/token not configured")
+
+    prompt = _CULTURE_PACK_LLM_PROMPT.format(world_description=body.world_description[:4000])
+
+    try:
+        response = requests.post(
+            f"{endpoint}/chat/completions",
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": "你是专业的世界观设计师，擅长提取文化约束规则。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 1500,
+            },
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            timeout=90.0,
+        )
+        if response.status_code < 200 or response.status_code >= 300:
+            raise ValueError(f"provider_http_status_{response.status_code}")
+
+        parsed = response.json() if response.text else {}
+        choices = parsed.get("choices") or []
+        content = str((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+
+        import re as _re
+        json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
+        if json_match:
+            constraints = json.loads(json_match.group())
+        else:
+            constraints = {}
+    except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail=f"LLM call failed: {exc}") from exc
+
+    # Determine pack ID and name
+    culture_pack_id = body.culture_pack_id or f"llm_pack_{uuid4().hex[:8]}"
+    display_name = body.display_name or f"LLM Generated Pack ({culture_pack_id})"
+    version = "v1"
+
+    row = _create_or_update_version(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        culture_pack_id=culture_pack_id,
+        version=version,
+        display_name=display_name,
+        description=body.world_description[:500],
+        constraints=constraints,
+        status="active",
+    )
+
+    return CulturePackLlmExtractResponse(
+        culture_pack_id=culture_pack_id,
+        version=version,
+        display_name=display_name,
+        constraints=constraints,
+        status="active",
+    )

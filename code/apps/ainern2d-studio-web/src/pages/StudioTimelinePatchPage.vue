@@ -19,7 +19,7 @@
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="primary" @click="onLoadTimeline">加载时间线</NButton>
+        <NButton type="primary" @click="onLoadTimeline">{{ t('nle.loadRun') }}</NButton>
         <NButton type="warning" :disabled="!runId || timelineLanes.length === 0" @click="onSaveTimelineEdits">
           保存拖拽编辑
         </NButton>
@@ -150,6 +150,8 @@ import {
   NText,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   getRunTimeline,
@@ -189,6 +191,8 @@ interface TimelineLane {
   role: string;
   clips: TimelineLaneClip[];
 }
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

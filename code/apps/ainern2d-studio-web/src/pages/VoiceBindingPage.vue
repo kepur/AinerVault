@@ -32,7 +32,7 @@
           <template #checked>Locked</template>
           <template #unchecked>Unlocked</template>
         </NSwitch>
-        <NButton type="primary" @click="saveBinding">保存绑定</NButton>
+        <NButton type="primary" @click="saveBinding">{{ t('common.save') }}</NButton>
       </NSpace>
     </NCard>
 
@@ -55,6 +55,8 @@ import {
   NSwitch,
   NText,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import { getVoiceBinding, upsertVoiceBinding } from "@/api/preview";
 
@@ -65,6 +67,8 @@ const props = defineProps<{
 
 const projectId = props.projectId;
 const entityId = props.entityId;
+
+const { t } = useI18n();
 
 const form = reactive({
   language_code: "zh-CN",

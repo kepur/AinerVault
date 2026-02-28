@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
 from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
+from ainern2d_shared.ainer_db_models.provider_models import ProviderAdapter
 from ainern2d_shared.db.repositories.pipeline import RenderRunRepository
 from ainern2d_shared.queue.topics import SYSTEM_TOPICS
 from ainern2d_shared.schemas.events import EventEnvelope
@@ -20,6 +21,9 @@ from ainern2d_shared.queue.rabbitmq import RabbitMQConsumer
 from app.api.deps import get_db, get_db_session, publish
 from ainern2d_shared.telemetry.logging import get_logger
 from app.services.telegram_notify import notify_telegram_event
+from app.modules.model_router.router import ModelRouter
+from app.modules.model_router.provider_registry import ProviderRegistry
+from ainern2d_shared.schemas.task import TaskSpec
 
 router = APIRouter(prefix="/internal/orchestrator", tags=["orchestrator"])
 
@@ -67,6 +71,34 @@ def handle_task_submitted(payload: dict) -> None:
         run.stage = RenderStage.route
         _persist_event(db, event)
 
+        # 1. Routing Definition (Stage -> Feature -> Router)
+        registry = ProviderRegistry(db)
+        router = ModelRouter(db, registry)
+        task_spec = TaskSpec(
+            task_id=f"tsk_{uuid4().hex[:8]}",
+            budget_profile="balanced",
+            deadline_ms=60000,
+            user_overrides={},
+        )
+        decision = router.route(task_spec, "worker-video")
+        
+        # 2. Fetch configured AdapterSpec if any
+        adapter_json = None
+        if decision.model_profile_id:
+            from ainern2d_shared.ainer_db_models.provider_models import ModelProfile
+            profile = db.get(ModelProfile, decision.model_profile_id)
+            if profile and profile.adapter_id:
+                adapter = db.get(ProviderAdapter, profile.adapter_id)
+                if adapter:
+                    adapter_json = {
+                        "endpoint_json": adapter.endpoint_json,
+                        "auth_json": adapter.auth_json,
+                        "request_json": adapter.request_json,
+                        "response_json": adapter.response_json,
+                        "timeout_sec": adapter.timeout_sec
+                    }
+
+        # 3. Assemble Canonical Dispatch payload
         dispatch_event = EventEnvelope(
             event_type="job.created",
             producer="orchestrator",
@@ -79,9 +111,11 @@ def handle_task_submitted(payload: dict) -> None:
             trace_id=event.trace_id,
             correlation_id=event.correlation_id,
             payload={
-                "worker_type": "worker-video",
-                "timeout_ms": 60000,
-                "fallback_chain": ["worker-llm", "worker-audio"],
+                "worker_type": decision.worker_type,
+                "timeout_ms": decision.timeout_ms,
+                "fallback_chain": decision.fallback_chain,
+                "model_profile_id": decision.model_profile_id,
+                "adapter_spec": adapter_json,
                 "chapter_id": event.payload.get("chapter_id"),
                 "requested_quality": event.payload.get("requested_quality"),
                 "language_context": event.payload.get("language_context"),

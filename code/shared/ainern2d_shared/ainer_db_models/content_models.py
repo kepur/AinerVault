@@ -18,6 +18,7 @@ class Novel(Base, StandardColumnsMixin):
 	title: Mapped[str] = mapped_column(String(256), nullable=False)
 	summary: Mapped[str | None] = mapped_column(Text)
 	default_language_code: Mapped[str] = mapped_column(String(16), default="zh", nullable=False)
+	team_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Chapter(Base, StandardColumnsMixin):

@@ -27,6 +27,16 @@ export interface AuditLogItem {
   payload: Record<string, unknown>;
 }
 
+export interface NovelTeamMember {
+  persona_pack_id: string;
+  persona_pack_name: string;
+}
+
+export interface NovelTeamResponse {
+  novel_id: string;
+  team: Record<string, NovelTeamMember>;
+}
+
 export interface NovelResponse {
   id: string;
   tenant_id: string;
@@ -34,6 +44,7 @@ export interface NovelResponse {
   title: string;
   summary?: string | null;
   default_language_code: string;
+  team_json?: Record<string, NovelTeamMember> | null;
 }
 
 export interface ChapterResponse {
@@ -353,6 +364,8 @@ export interface RagCollectionResponse {
   language_code?: string | null;
   description?: string | null;
   tags_json: string[];
+  bind_type?: string | null;
+  bind_id?: string | null;
 }
 
 export interface KbVersionResponse {
@@ -370,6 +383,7 @@ export interface PersonaPackResponse {
   tenant_id: string;
   project_id: string;
   name: string;
+  role_id?: string | null;
   description?: string | null;
   tags_json: string[];
 }
@@ -451,6 +465,57 @@ export interface KnowledgeImportJobResponse {
   affected_roles: string[];
   knowledge_change_report: Record<string, unknown>;
   updated_at?: string | null;
+}
+
+export interface UserListItem {
+  id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  created_at?: string | null;
+}
+
+export interface BootstrapPermissionsResponse {
+  status: string;
+  permissions_written: number;
+  permissions: Array<{
+    path_prefix: string;
+    method: string;
+    required_role: string;
+  }>;
+}
+
+export interface EntityExtractionResponse {
+  novel_id: string;
+  entities_count: number;
+  aliases_count: number;
+  events_count: number;
+  preview: Record<string, unknown>;
+}
+
+export interface NovelRagInitResponse {
+  collection_id: string;
+  novel_id: string;
+  documents_created: number;
+  chunks_total: number;
+  status: string;
+}
+
+export interface CulturePackLlmExtractResponse {
+  culture_pack_id: string;
+  version: string;
+  display_name: string;
+  constraints: Record<string, unknown>;
+  status: string;
+}
+
+export interface BootstrapAllResponse {
+  status: string;
+  steps: Array<{
+    step: string;
+    status: string;
+    detail?: string;
+  }>;
 }
 
 export interface CulturePackResponse {
@@ -583,6 +648,42 @@ export async function registerUser(payload: {
   return data;
 }
 
+export async function adminCreateUser(payload: {
+  email: string;
+  display_name: string;
+  password: string;
+  role: string;
+  tg_chat_id?: string;
+}): Promise<{
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  tg_chat_id?: string;
+}> {
+  const { data } = await http.post("/api/v1/auth/admin/create-user", payload);
+  return data;
+}
+
+export async function analyzeAutoRoutes(payload: {
+  tenant_id: string;
+  project_id: string;
+  analyzer_provider_id?: string;
+}): Promise<any> {
+  const { data } = await http.post("/api/v1/config/auto-router/analyze", payload);
+  return data;
+}
+
+export async function applyAutoRoutes(payload: {
+  tenant_id: string;
+  project_id: string;
+  profiles: any[];
+  routes: any[];
+}): Promise<any> {
+  const { data } = await http.post("/api/v1/config/auto-router/apply", payload);
+  return data;
+}
+
 export async function login(payload: { username: string; password: string }): Promise<LoginResponse> {
   const { data } = await http.post<LoginResponse>("/api/v1/auth/login", payload);
   return data;
@@ -622,6 +723,106 @@ export async function listAuditLogs(params: {
   return data;
 }
 
+export async function listUsers(tenantId?: string): Promise<UserListItem[]> {
+  const { data } = await http.get<UserListItem[]>("/api/v1/auth/users", {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  });
+  return data;
+}
+
+export async function updateUser(
+  userId: string,
+  payload: { display_name?: string; role?: string },
+  tenantId?: string
+): Promise<UserListItem> {
+  const { data } = await http.put<UserListItem>(`/api/v1/auth/users/${userId}`, payload, {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  });
+  return data;
+}
+
+export async function deleteUser(userId: string, tenantId?: string): Promise<void> {
+  await http.delete(`/api/v1/auth/users/${userId}`, {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  });
+}
+
+export async function resetUserPassword(userId: string, newPassword: string, tenantId?: string): Promise<void> {
+  await http.post(`/api/v1/auth/users/${userId}/reset-password`, { new_password: newPassword }, {
+    params: tenantId ? { tenant_id: tenantId } : {},
+  });
+}
+
+export async function initPermissions(
+  tenantId?: string,
+  projectId?: string
+): Promise<BootstrapPermissionsResponse> {
+  const { data } = await http.post<BootstrapPermissionsResponse>("/api/v1/auth/init-permissions", null, {
+    params: {
+      ...(tenantId ? { tenant_id: tenantId } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+    },
+  });
+  return data;
+}
+
+export async function extractNovelEntities(
+  novelId: string,
+  payload: {
+    tenant_id: string;
+    project_id: string;
+    model_provider_id: string;
+    chapter_ids?: string[];
+  }
+): Promise<EntityExtractionResponse> {
+  const { data } = await http.post<EntityExtractionResponse>(`/api/v1/novels/${novelId}/extract-entities`, payload, {
+    timeout: 120000,
+  });
+  return data;
+}
+
+export async function initNovelRag(
+  collectionId: string,
+  payload: {
+    tenant_id: string;
+    project_id: string;
+    model_provider_id: string;
+    novel_id: string;
+    max_tokens?: number;
+  }
+): Promise<NovelRagInitResponse> {
+  const { data } = await http.post<NovelRagInitResponse>(`/api/v1/rag/collections/${collectionId}/novel-init`, payload, {
+    timeout: 120000,
+  });
+  return data;
+}
+
+export async function extractCulturePackLlm(payload: {
+  tenant_id: string;
+  project_id: string;
+  model_provider_id: string;
+  world_description: string;
+  culture_pack_id?: string;
+  display_name?: string;
+}): Promise<CulturePackLlmExtractResponse> {
+  const { data } = await http.post<CulturePackLlmExtractResponse>("/api/v1/culture-packs/llm-extract", payload, {
+    timeout: 120000,
+  });
+  return data;
+}
+
+export async function bootstrapAll(payload: {
+  tenant_id: string;
+  project_id: string;
+  model_provider_id?: string;
+  force?: boolean;
+}): Promise<BootstrapAllResponse> {
+  const { data } = await http.post<BootstrapAllResponse>("/api/v1/init/bootstrap-all", payload, {
+    timeout: 120000,
+  });
+  return data;
+}
+
 export async function createNovel(payload: {
   tenant_id: string;
   project_id: string;
@@ -654,6 +855,11 @@ export async function createChapter(novelId: string, payload: {
 
 export async function listChapters(novelId: string): Promise<ChapterResponse[]> {
   const { data } = await http.get<ChapterResponse[]>(`/api/v1/novels/${novelId}/chapters`);
+  return data;
+}
+
+export async function getChapter(chapterId: string): Promise<ChapterResponse> {
+  const { data } = await http.get<ChapterResponse>(`/api/v1/chapters/${chapterId}`);
   return data;
 }
 
@@ -1070,6 +1276,8 @@ export async function createRagCollection(payload: {
   language_code?: string;
   description?: string;
   tags_json?: string[];
+  bind_type?: string;
+  bind_id?: string;
 }): Promise<RagCollectionResponse> {
   const { data } = await http.post<RagCollectionResponse>("/api/v1/rag/collections", payload);
   return data;
@@ -1080,6 +1288,8 @@ export async function listRagCollections(params: {
   project_id: string;
   keyword?: string;
   language_code?: string;
+  bind_type?: string;
+  bind_id?: string;
 }): Promise<RagCollectionResponse[]> {
   const { data } = await http.get<RagCollectionResponse[]>("/api/v1/rag/collections", {
     params,
@@ -1117,6 +1327,7 @@ export async function createPersonaPack(payload: {
   tenant_id: string;
   project_id: string;
   name: string;
+  role_id?: string;
   description?: string;
 }): Promise<PersonaPackResponse> {
   const { data } = await http.post<PersonaPackResponse>("/api/v1/rag/persona-packs", payload);
@@ -1222,6 +1433,52 @@ export async function listKnowledgeImportJobs(params: {
   role_id?: string;
 }): Promise<KnowledgeImportJobResponse[]> {
   const { data } = await http.get<KnowledgeImportJobResponse[]>("/api/v1/rag/import-jobs", { params });
+  return data;
+}
+
+export interface BinaryImportJobResponse {
+  import_job_id: string;
+  tenant_id: string;
+  project_id: string;
+  collection_id: string;
+  file_name: string;
+  file_format: string;
+  file_size_bytes: number;
+  status: string;
+  progress_percent: number;
+  extracted_text_preview: string;
+  extracted_pages: number;
+  extracted_tables: number;
+  extracted_images: number;
+  error_message?: string | null;
+}
+
+export async function uploadBinaryFileForImport(
+  collectionId: string,
+  file: File,
+  params: {
+    tenant_id: string;
+    project_id: string;
+    model_provider_id?: string;
+    use_vision?: boolean;
+  }
+): Promise<BinaryImportJobResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await http.post<BinaryImportJobResponse>(
+    `/api/v1/rag/collections/${collectionId}/binary-import`,
+    formData,
+    {
+      params: {
+        tenant_id: params.tenant_id,
+        project_id: params.project_id,
+        ...(params.model_provider_id ? { model_provider_id: params.model_provider_id } : {}),
+        ...(params.use_vision !== undefined ? { use_vision: params.use_vision } : {}),
+      },
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 120000,
+    }
+  );
   return data;
 }
 
@@ -1394,5 +1651,570 @@ export async function rollbackRunTimelinePatch(
     `/api/v1/runs/${runId}/timeline/patches/${patchId}/rollback`,
     payload
   );
+  return data;
+}
+
+// Novel CRUD extensions
+export async function updateNovel(novelId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  title?: string;
+  summary?: string;
+  default_language_code?: string;
+}): Promise<NovelResponse> {
+  const { data } = await http.put<NovelResponse>(`/api/v1/novels/${novelId}`, payload);
+  return data;
+}
+
+export async function deleteNovel(novelId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<{ status: string }> {
+  const { data } = await http.delete<{ status: string }>(`/api/v1/novels/${novelId}`, { params });
+  return data;
+}
+
+export async function deleteChapter(chapterId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<{ status: string }> {
+  const { data } = await http.delete<{ status: string }>(`/api/v1/chapters/${chapterId}`, { params });
+  return data;
+}
+
+export async function getNovelTeam(novelId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<NovelTeamResponse> {
+  const { data } = await http.get<NovelTeamResponse>(`/api/v1/novels/${novelId}/team`, { params });
+  return data;
+}
+
+export async function setNovelTeam(novelId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  team: Record<string, NovelTeamMember>;
+}): Promise<NovelTeamResponse> {
+  const { data } = await http.put<NovelTeamResponse>(`/api/v1/novels/${novelId}/team`, payload);
+  return data;
+}
+
+// ── Translation Project Types ─────────────────────────────────────────────────
+export interface TranslationProjectResponse {
+  id: string;
+  novel_id: string;
+  source_language_code: string;
+  target_language_code: string;
+  status: "draft" | "in_progress" | "completed" | "archived";
+  consistency_mode: "strict" | "balanced" | "free";
+  model_provider_id: string | null;
+  term_dictionary_json: Record<string, string> | null;
+  stats_json: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ScriptBlockResponse {
+  id: string;
+  chapter_id: string;
+  seq_no: number;
+  block_type: "narration" | "dialogue" | "action" | "heading" | "scene_break";
+  source_text: string;
+  speaker_tag: string | null;
+  translation: TranslationBlockItemResponse | null;
+}
+
+export interface TranslationBlockItemResponse {
+  id: string;
+  translated_text: string | null;
+  status: "draft" | "reviewed" | "locked";
+  translation_notes: string | null;
+}
+
+export interface EntityNameVariantResponse {
+  id: string;
+  source_name: string;
+  canonical_target_name: string;
+  is_locked: boolean;
+  aliases_json: string[] | null;
+  entity_id: string | null;
+}
+
+export interface ConsistencyWarningResponse {
+  id: string;
+  warning_type: "name_drift" | "new_variant" | "cross_chapter";
+  source_name: string;
+  detected_variant: string;
+  expected_canonical: string | null;
+  status: "open" | "resolved" | "ignored";
+  translation_block_id: string | null;
+}
+
+// ── Translation Project Functions ─────────────────────────────────────────────
+export async function createTranslationProject(payload: {
+  tenant_id?: string;
+  project_id?: string;
+  novel_id: string;
+  source_language_code: string;
+  target_language_code: string;
+  model_provider_id?: string | null;
+  consistency_mode?: string;
+  term_dictionary_json?: Record<string, string> | null;
+}): Promise<TranslationProjectResponse> {
+  const { data } = await http.post<TranslationProjectResponse>(
+    "/api/v1/translations/projects",
+    payload,
+  );
+  return data;
+}
+
+export async function listTranslationProjects(params: {
+  novel_id: string;
+  tenant_id?: string;
+  project_id?: string;
+}): Promise<TranslationProjectResponse[]> {
+  const { data } = await http.get<TranslationProjectResponse[]>(
+    "/api/v1/translations/projects",
+    { params },
+  );
+  return data;
+}
+
+export async function updateTranslationProject(
+  projectId: string,
+  payload: {
+    term_dictionary_json?: Record<string, string> | null;
+    consistency_mode?: string;
+    model_provider_id?: string | null;
+    status?: string;
+  },
+): Promise<TranslationProjectResponse> {
+  const { data } = await http.put<TranslationProjectResponse>(
+    `/api/v1/translations/projects/${projectId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function segmentChapters(
+  projectId: string,
+  payload: { tenant_id?: string; project_id?: string; chapter_id?: string | null },
+): Promise<{ blocks_created: number }> {
+  const { data } = await http.post<{ blocks_created: number }>(
+    `/api/v1/translations/projects/${projectId}/segment`,
+    payload,
+  );
+  return data;
+}
+
+export async function translateBlocks(
+  projectId: string,
+  payload: {
+    tenant_id?: string;
+    project_id?: string;
+    chapter_id?: string | null;
+    batch_size?: number;
+  },
+): Promise<{ translated: number; warnings: number }> {
+  const { data } = await http.post<{ translated: number; warnings: number }>(
+    `/api/v1/translations/projects/${projectId}/translate`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function listScriptBlocks(
+  projectId: string,
+  params: { tenant_id?: string; project_id?: string; chapter_id?: string | null },
+): Promise<ScriptBlockResponse[]> {
+  const { data } = await http.get<ScriptBlockResponse[]>(
+    `/api/v1/translations/projects/${projectId}/blocks`,
+    { params },
+  );
+  return data;
+}
+
+export async function updateTranslationBlock(
+  projectId: string,
+  blockId: string,
+  payload: {
+    translated_text?: string;
+    status?: string;
+    translation_notes?: string;
+  },
+): Promise<TranslationBlockItemResponse> {
+  const { data } = await http.patch<TranslationBlockItemResponse>(
+    `/api/v1/translations/projects/${projectId}/blocks/${blockId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function listEntityVariants(
+  projectId: string,
+  params: { tenant_id?: string; project_id?: string },
+): Promise<EntityNameVariantResponse[]> {
+  const { data } = await http.get<EntityNameVariantResponse[]>(
+    `/api/v1/translations/projects/${projectId}/entities`,
+    { params },
+  );
+  return data;
+}
+
+export async function createEntityVariant(
+  projectId: string,
+  payload: {
+    tenant_id?: string;
+    project_id?: string;
+    source_name: string;
+    canonical_target_name: string;
+    aliases_json?: string[];
+    entity_id?: string;
+  },
+): Promise<EntityNameVariantResponse> {
+  const { data } = await http.post<EntityNameVariantResponse>(
+    `/api/v1/translations/projects/${projectId}/entities`,
+    payload,
+  );
+  return data;
+}
+
+export async function lockEntityVariant(
+  projectId: string,
+  variantId: string,
+  payload: { canonical_target_name: string },
+): Promise<EntityNameVariantResponse> {
+  const { data } = await http.patch<EntityNameVariantResponse>(
+    `/api/v1/translations/projects/${projectId}/entities/${variantId}/lock`,
+    payload,
+  );
+  return data;
+}
+
+export async function listConsistencyWarnings(
+  projectId: string,
+  params: { tenant_id?: string; status?: string },
+): Promise<ConsistencyWarningResponse[]> {
+  const { data } = await http.get<ConsistencyWarningResponse[]>(
+    `/api/v1/translations/projects/${projectId}/warnings`,
+    { params },
+  );
+  return data;
+}
+
+export async function resolveWarning(
+  projectId: string,
+  warningId: string,
+  payload: { status: "resolved" | "ignored" },
+): Promise<ConsistencyWarningResponse> {
+  const { data } = await http.patch<ConsistencyWarningResponse>(
+    `/api/v1/translations/projects/${projectId}/warnings/${warningId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function checkConsistency(projectId: string): Promise<{ warnings_created: number }> {
+  const { data } = await http.post<{ warnings_created: number }>(
+    `/api/v1/translations/projects/${projectId}/check-consistency`,
+  );
+  return data;
+}
+
+export interface EffectiveKBItem {
+  collection_id: string;
+  collection_name: string;
+  bind_type: string;
+  bind_id?: string | null;
+  priority: number;
+}
+
+export interface EffectiveKBResponse {
+  persona_pack_id: string;
+  role_id?: string | null;
+  novel_id?: string | null;
+  effective_collections: EffectiveKBItem[];
+}
+
+export async function getEffectiveKb(params: {
+  tenant_id: string;
+  project_id: string;
+  persona_pack_id: string;
+  novel_id?: string;
+}): Promise<EffectiveKBResponse> {
+  const { data } = await http.get<EffectiveKBResponse>("/api/v1/rag/effective-kb", { params });
+  return data;
+}
+
+// ── KBPack Asset Center Types ──────────────────────────────────────────────────
+
+export interface KBPackResponse {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  language_code?: string | null;
+  culture_pack?: string | null;
+  version_name: string;
+  status: string; // draft | embedded | published | deprecated
+  tags_json: string[];
+  bind_suggestions_json: string[];
+  collection_id?: string | null;
+  created_at?: string | null;
+}
+
+export interface KBSourceResponse {
+  id: string;
+  kb_pack_id: string;
+  source_type: string;
+  source_name?: string | null;
+  source_uri?: string | null;
+  parse_status: string;
+  chunk_count: number;
+  created_at?: string | null;
+}
+
+export interface KBMapEntry {
+  id: string;
+  kb_pack_id: string;
+  kb_pack_name?: string | null;
+  priority: number;
+  enabled: boolean;
+  note?: string | null;
+  created_at?: string | null;
+}
+
+export interface KBEffectiveEntry {
+  kb_pack_id: string;
+  kb_pack_name: string;
+  collection_id?: string | null;
+  source: string; // novel | role | persona
+  priority: number;
+  enabled: boolean;
+}
+
+export interface KBEffectiveResponse {
+  persona_pack_id: string;
+  role_id?: string | null;
+  novel_id?: string | null;
+  effective_packs: KBEffectiveEntry[];
+}
+
+// ── KBPack CRUD ────────────────────────────────────────────────────────────────
+
+export async function createKBPack(payload: {
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  description?: string;
+  language_code?: string;
+  culture_pack?: string;
+  version_name?: string;
+  tags_json?: string[];
+  bind_suggestions_json?: string[];
+}): Promise<KBPackResponse> {
+  const { data } = await http.post<KBPackResponse>("/api/v1/kb/packs", payload);
+  return data;
+}
+
+export async function listKBPacks(params: {
+  tenant_id: string;
+  project_id: string;
+  keyword?: string;
+  language_code?: string;
+  culture_pack?: string;
+  status?: string;
+}): Promise<KBPackResponse[]> {
+  const { data } = await http.get<KBPackResponse[]>("/api/v1/kb/packs", { params });
+  return data;
+}
+
+export async function getKBPack(packId: string): Promise<KBPackResponse> {
+  const { data } = await http.get<KBPackResponse>(`/api/v1/kb/packs/${packId}`);
+  return data;
+}
+
+export async function updateKBPack(packId: string, payload: {
+  name?: string;
+  description?: string;
+  language_code?: string;
+  culture_pack?: string;
+  version_name?: string;
+  status?: string;
+  tags_json?: string[];
+  bind_suggestions_json?: string[];
+}): Promise<KBPackResponse> {
+  const { data } = await http.put<KBPackResponse>(`/api/v1/kb/packs/${packId}`, payload);
+  return data;
+}
+
+export async function deleteKBPack(packId: string, params: {
+  tenant_id: string;
+  project_id: string;
+  force?: boolean;
+}): Promise<void> {
+  await http.delete(`/api/v1/kb/packs/${packId}`, { params });
+}
+
+export async function uploadKBSource(
+  packId: string,
+  file: File,
+  params: {
+    tenant_id: string;
+    project_id: string;
+    bind_role_ids?: string;
+  }
+): Promise<KBSourceResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await http.post<KBSourceResponse>(
+    `/api/v1/kb/packs/${packId}/upload-source`,
+    formData,
+    {
+      params,
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 120000,
+    }
+  );
+  return data;
+}
+
+export async function listKBSources(packId: string): Promise<KBSourceResponse[]> {
+  const { data } = await http.get<KBSourceResponse[]>(`/api/v1/kb/packs/${packId}/sources`);
+  return data;
+}
+
+export async function triggerKBEmbed(packId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<{ kb_pack_id: string; status: string; message: string }> {
+  const { data } = await http.post(`/api/v1/kb/packs/${packId}/embed`, null, { params });
+  return data;
+}
+
+// ── Binding CRUD — Role ────────────────────────────────────────────────────────
+
+export async function createRoleKBBinding(roleId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  kb_pack_id: string;
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.post<KBMapEntry>(`/api/v1/kb/bindings/role`, payload, {
+    params: { role_id: roleId },
+  });
+  return data;
+}
+
+export async function listRoleKBBindings(params: {
+  tenant_id: string;
+  project_id: string;
+  role_id: string;
+}): Promise<KBMapEntry[]> {
+  const { data } = await http.get<KBMapEntry[]>("/api/v1/kb/bindings/role", { params });
+  return data;
+}
+
+export async function updateRoleKBBinding(bindingId: string, payload: {
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.put<KBMapEntry>(`/api/v1/kb/bindings/role/${bindingId}`, payload);
+  return data;
+}
+
+export async function deleteRoleKBBinding(bindingId: string): Promise<void> {
+  await http.delete(`/api/v1/kb/bindings/role/${bindingId}`);
+}
+
+// ── Binding CRUD — Persona ─────────────────────────────────────────────────────
+
+export async function createPersonaKBBinding(personaPackId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  kb_pack_id: string;
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.post<KBMapEntry>("/api/v1/kb/bindings/persona", payload, {
+    params: { persona_pack_id: personaPackId },
+  });
+  return data;
+}
+
+export async function listPersonaKBBindings(params: {
+  tenant_id: string;
+  project_id: string;
+  persona_pack_id: string;
+}): Promise<KBMapEntry[]> {
+  const { data } = await http.get<KBMapEntry[]>("/api/v1/kb/bindings/persona", { params });
+  return data;
+}
+
+export async function updatePersonaKBBinding(bindingId: string, payload: {
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.put<KBMapEntry>(`/api/v1/kb/bindings/persona/${bindingId}`, payload);
+  return data;
+}
+
+export async function deletePersonaKBBinding(bindingId: string): Promise<void> {
+  await http.delete(`/api/v1/kb/bindings/persona/${bindingId}`);
+}
+
+// ── Binding CRUD — Novel ───────────────────────────────────────────────────────
+
+export async function createNovelKBBinding(novelId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  kb_pack_id: string;
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.post<KBMapEntry>("/api/v1/kb/bindings/novel", payload, {
+    params: { novel_id: novelId },
+  });
+  return data;
+}
+
+export async function listNovelKBBindings(params: {
+  tenant_id: string;
+  project_id: string;
+  novel_id: string;
+}): Promise<KBMapEntry[]> {
+  const { data } = await http.get<KBMapEntry[]>("/api/v1/kb/bindings/novel", { params });
+  return data;
+}
+
+export async function updateNovelKBBinding(bindingId: string, payload: {
+  priority?: number;
+  enabled?: boolean;
+  note?: string;
+}): Promise<KBMapEntry> {
+  const { data } = await http.put<KBMapEntry>(`/api/v1/kb/bindings/novel/${bindingId}`, payload);
+  return data;
+}
+
+export async function deleteNovelKBBinding(bindingId: string): Promise<void> {
+  await http.delete(`/api/v1/kb/bindings/novel/${bindingId}`);
+}
+
+// ── Effective KB ───────────────────────────────────────────────────────────────
+
+export async function getKBEffective(params: {
+  tenant_id: string;
+  project_id: string;
+  persona_pack_id: string;
+  novel_id?: string;
+}): Promise<KBEffectiveResponse> {
+  const { data } = await http.get<KBEffectiveResponse>("/api/v1/kb/effective", { params });
   return data;
 }

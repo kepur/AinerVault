@@ -122,7 +122,11 @@ interface AuditLog {
   payload: Record<string, any>
 }
 
+import { useI18n } from "@/composables/useI18n";
+
 const logs = ref<AuditLog[]>([])
+const { t } = useI18n();
+
 const isLoading = ref(false)
 const projectId = ref<string>('')
 const eventTypeFilter = ref<string>('')

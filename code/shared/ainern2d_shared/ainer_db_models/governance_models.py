@@ -16,6 +16,7 @@ class PersonaPack(Base, StandardColumnsMixin):
 	)
 
 	name: Mapped[str] = mapped_column(String(128), nullable=False)
+	role_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 	description: Mapped[str | None] = mapped_column(Text)
 	tags_json: Mapped[list | None] = mapped_column(JSONB)
 

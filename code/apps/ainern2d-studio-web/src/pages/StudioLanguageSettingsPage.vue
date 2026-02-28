@@ -35,7 +35,7 @@
         <NInput v-model:value="glossaryJson" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" />
       </NFormItem>
       <NSpace>
-        <NButton type="primary" @click="onSave">保存</NButton>
+        <NButton type="primary" @click="onSave">{{ t('common.save') }}</NButton>
         <NButton @click="onLoad">加载</NButton>
       </NSpace>
       <pre class="json-panel">{{ responseText }}</pre>
@@ -58,12 +58,16 @@ import {
   NInput,
   NSpace,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type LanguageDefinition,
   getLanguageSettings,
   upsertLanguageSettings,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

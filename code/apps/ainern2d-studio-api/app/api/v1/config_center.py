@@ -1475,18 +1475,6 @@ def _llm_template_roles() -> list[dict]:
                 "can_manage_model_router": False,
             },
         },
-        {
-            "role_id": "translator",
-            "prompt_style": "以本地化译者视角保证术语一致与语气一致。",
-            "default_skills": ["translator_zh_en", "subtitle_localization"],
-            "default_knowledge_scopes": ["translation_glossary", "culture_constraints"],
-            "permissions": {
-                "can_import_data": True,
-                "can_publish_task": False,
-                "can_edit_global_knowledge": False,
-                "can_manage_model_router": False,
-            },
-        },
     ]
 
 
@@ -1529,7 +1517,7 @@ def _llm_template_routes() -> list[dict]:
             "path": "/studio/chapters",
             "component": "StudioChapterManagerPage",
             "feature_id": "chapter_workspace",
-            "allowed_roles": ["director", "script_supervisor", "translator"],
+            "allowed_roles": ["director", "script_supervisor"],
             "ui_mode": "editor",
             "depends_on": ["rag", "embedding"],
         },
@@ -2875,3 +2863,285 @@ def get_async_job_status(job_id: str) -> RoleStudioAsyncJobStatusResponse:
         cost_actual=job.get("cost_actual", 0.0),
         cost_unit="token",
     )
+
+
+# ---------------------------------------------------------------------------
+# Provider Probe API
+# ---------------------------------------------------------------------------
+
+class ProbeResult(BaseModel):
+    feature: str
+    supported: bool
+    latency_ms: int = 0
+    error: str | None = None
+    details: dict = Field(default_factory=dict)
+
+
+class ProviderProbeResponse(BaseModel):
+    provider_id: str
+    provider_name: str
+    probes: list[ProbeResult]
+    capabilities_updated: bool
+
+
+def _probe_text_generation(endpoint: str, token: str, headers: dict) -> ProbeResult:
+    """Send a tiny text generation request to probe the provider."""
+    from time import perf_counter as _pc
+    started = _pc()
+    try:
+        resp = requests.post(
+            f"{endpoint}/chat/completions",
+            headers={**headers, "Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
+            timeout=15,
+        )
+        latency = int((_pc() - started) * 1000)
+        ok = 200 <= resp.status_code < 300
+        return ProbeResult(feature="text_generation", supported=ok, latency_ms=latency,
+                           error=None if ok else f"status={resp.status_code}",
+                           details={"status_code": resp.status_code})
+    except Exception as exc:
+        latency = int((_pc() - started) * 1000)
+        return ProbeResult(feature="text_generation", supported=False, latency_ms=latency, error=str(exc))
+
+
+def _probe_embedding(endpoint: str, token: str, headers: dict) -> ProbeResult:
+    from time import perf_counter as _pc
+    started = _pc()
+    try:
+        resp = requests.post(
+            f"{endpoint}/embeddings",
+            headers={**headers, "Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"model": "text-embedding-ada-002", "input": "probe"},
+            timeout=15,
+        )
+        latency = int((_pc() - started) * 1000)
+        ok = 200 <= resp.status_code < 300
+        return ProbeResult(feature="embedding", supported=ok, latency_ms=latency,
+                           error=None if ok else f"status={resp.status_code}",
+                           details={"status_code": resp.status_code})
+    except Exception as exc:
+        latency = int((_pc() - started) * 1000)
+        return ProbeResult(feature="embedding", supported=False, latency_ms=latency, error=str(exc))
+
+
+def _probe_image_generation(endpoint: str, token: str, headers: dict) -> ProbeResult:
+    from time import perf_counter as _pc
+    started = _pc()
+    try:
+        resp = requests.post(
+            f"{endpoint}/images/generations",
+            headers={**headers, "Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"model": "dall-e-3", "prompt": "a white dot", "size": "256x256", "n": 1},
+            timeout=30,
+        )
+        latency = int((_pc() - started) * 1000)
+        ok = 200 <= resp.status_code < 300
+        return ProbeResult(feature="image_generation", supported=ok, latency_ms=latency,
+                           error=None if ok else f"status={resp.status_code}",
+                           details={"status_code": resp.status_code})
+    except Exception as exc:
+        latency = int((_pc() - started) * 1000)
+        return ProbeResult(feature="image_generation", supported=False, latency_ms=latency, error=str(exc))
+
+
+@router.post("/providers/{provider_id}/probe", response_model=ProviderProbeResponse)
+def probe_provider(
+    provider_id: str,
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> ProviderProbeResponse:
+    """Run deterministic probes to detect provider capabilities."""
+    provider = db.execute(
+        select(ModelProvider).where(
+            ModelProvider.id == provider_id,
+            ModelProvider.tenant_id == tenant_id,
+            ModelProvider.project_id == project_id,
+            ModelProvider.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="provider not found")
+
+    # Resolve settings (endpoint/token)
+    settings_map = _provider_settings_map(db, tenant_id=tenant_id, project_id=project_id, provider_ids=[provider_id])
+    settings = settings_map.get(provider_id) or _default_provider_settings()
+    endpoint = (settings.get("endpoint") or provider.endpoint or "").rstrip("/")
+    token = settings.get("access_token") or ""
+    extra_headers = settings.get("headers_json") or {}
+
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="provider has no endpoint configured")
+
+    probes: list[ProbeResult] = []
+    probes.append(_probe_text_generation(endpoint, token, extra_headers))
+    probes.append(_probe_embedding(endpoint, token, extra_headers))
+    probes.append(_probe_image_generation(endpoint, token, extra_headers))
+
+    # Update capability_flags on the provider settings
+    new_caps = {
+        "supports_text_generation": any(p.supported for p in probes if p.feature == "text_generation"),
+        "supports_embedding": any(p.supported for p in probes if p.feature == "embedding"),
+        "supports_image_generation": any(p.supported for p in probes if p.feature == "image_generation"),
+        "supports_multimodal": False,
+        "supports_video_generation": False,
+        "supports_tts": False,
+        "supports_stt": False,
+        "supports_tool_calling": False,
+        "supports_reasoning": False,
+    }
+
+    # Persist into provider settings stack
+    stack_name = _config_stack_name("provider_settings_", provider_id)
+    current_settings = dict(settings)
+    current_settings["capability_flags"] = new_caps
+    current_settings["last_probe_at"] = datetime.now(timezone.utc).isoformat()
+    _upsert_config_stack(
+        db,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        stack_name=stack_name,
+        payload=current_settings,
+        trace_prefix="probe",
+    )
+    db.commit()
+
+    return ProviderProbeResponse(
+        provider_id=provider_id,
+        provider_name=provider.name,
+        probes=probes,
+        capabilities_updated=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unified Notification Settings API
+# ---------------------------------------------------------------------------
+
+class NotificationSettingsPayload(BaseModel):
+    tenant_id: str = "default"
+    project_id: str = "default"
+    channel: str  # "telegram" | "smtp" | "webhook"
+    config: dict = Field(default_factory=dict)
+
+
+class NotificationSettingsResponse(BaseModel):
+    telegram: dict = Field(default_factory=dict)
+    smtp: dict = Field(default_factory=dict)
+    webhook: dict = Field(default_factory=dict)
+
+
+@router.get("/notification-settings", response_model=NotificationSettingsResponse)
+def get_notification_settings(
+    tenant_id: str = Query(default="default"),
+    project_id: str = Query(default="default"),
+    db: Session = Depends(get_db),
+) -> NotificationSettingsResponse:
+    """Get all notification channel settings."""
+    result: dict[str, dict] = {"telegram": {}, "smtp": {}, "webhook": {}}
+    for channel in ("telegram", "smtp", "webhook"):
+        row = db.execute(
+            select(CreativePolicyStack).where(
+                CreativePolicyStack.tenant_id == tenant_id,
+                CreativePolicyStack.project_id == project_id,
+                CreativePolicyStack.name == f"notify_{channel}_settings",
+                CreativePolicyStack.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if row is not None:
+            result[channel] = row.stack_json or {}
+    return NotificationSettingsResponse(**result)
+
+
+@router.put("/notification-settings", response_model=NotificationSettingsResponse)
+def upsert_notification_settings(
+    body: NotificationSettingsPayload,
+    db: Session = Depends(get_db),
+) -> NotificationSettingsResponse:
+    """Save a notification channel configuration."""
+    channel = body.channel.strip().lower()
+    if channel not in ("telegram", "smtp", "webhook"):
+        raise HTTPException(status_code=400, detail=f"unknown channel: {channel}")
+
+    stack_name = f"notify_{channel}_settings"
+    payload = dict(body.config)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    _upsert_config_stack(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        stack_name=stack_name,
+        payload=payload,
+        trace_prefix=f"notify_{channel}",
+    )
+    db.commit()
+
+    return get_notification_settings(
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        db=db,
+    )
+
+
+@router.get("/ainerops-manifest", response_model=dict)
+def export_ainerops_manifest(
+    tenant_id: str,
+    project_id: str,
+    db: Session = Depends(get_db)
+) -> dict:
+    """Generate an AinerOPS Manifest containing Provider, Profile, and Adapter topology for declarative deployments."""
+    from ainern2d_shared.ainer_db_models.provider_models import ModelProvider, ModelProfile, ProviderAdapter
+    
+    providers = db.query(ModelProvider).filter_by(tenant_id=tenant_id, project_id=project_id).all()
+    profiles = db.query(ModelProfile).filter_by(tenant_id=tenant_id, project_id=project_id).all()
+    adapters = db.query(ProviderAdapter).filter_by(tenant_id=tenant_id, project_id=project_id).all()
+    
+    manifest = {
+        "version": "1.0",
+        "kind": "AinerOPSManifest",
+        "metadata": {
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "exported_at": datetime.now(timezone.utc).isoformat()
+        },
+        "spec": {
+            "providers": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "endpoint": p.endpoint,
+                    "auth_mode": p.auth_mode,
+                    "model_catalog": p.model_catalog,
+                    "capability_flags": p.capability_flags
+                } for p in providers
+            ],
+            "profiles": [
+                {
+                    "id": p.id,
+                    "provider_id": p.provider_id,
+                    "adapter_id": p.adapter_id,
+                    "purpose": p.purpose,
+                    "name": p.name,
+                    "params_json": p.params_json
+                } for p in profiles
+            ],
+            "adapters": [
+                {
+                    "id": a.id,
+                    "provider_id": a.provider_id,
+                    "feature": a.feature,
+                    "endpoint_json": a.endpoint_json,
+                    "auth_json": a.auth_json,
+                    "request_json": a.request_json,
+                    "response_json": a.response_json,
+                    "timeout_sec": a.timeout_sec,
+                    "retry_json": a.retry_json,
+                    "version": a.version
+                } for a in adapters
+            ]
+        }
+    }
+    return manifest
+

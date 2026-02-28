@@ -7,9 +7,11 @@ from fastapi import FastAPI
 
 from app.api.v1.compose import consume_compose_dispatch
 from app.api.v1.compose import router as compose_router
+from app.api.v1.media import router as media_router
 
 app = FastAPI(title="ainern2d-composer", version="0.1.0")
 app.include_router(compose_router)
+app.include_router(media_router)
 
 
 @app.on_event("startup")

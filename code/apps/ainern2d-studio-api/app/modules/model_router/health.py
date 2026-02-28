@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from ainern2d_shared.ainer_db_models.provider_models import ModelProfile, ModelProvider
 from ainern2d_shared.telemetry.logging import get_logger
 
+from .provider_registry import ProviderRegistry
+
 logger = get_logger("model_router.health")
 
 _PROBE_TIMEOUT_S = 5.0
@@ -30,9 +32,12 @@ class EndpointHealthMonitor:
         """
         profiles: list[ModelProfile] = self.db.query(ModelProfile).all()
         result: dict[str, bool] = {}
+        registry = ProviderRegistry(self.db)
+        
         for p in profiles:
-            provider: Optional[ModelProvider] = self.db.get(ModelProvider, p.provider_id)
-            result[p.id] = self._probe(provider)
+            health_info = registry.check_health(p.id)
+            result[p.id] = (health_info.get("status") == "success")
+            
         logger.info("check_all | endpoints={}", len(result))
         return result
 
@@ -46,20 +51,3 @@ class EndpointHealthMonitor:
             "endpoint_marked_unhealthy | profile_id={} provider_id={}",
             profile_id, profile.provider_id,
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _probe(provider: Optional[ModelProvider]) -> bool:
-        """Perform a synchronous HTTP HEAD probe against the provider endpoint."""
-        if provider is None or not provider.endpoint:
-            return False
-        try:
-            # Use HEAD for cheapest possible health check; fall back to GET
-            with httpx.Client(timeout=_PROBE_TIMEOUT_S) as client:
-                resp = client.head(provider.endpoint)
-                return resp.status_code < 500
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPError):
-            return False

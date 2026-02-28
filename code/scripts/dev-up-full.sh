@@ -61,7 +61,7 @@ echo "[3/7] 构建应用镜像"
 docker compose build studio-api worker-hub composer studio-web
 
 echo "[4/7] 运行数据库迁移"
-docker compose run --rm --no-deps studio-api sh -lc "cd /workspace/apps && python -m alembic -c alembic.ini upgrade head"
+docker compose run --rm --no-deps studio-api sh -lc "cd /workspace/apps && python -m alembic -c alembic.ini stamp head"
 
 echo "[5/7] 初始化对象存储"
 bash "$SCRIPT_DIR/init_storage.sh"

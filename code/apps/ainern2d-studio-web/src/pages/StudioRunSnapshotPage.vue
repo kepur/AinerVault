@@ -163,6 +163,10 @@ interface Snapshot {
   [key: string]: any
 }
 
+import { useI18n } from "@/composables/useI18n";
+
+const { t } = useI18n();
+
 const router = useRouter()
 
 const runId = ref<string>('')

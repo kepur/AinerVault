@@ -54,6 +54,44 @@
       <pre class="json-panel">{{ exportText }}</pre>
     </NCard>
 
+    <!-- LLM 一键提取 -->
+    <NCard title="🤖 LLM 一键提取文化包">
+      <NGrid :cols="2" :x-gap="12" :y-gap="8" responsive="screen" item-responsive>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="Provider ID（LLM模型）">
+            <NInput v-model:value="llmProviderId" placeholder="输入 Model Provider ID" />
+          </NFormItem>
+        </NGridItem>
+        <NGridItem span="0:2 640:1">
+          <NFormItem label="目标文化包 ID（可选，留空则创建新包）">
+            <NInput v-model:value="llmTargetPackId" placeholder="留空自动生成" />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NFormItem label="世界观描述（输入越详细，提取越准确）">
+        <NInput
+          v-model:value="worldDescription"
+          type="textarea"
+          :autosize="{ minRows: 5, maxRows: 12 }"
+          placeholder="描述这个世界的时代背景、视觉风格、文化特征、禁忌事项..."
+        />
+      </NFormItem>
+      <NSpace>
+        <NButton
+          type="primary"
+          :loading="isLlmExtracting"
+          :disabled="!llmProviderId || !worldDescription || isLlmExtracting"
+          @click="onLlmExtract"
+        >
+          {{ isLlmExtracting ? 'LLM 提取中...' : '🤖 LLM 一键提取' }}
+        </NButton>
+      </NSpace>
+      <div v-if="llmExtractResult" style="margin-top: 12px;">
+        <NTag type="success" :bordered="false">✓ 已提取：{{ llmExtractResult.culture_pack_id }} @ {{ llmExtractResult.version }}</NTag>
+        <pre class="json-panel">{{ JSON.stringify(llmExtractResult.constraints, null, 2) }}</pre>
+      </div>
+    </NCard>
+
     <NCard title="Culture Pack 列表">
       <NDataTable :columns="columns" :data="packs" :pagination="{ pageSize: 8 }" />
     </NCard>
@@ -77,14 +115,20 @@ import {
   NSpace,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
+  type CulturePackLlmExtractResponse,
   type CulturePackResponse,
   createCulturePack,
   deleteCulturePack,
   exportCulturePack,
+  extractCulturePackLlm,
   listCulturePacks,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");
@@ -100,6 +144,13 @@ const packs = ref<CulturePackResponse[]>([]);
 const exportText = ref("{}");
 const message = ref("");
 const errorMessage = ref("");
+
+// LLM 提取状态
+const llmProviderId = ref("");
+const llmTargetPackId = ref("");
+const worldDescription = ref("");
+const isLlmExtracting = ref(false);
+const llmExtractResult = ref<CulturePackLlmExtractResponse | null>(null);
 
 const columns: DataTableColumns<CulturePackResponse> = [
   { title: "Pack ID", key: "culture_pack_id" },
@@ -199,6 +250,36 @@ async function onDelete(packId: string): Promise<void> {
     message.value = `culture pack deleted: ${packId}`;
   } catch (error) {
     errorMessage.value = `delete failed: ${stringifyError(error)}`;
+  }
+}
+
+async function onLlmExtract(): Promise<void> {
+  clearNotice();
+  if (!llmProviderId.value || !worldDescription.value.trim()) {
+    errorMessage.value = "请填写 Provider ID 和世界观描述";
+    return;
+  }
+  isLlmExtracting.value = true;
+  try {
+    llmExtractResult.value = await extractCulturePackLlm({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      model_provider_id: llmProviderId.value,
+      world_description: worldDescription.value,
+      culture_pack_id: llmTargetPackId.value || undefined,
+    });
+    // Populate the create form with extracted data
+    if (llmExtractResult.value) {
+      culturePackId.value = llmExtractResult.value.culture_pack_id;
+      displayName.value = llmExtractResult.value.display_name;
+      constraintsJson.value = JSON.stringify(llmExtractResult.value.constraints, null, 2);
+    }
+    await onList();
+    message.value = `LLM 提取完成：${llmExtractResult.value?.culture_pack_id}`;
+  } catch (error) {
+    errorMessage.value = `LLM 提取失败: ${stringifyError(error)}`;
+  } finally {
+    isLlmExtracting.value = false;
   }
 }
 

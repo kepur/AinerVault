@@ -44,6 +44,8 @@ import {
   NText,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type PreviewEntity,
@@ -58,6 +60,8 @@ const props = defineProps<{
   projectId: string;
   runId: string;
 }>();
+
+const { t } = useI18n();
 
 const router = useRouter();
 

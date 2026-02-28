@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ainern2d_shared.ainer_db_models.auth_models import ProjectMember, User
 from ainern2d_shared.ainer_db_models.enum_models import MembershipRole
+from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
 
 from app.api.deps import get_db
@@ -76,6 +77,41 @@ class AuditLogItem(BaseModel):
     run_id: str | None = None
     job_id: str | None = None
     payload: dict = Field(default_factory=dict)
+
+
+class UserListItem(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    role: str
+    created_at: datetime | None = None
+
+
+class UserUpdateRequest(BaseModel):
+    display_name: str | None = None
+    role: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
+
+
+class BootstrapPermissionsResponse(BaseModel):
+    status: str
+    permissions_written: int
+    permissions: list[dict]
+
+
+_DEFAULT_ROUTE_PERMISSIONS = [
+    {"path_prefix": "/api/v1/auth/users", "method": "*", "required_role": "admin"},
+    {"path_prefix": "/api/v1/config/", "method": "*", "required_role": "admin"},
+    {"path_prefix": "/api/v1/novels", "method": "POST", "required_role": "editor"},
+    {"path_prefix": "/api/v1/novels", "method": "PUT", "required_role": "editor"},
+    {"path_prefix": "/api/v1/novels", "method": "DELETE", "required_role": "editor"},
+    {"path_prefix": "/api/v1/rag/", "method": "POST", "required_role": "editor"},
+    {"path_prefix": "/api/v1/culture-packs/", "method": "POST", "required_role": "editor"},
+    {"path_prefix": "/api/v1/culture-packs/", "method": "DELETE", "required_role": "editor"},
+]
 
 
 def _hash_password(raw_password: str) -> str:
@@ -172,8 +208,9 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     return LoginResponse(token=signed_token, user_id=user.id, role=role)
 
 
-@router.post("/register", response_model=UserInfoResponse, status_code=201)
+@router.post("/register", response_model=UserInfoResponse, status_code=201, deprecated=True)
 def register(body: RegisterRequest, db: Session = Depends(get_db)) -> UserInfoResponse:
+    """[DEPRECATED] Use POST /auth/admin/create-user instead."""
     normalized_email = body.email.strip().lower()
     if not normalized_email or not body.password or not body.username:
         raise HTTPException(status_code=400, detail="AUTH-VALIDATION-001: invalid register payload")
@@ -204,6 +241,78 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)) -> UserInfoRe
         raise HTTPException(status_code=409, detail="REQ-IDEMPOTENCY-001: email already registered") from exc
     db.refresh(user)
     return UserInfoResponse(user_id=user.id, email=user.email, display_name=user.display_name)
+
+
+class AdminCreateUserRequest(BaseModel):
+    email: str
+    display_name: str
+    password: str
+    role: str = "editor"  # admin / producer / editor / viewer
+    tg_chat_id: str | None = None
+
+
+class AdminCreateUserResponse(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    role: str
+    tg_chat_id: str | None = None
+
+
+@router.post("/admin/create-user", response_model=AdminCreateUserResponse, status_code=201)
+def admin_create_user(
+    body: AdminCreateUserRequest,
+    db: Session = Depends(get_db),
+) -> AdminCreateUserResponse:
+    """Admin-only: create a new user with role assignment."""
+    normalized_email = body.email.strip().lower()
+    if not normalized_email or not body.password or len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="email and password (>=6 chars) required")
+
+    exists = db.execute(
+        select(User).where(
+            User.tenant_id == _DEFAULT_TENANT_ID,
+            User.email == normalized_email,
+            User.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if exists is not None:
+        raise HTTPException(status_code=409, detail="email already registered")
+
+    user = _create_user(db, email=normalized_email, display_name=body.display_name.strip(), raw_password=body.password)
+
+    # Assign role via ProjectMember ACL
+    try:
+        role_enum = MembershipRole(body.role)
+    except ValueError:
+        role_enum = MembershipRole("editor")
+
+    member = ProjectMember(
+        id=f"pm_{uuid4().hex}",
+        tenant_id=_DEFAULT_TENANT_ID,
+        project_id=_DEFAULT_PROJECT_ID,
+        trace_id=f"tr_acl_{uuid4().hex[:12]}",
+        correlation_id=f"cr_acl_{uuid4().hex[:12]}",
+        idempotency_key=f"idem_acl_{_DEFAULT_PROJECT_ID}_{user.id}_{uuid4().hex[:8]}",
+        user_id=user.id,
+        role=role_enum,
+    )
+    db.add(member)
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="failed to create user") from exc
+    db.refresh(user)
+
+    return AdminCreateUserResponse(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        role=body.role,
+        tg_chat_id=body.tg_chat_id,
+    )
 
 
 @router.get("/me", response_model=UserInfoResponse)
@@ -278,6 +387,234 @@ def upsert_project_acl(
         row.role = role
     db.commit()
     return ProjectAclItem(project_id=project_id, user_id=user_id, role=role.value)
+
+
+@router.get("/users", response_model=list[UserListItem])
+def list_users(
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    db: Session = Depends(get_db),
+) -> list[UserListItem]:
+    stmt = (
+        select(User)
+        .where(User.tenant_id == tenant_id, User.deleted_at.is_(None))
+        .order_by(User.created_at.asc())
+    )
+    users = db.execute(stmt).scalars().all()
+    result = []
+    for user in users:
+        # Resolve role from ProjectMember ACL
+        member = db.execute(
+            select(ProjectMember).where(
+                ProjectMember.tenant_id == tenant_id,
+                ProjectMember.project_id == _DEFAULT_PROJECT_ID,
+                ProjectMember.user_id == user.id,
+                ProjectMember.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        role = "viewer"
+        if member is not None:
+            role = member.role.value if hasattr(member.role, "value") else str(member.role)
+        # Check default users for seeded role
+        if user.email in _DEFAULT_USERS:
+            seeded_role = _DEFAULT_USERS[user.email][2]
+            if role == "viewer":
+                role = seeded_role
+        result.append(
+            UserListItem(
+                id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                role=role,
+                created_at=user.created_at,
+            )
+        )
+    return result
+
+
+@router.get("/users/{user_id}", response_model=UserListItem)
+def get_user(
+    user_id: str,
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    db: Session = Depends(get_db),
+) -> UserListItem:
+    user = db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    member = db.execute(
+        select(ProjectMember).where(
+            ProjectMember.tenant_id == tenant_id,
+            ProjectMember.project_id == _DEFAULT_PROJECT_ID,
+            ProjectMember.user_id == user.id,
+            ProjectMember.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    role = "viewer"
+    if member is not None:
+        role = member.role.value if hasattr(member.role, "value") else str(member.role)
+    if user.email in _DEFAULT_USERS and role == "viewer":
+        role = _DEFAULT_USERS[user.email][2]
+    return UserListItem(id=user.id, email=user.email, display_name=user.display_name, role=role, created_at=user.created_at)
+
+
+@router.put("/users/{user_id}", response_model=UserListItem)
+def update_user(
+    user_id: str,
+    body: UserUpdateRequest,
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    db: Session = Depends(get_db),
+) -> UserListItem:
+    user = db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    if body.display_name is not None:
+        user.display_name = body.display_name
+
+    role = "viewer"
+    if body.role is not None:
+        try:
+            new_role = MembershipRole(body.role)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid role: {body.role}") from exc
+        member = db.execute(
+            select(ProjectMember).where(
+                ProjectMember.tenant_id == tenant_id,
+                ProjectMember.project_id == _DEFAULT_PROJECT_ID,
+                ProjectMember.user_id == user_id,
+            )
+        ).scalars().first()
+        if member is None:
+            member = ProjectMember(
+                id=f"pm_{uuid4().hex}",
+                tenant_id=tenant_id,
+                project_id=_DEFAULT_PROJECT_ID,
+                trace_id=f"tr_acl_{uuid4().hex[:12]}",
+                correlation_id=f"cr_acl_{uuid4().hex[:12]}",
+                idempotency_key=f"idem_acl_{_DEFAULT_PROJECT_ID}_{user_id}_{uuid4().hex[:8]}",
+                user_id=user_id,
+                role=new_role,
+            )
+            db.add(member)
+        else:
+            member.role = new_role
+        role = body.role
+    else:
+        member = db.execute(
+            select(ProjectMember).where(
+                ProjectMember.tenant_id == tenant_id,
+                ProjectMember.project_id == _DEFAULT_PROJECT_ID,
+                ProjectMember.user_id == user_id,
+                ProjectMember.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if member is not None:
+            role = member.role.value if hasattr(member.role, "value") else str(member.role)
+
+    db.commit()
+    db.refresh(user)
+    return UserListItem(id=user.id, email=user.email, display_name=user.display_name, role=role, created_at=user.created_at)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    db: Session = Depends(get_db),
+) -> dict:
+    user = db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "deleted", "user_id": user_id}
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: str,
+    body: PasswordResetRequest,
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not body.new_password or len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="password must be at least 6 characters")
+    user = db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == tenant_id,
+            User.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.password_hash = _hash_password(body.new_password)
+    db.commit()
+    return {"status": "ok", "user_id": user_id}
+
+
+@router.post("/init-permissions", response_model=BootstrapPermissionsResponse)
+def init_permissions(
+    tenant_id: str = Query(default=_DEFAULT_TENANT_ID),
+    project_id: str = Query(default=_DEFAULT_PROJECT_ID),
+    db: Session = Depends(get_db),
+) -> BootstrapPermissionsResponse:
+    written = 0
+    for perm in _DEFAULT_ROUTE_PERMISSIONS:
+        name = f"route_permission:{perm['path_prefix']}:{perm['method']}"
+        existing = db.execute(
+            select(CreativePolicyStack).where(
+                CreativePolicyStack.tenant_id == tenant_id,
+                CreativePolicyStack.project_id == project_id,
+                CreativePolicyStack.name == name,
+                CreativePolicyStack.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        payload = {
+            "type": "route_permission",
+            "path_prefix": perm["path_prefix"],
+            "method": perm["method"],
+            "required_role": perm["required_role"],
+        }
+        if existing is None:
+            row = CreativePolicyStack(
+                id=f"perm_{uuid4().hex}",
+                tenant_id=tenant_id,
+                project_id=project_id,
+                trace_id=f"tr_perm_{uuid4().hex[:12]}",
+                correlation_id=f"cr_perm_{uuid4().hex[:12]}",
+                idempotency_key=f"idem_perm_{uuid4().hex[:8]}",
+                name=name,
+                status="active",
+                stack_json=payload,
+            )
+            db.add(row)
+            written += 1
+        else:
+            existing.stack_json = payload
+    db.commit()
+    return BootstrapPermissionsResponse(
+        status="ok",
+        permissions_written=written,
+        permissions=_DEFAULT_ROUTE_PERMISSIONS,
+    )
 
 
 @router.get("/audit/logs", response_model=list[AuditLogItem])

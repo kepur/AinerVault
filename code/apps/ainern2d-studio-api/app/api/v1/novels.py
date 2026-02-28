@@ -11,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import Chapter, Novel
-from ainern2d_shared.ainer_db_models.enum_models import RenderStage, RunStatus
+from ainern2d_shared.ainer_db_models.enum_models import EntityType, RenderStage, RunStatus
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
+from ainern2d_shared.ainer_db_models.knowledge_models import Entity, EntityAlias, StoryEvent
 from ainern2d_shared.ainer_db_models.pipeline_models import RenderRun, WorkflowEvent
 from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 from ainern2d_shared.schemas.skills.skill_01 import Skill01Input
@@ -36,6 +37,30 @@ class NovelCreateRequest(BaseModel):
     default_language_code: str = "zh"
 
 
+class NovelUpdateRequest(BaseModel):
+    tenant_id: str = "default"
+    project_id: str = "default"
+    title: str | None = None
+    summary: str | None = None
+    default_language_code: str | None = None
+
+
+class NovelTeamMember(BaseModel):
+    persona_pack_id: str
+    persona_pack_name: str = ""
+
+
+class NovelTeamRequest(BaseModel):
+    tenant_id: str = "default"
+    project_id: str = "default"
+    team: dict[str, NovelTeamMember]
+
+
+class NovelTeamResponse(BaseModel):
+    novel_id: str
+    team: dict[str, NovelTeamMember]
+
+
 class NovelResponse(BaseModel):
     id: str
     tenant_id: str
@@ -43,6 +68,7 @@ class NovelResponse(BaseModel):
     title: str
     summary: str | None = None
     default_language_code: str
+    team_json: dict | None = None
 
 
 class ChapterCreateRequest(BaseModel):
@@ -200,13 +226,18 @@ def create_novel(body: NovelCreateRequest, db: Session = Depends(get_db)) -> Nov
     db.add(novel)
     db.commit()
     db.refresh(novel)
+    return _novel_to_response(novel)
+
+
+def _novel_to_response(row: Novel) -> NovelResponse:
     return NovelResponse(
-        id=novel.id,
-        tenant_id=novel.tenant_id,
-        project_id=novel.project_id,
-        title=novel.title,
-        summary=novel.summary,
-        default_language_code=novel.default_language_code,
+        id=row.id,
+        tenant_id=row.tenant_id,
+        project_id=row.project_id,
+        title=row.title,
+        summary=row.summary,
+        default_language_code=row.default_language_code,
+        team_json=row.team_json,
     )
 
 
@@ -225,17 +256,7 @@ def list_novels(
         )
         .order_by(Novel.created_at.desc())
     ).scalars().all()
-    return [
-        NovelResponse(
-            id=row.id,
-            tenant_id=row.tenant_id,
-            project_id=row.project_id,
-            title=row.title,
-            summary=row.summary,
-            default_language_code=row.default_language_code,
-        )
-        for row in rows
-    ]
+    return [_novel_to_response(row) for row in rows]
 
 
 @router.get("/novels/{novel_id}", response_model=NovelResponse)
@@ -243,14 +264,96 @@ def get_novel(novel_id: str, db: Session = Depends(get_db)) -> NovelResponse:
     row = db.get(Novel, novel_id)
     if row is None:
         raise HTTPException(status_code=404, detail="novel not found")
-    return NovelResponse(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        project_id=row.project_id,
-        title=row.title,
-        summary=row.summary,
-        default_language_code=row.default_language_code,
-    )
+    return _novel_to_response(row)
+
+
+@router.put("/novels/{novel_id}", response_model=NovelResponse)
+def update_novel(
+    novel_id: str,
+    body: NovelUpdateRequest,
+    db: Session = Depends(get_db),
+) -> NovelResponse:
+    novel = db.get(Novel, novel_id)
+    if novel is None or novel.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    if body.title is not None:
+        novel.title = body.title
+    if body.summary is not None:
+        novel.summary = body.summary
+    if body.default_language_code is not None:
+        novel.default_language_code = body.default_language_code
+    db.commit()
+    db.refresh(novel)
+    return _novel_to_response(novel)
+
+
+@router.delete("/novels/{novel_id}")
+def delete_novel(
+    novel_id: str,
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    novel = db.get(Novel, novel_id)
+    if novel is None or novel.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    # Check no active runs reference chapters of this novel
+    active_run = db.execute(
+        select(RenderRun)
+        .join(Chapter, RenderRun.chapter_id == Chapter.id)
+        .where(
+            Chapter.novel_id == novel_id,
+            Chapter.deleted_at.is_(None),
+            RenderRun.status.in_([RunStatus.queued, RunStatus.running]),
+        )
+    ).scalar_one_or_none()
+    if active_run is not None:
+        raise HTTPException(status_code=409, detail="novel has active runs, cannot delete")
+    novel.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/novels/{novel_id}/team", response_model=NovelTeamResponse)
+def get_novel_team(novel_id: str, db: Session = Depends(get_db)) -> NovelTeamResponse:
+    novel = db.get(Novel, novel_id)
+    if novel is None or novel.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    raw = novel.team_json or {}
+    team = {k: NovelTeamMember(**v) for k, v in raw.items() if isinstance(v, dict)}
+    return NovelTeamResponse(novel_id=novel_id, team=team)
+
+
+@router.put("/novels/{novel_id}/team", response_model=NovelTeamResponse)
+def set_novel_team(
+    novel_id: str,
+    body: NovelTeamRequest,
+    db: Session = Depends(get_db),
+) -> NovelTeamResponse:
+    novel = db.get(Novel, novel_id)
+    if novel is None or novel.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    novel.team_json = {k: v.model_dump() for k, v in body.team.items()}
+    db.commit()
+    db.refresh(novel)
+    raw = novel.team_json or {}
+    team = {k: NovelTeamMember(**v) for k, v in raw.items() if isinstance(v, dict)}
+    return NovelTeamResponse(novel_id=novel_id, team=team)
+
+
+@router.delete("/chapters/{chapter_id}")
+def delete_chapter(
+    chapter_id: str,
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None or chapter.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    chapter.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "ok"}
 
 
 @router.post("/novels/{novel_id}/chapters", response_model=ChapterResponse, status_code=201)
@@ -1000,3 +1103,244 @@ def get_chapter_diff(
         deletions=deletions,
     )
 
+
+
+class EntityExtractionRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    model_provider_id: str
+    chapter_ids: list[str] | None = None
+
+
+class EntityExtractionResponse(BaseModel):
+    novel_id: str
+    entities_count: int
+    aliases_count: int
+    events_count: int
+    preview: dict = Field(default_factory=dict)
+
+
+_ENTITY_EXTRACTION_PROMPT = """请从以下章节内容中提取实体信息，以JSON格式输出，不要输出其他内容。
+
+输出格式：
+{
+  "characters": [{"name": "人物名", "aliases": ["别名1", "别名2"], "role": "主角/配角/反派", "traits": ["特征1"]}],
+  "locations": [{"name": "地点名", "description": "描述", "type": "城市/山脉/建筑"}],
+  "events": [{"title": "事件标题", "participants": ["人物名"], "summary": "事件摘要"}]
+}
+
+章节内容：
+{content}
+"""
+
+
+@router.post("/novels/{novel_id}/extract-entities", response_model=EntityExtractionResponse)
+def extract_novel_entities(
+    novel_id: str,
+    body: EntityExtractionRequest,
+    db: Session = Depends(get_db),
+) -> EntityExtractionResponse:
+    novel = db.get(Novel, novel_id)
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    if novel.tenant_id != body.tenant_id or novel.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="novel scope mismatch")
+
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+    if provider.tenant_id != body.tenant_id or provider.project_id != body.project_id:
+        raise HTTPException(status_code=403, detail="model provider scope mismatch")
+
+    # Load chapters
+    stmt = select(Chapter).where(
+        Chapter.novel_id == novel_id,
+        Chapter.deleted_at.is_(None),
+    ).order_by(Chapter.chapter_no.asc())
+    if body.chapter_ids:
+        stmt = stmt.where(Chapter.id.in_(body.chapter_ids))
+    chapters = db.execute(stmt).scalars().all()
+    if not chapters:
+        raise HTTPException(status_code=404, detail="no chapters found for extraction")
+
+    # Combine chapter content
+    content_parts = []
+    for ch in chapters:
+        text = (ch.raw_text or "").strip()
+        if text:
+            content_parts.append(f"=== 第{ch.chapter_no}章 {ch.title or ''} ===\n{text[:3000]}")
+    combined_content = "\n\n".join(content_parts[:5])  # Limit to 5 chapters
+
+    prompt = _ENTITY_EXTRACTION_PROMPT.format(content=combined_content)
+    settings = _load_provider_settings(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+
+    try:
+        content, _, _ = _expand_with_provider(
+            provider=provider,
+            provider_settings=settings,
+            prompt=prompt,
+            max_tokens=2000,
+        )
+        # Parse JSON response
+        import re as _re
+        json_match = _re.search(r'\{.*\}', content, _re.DOTALL)
+        if json_match:
+            extracted = json.loads(json_match.group())
+        else:
+            extracted = {}
+    except (requests.RequestException, ValueError, json.JSONDecodeError):
+        extracted = {}
+
+    entities_count = 0
+    aliases_count = 0
+    events_count = 0
+
+    # Store characters
+    for char in extracted.get("characters", []):
+        name = str(char.get("name") or "").strip()
+        if not name:
+            continue
+        # Check uniqueness constraint
+        existing = db.execute(
+            select(Entity).where(
+                Entity.tenant_id == body.tenant_id,
+                Entity.project_id == body.project_id,
+                Entity.novel_id == novel_id,
+                Entity.type == EntityType.person,
+                Entity.label == name,
+                Entity.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if existing is None:
+            entity = Entity(
+                id=f"ent_{uuid4().hex}",
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                novel_id=novel_id,
+                type=EntityType.person,
+                label=name,
+                canonical_label=name,
+                traits_json={
+                    "role": char.get("role", ""),
+                    "traits": char.get("traits", []),
+                },
+            )
+            db.add(entity)
+            db.flush()
+            entities_count += 1
+
+            for alias in char.get("aliases", []):
+                alias_str = str(alias).strip()
+                if alias_str and alias_str != name:
+                    al = EntityAlias(
+                        id=f"eal_{uuid4().hex}",
+                        tenant_id=body.tenant_id,
+                        project_id=body.project_id,
+                        entity_id=entity.id,
+                        alias=alias_str,
+                    )
+                    db.add(al)
+                    aliases_count += 1
+
+    # Store locations
+    for loc in extracted.get("locations", []):
+        name = str(loc.get("name") or "").strip()
+        if not name:
+            continue
+        existing = db.execute(
+            select(Entity).where(
+                Entity.tenant_id == body.tenant_id,
+                Entity.project_id == body.project_id,
+                Entity.novel_id == novel_id,
+                Entity.type == EntityType.place,
+                Entity.label == name,
+                Entity.deleted_at.is_(None),
+            )
+        ).scalars().first()
+        if existing is None:
+            entity = Entity(
+                id=f"ent_{uuid4().hex}",
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                novel_id=novel_id,
+                type=EntityType.place,
+                label=name,
+                canonical_label=name,
+                traits_json={
+                    "description": loc.get("description", ""),
+                    "type": loc.get("type", ""),
+                },
+            )
+            db.add(entity)
+            entities_count += 1
+
+    # Store events (attached to first chapter)
+    first_chapter = chapters[0] if chapters else None
+    if first_chapter:
+        for ev_idx, ev in enumerate(extracted.get("events", [])):
+            title = str(ev.get("title") or "").strip()
+            summary = str(ev.get("summary") or title).strip()
+            if not summary:
+                continue
+            event_no = ev_idx + 1
+            existing_ev = db.execute(
+                select(StoryEvent).where(
+                    StoryEvent.tenant_id == body.tenant_id,
+                    StoryEvent.project_id == body.project_id,
+                    StoryEvent.chapter_id == first_chapter.id,
+                    StoryEvent.event_no == event_no,
+                    StoryEvent.deleted_at.is_(None),
+                )
+            ).scalars().first()
+            if existing_ev is None:
+                story_event = StoryEvent(
+                    id=f"sev_{uuid4().hex}",
+                    tenant_id=body.tenant_id,
+                    project_id=body.project_id,
+                    chapter_id=first_chapter.id,
+                    event_no=event_no,
+                    summary=summary,
+                    structured_json={
+                        "title": title,
+                        "participants": ev.get("participants", []),
+                    },
+                )
+                db.add(story_event)
+                events_count += 1
+
+    db.commit()
+
+    preview = {
+        "characters": [c.get("name") for c in extracted.get("characters", [])[:5]],
+        "locations": [l.get("name") for l in extracted.get("locations", [])[:5]],
+        "events": [e.get("title") for e in extracted.get("events", [])[:5]],
+    }
+
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="plan.prompt.generated",
+        summary="Entity extraction completed",
+        trace_id=novel.trace_id,
+        correlation_id=novel.correlation_id,
+        extra={
+            "novel_id": novel_id,
+            "entities_count": entities_count,
+            "aliases_count": aliases_count,
+            "events_count": events_count,
+        },
+    )
+
+    return EntityExtractionResponse(
+        novel_id=novel_id,
+        entities_count=entities_count,
+        aliases_count=aliases_count,
+        events_count=events_count,
+        preview=preview,
+    )

@@ -5,8 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from ainern2d_shared.ainer_db_models.pipeline_models import Job
+from ainern2d_shared.ainer_db_models.provider_models import ProviderAdapter
 from ainern2d_shared.schemas.worker import WorkerResult
 from ainern2d_shared.telemetry.logging import get_logger
+
+from .base_adapter import apply_adapter_mapping
 
 logger = get_logger(__name__)
 
@@ -18,12 +21,14 @@ _LLM_DEFAULTS: dict[str, Any] = {
 
 
 class LLMWorkerAdapter:
-    """Thin adapter for worker-llm dispatch and result parsing."""
+    """Thin adapter for worker-llm dispatch mapping."""
 
-    def format_dispatch(self, job: Job) -> dict:
-        """Extract LLM-specific fields from job payload with defaults."""
+    def format_dispatch(self, job: Job, adapter: ProviderAdapter | None = None) -> dict:
+        """Extract LLM-specific fields from job payload and apply HTTP spec."""
         payload: dict = job.payload_json or {}
-        dispatch = {
+        
+        # 1. Base canonical inputs
+        canonical = {
             "job_id": str(job.id),
             "run_id": str(job.run_id) if job.run_id else None,
             "prompt": payload.get("prompt", ""),
@@ -34,8 +39,15 @@ class LLMWorkerAdapter:
             "response_format": payload.get("response_format"),
             "tools": payload.get("tools"),
         }
-        logger.debug("llm dispatch: job=%s model=%s", job.id, dispatch["model_profile"])
-        return dispatch
+        
+        if adapter:
+            # 2. If provider adapter spec is present, compile HTTP dispatch
+            http_dispatch = apply_adapter_mapping(canonical, adapter)
+            # Combine canonical with generic runner instructions
+            canonical.update(http_dispatch)
+            
+        logger.debug("llm dispatch: job=%s model=%s adapter=%s", job.id, canonical["model_profile"], bool(adapter))
+        return canonical
 
     def parse_result(self, raw: dict) -> WorkerResult:
         """Parse an LLM worker response into a WorkerResult."""

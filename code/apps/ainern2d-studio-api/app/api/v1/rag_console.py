@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import re
+import requests
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
@@ -10,10 +12,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ainern2d_shared.ainer_db_models.enum_models import RagScope, RagSourceType
+from ainern2d_shared.ainer_db_models.content_models import Chapter, Novel
+from ainern2d_shared.ainer_db_models.enum_models import KBBindType, RagScope, RagSourceType
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
 from ainern2d_shared.ainer_db_models.governance_models import PersonaPack, PersonaPackVersion
 from ainern2d_shared.ainer_db_models.preview_models import PersonaDatasetBinding, PersonaIndexBinding
+from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 from ainern2d_shared.ainer_db_models.rag_models import KbVersion, RagCollection, RagDocument
 
 from app.api.deps import get_db
@@ -30,6 +34,8 @@ class RagCollectionCreateRequest(BaseModel):
     description: str | None = None
     novel_id: str | None = None
     tags_json: list[str] = Field(default_factory=list)
+    bind_type: str | None = None  # role / persona / novel / global
+    bind_id: str | None = None    # 对应的 role_id / persona_pack_id / novel_id
 
 
 class RagCollectionResponse(BaseModel):
@@ -40,6 +46,8 @@ class RagCollectionResponse(BaseModel):
     language_code: str | None = None
     description: str | None = None
     tags_json: list[str] = Field(default_factory=list)
+    bind_type: str | None = None
+    bind_id: str | None = None
 
 
 class KbVersionCreateRequest(BaseModel):
@@ -66,6 +74,7 @@ class PersonaPackCreateRequest(BaseModel):
     tenant_id: str
     project_id: str
     name: str
+    role_id: str | None = None  # 关联的职业 ID，用于继承 Role KB
     description: str | None = None
     tags_json: list[str] = Field(default_factory=list)
 
@@ -75,6 +84,7 @@ class PersonaPackResponse(BaseModel):
     tenant_id: str
     project_id: str
     name: str
+    role_id: str | None = None
     description: str | None = None
     tags_json: list[str] = Field(default_factory=list)
 
@@ -456,6 +466,17 @@ def _build_import_job_item(
 
 @router.post("/collections", response_model=RagCollectionResponse, status_code=201)
 def create_collection(body: RagCollectionCreateRequest, db: Session = Depends(get_db)) -> RagCollectionResponse:
+    # Parse bind_type
+    parsed_bind_type: KBBindType | None = None
+    if body.bind_type:
+        bt = body.bind_type.strip().lower()
+        if bt == "global":
+            bt = "global_"
+        try:
+            parsed_bind_type = KBBindType(bt.rstrip("_")) if bt != "global_" else KBBindType.global_
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"invalid bind_type: {body.bind_type}")
+
     row = RagCollection(
         id=f"rag_collection_{uuid4().hex}",
         tenant_id=body.tenant_id,
@@ -469,6 +490,8 @@ def create_collection(body: RagCollectionCreateRequest, db: Session = Depends(ge
         language_code=body.language_code,
         description=body.description,
         tags_json=body.tags_json,
+        bind_type=parsed_bind_type,
+        bind_id=body.bind_id,
     )
     db.add(row)
     db.commit()
@@ -481,6 +504,8 @@ def create_collection(body: RagCollectionCreateRequest, db: Session = Depends(ge
         language_code=row.language_code,
         description=row.description,
         tags_json=row.tags_json or [],
+        bind_type=row.bind_type.value if row.bind_type else None,
+        bind_id=row.bind_id,
     )
 
 
@@ -490,6 +515,8 @@ def list_collections(
     project_id: str = Query(...),
     keyword: str | None = Query(default=None),
     language_code: str | None = Query(default=None),
+    bind_type: str | None = Query(default=None),
+    bind_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[RagCollectionResponse]:
     stmt = select(RagCollection).where(
@@ -502,6 +529,17 @@ def list_collections(
     if keyword:
         like_value = f"%{keyword.strip()}%"
         stmt = stmt.where(RagCollection.name.ilike(like_value))
+    if bind_type:
+        bt = bind_type.strip().lower()
+        if bt == "global":
+            stmt = stmt.where(RagCollection.bind_type == KBBindType.global_)
+        else:
+            try:
+                stmt = stmt.where(RagCollection.bind_type == KBBindType(bt))
+            except ValueError:
+                pass
+    if bind_id:
+        stmt = stmt.where(RagCollection.bind_id == bind_id)
     rows = db.execute(stmt.order_by(RagCollection.created_at.desc())).scalars().all()
     return [
         RagCollectionResponse(
@@ -512,6 +550,8 @@ def list_collections(
             language_code=row.language_code,
             description=row.description,
             tags_json=row.tags_json or [],
+            bind_type=row.bind_type.value if row.bind_type else None,
+            bind_id=row.bind_id,
         )
         for row in rows
     ]
@@ -592,6 +632,7 @@ def create_persona_pack(body: PersonaPackCreateRequest, db: Session = Depends(ge
         correlation_id=f"cr_persona_pack_{uuid4().hex[:12]}",
         idempotency_key=f"idem_persona_pack_{body.name}_{uuid4().hex[:8]}",
         name=body.name,
+        role_id=body.role_id,
         description=body.description,
         tags_json=body.tags_json,
     )
@@ -603,6 +644,7 @@ def create_persona_pack(body: PersonaPackCreateRequest, db: Session = Depends(ge
         tenant_id=row.tenant_id,
         project_id=row.project_id,
         name=row.name,
+        role_id=row.role_id,
         description=row.description,
         tags_json=row.tags_json or [],
     )
@@ -630,6 +672,7 @@ def list_persona_packs(
             tenant_id=row.tenant_id,
             project_id=row.project_id,
             name=row.name,
+            role_id=row.role_id,
             description=row.description,
             tags_json=row.tags_json or [],
         )
@@ -1273,49 +1316,93 @@ _binary_import_jobs: dict[str, dict] = {}  # 简单内存存储
 def _extract_text_from_binary(file_name: str, file_bytes: bytes) -> tuple[str, int, int, int]:
     """
     从二进制文件抽取文本（支持 pdf/xlsx/docx/txt）
-    
+
     返回: (text, pages, tables, images)
     """
+    import io
     file_lower = file_name.lower()
-    
-    # 简单的文件格式检测和文本提取
+
     try:
         if file_lower.endswith('.txt'):
-            return file_bytes.decode('utf-8', errors='ignore'), 0, 0, 0
-        
+            # Try common encodings
+            for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
+                try:
+                    return file_bytes.decode(enc), 1, 0, 0
+                except UnicodeDecodeError:
+                    continue
+            return file_bytes.decode('utf-8', errors='ignore'), 1, 0, 0
+
         elif file_lower.endswith('.pdf'):
-            # PDF 解析（使用简单的文本提取，实际环境应使用 pypdf/pdfplumber）
             try:
-                import re
-                text = file_bytes.decode('utf-8', errors='ignore')
-                # 简单的 PDF 流文本提取（基于流编码）
-                text = re.sub(r'[^\w\s\u4e00-\u9fff]', ' ', text)
-                return text[:5000], 1, 0, 0
-            except Exception:
-                return "PDF parsing not fully supported in this environment", 1, 0, 0
-        
+                import pypdf  # type: ignore[import]
+                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                pages_count = len(reader.pages)
+                text_parts = []
+                for page in reader.pages:
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        text_parts.append(page_text)
+                return "\n\n".join(text_parts), pages_count, 0, 0
+            except ImportError:
+                # Fallback: minimal text extraction from raw PDF bytes
+                import re as _re
+                raw = file_bytes.decode('latin-1', errors='ignore')
+                text_blocks = _re.findall(r'BT\s*(.*?)\s*ET', raw, _re.DOTALL)
+                extracted = " ".join(text_blocks)[:8000]
+                return extracted or "PDF parsed (pypdf not installed)", 1, 0, 0
+            except Exception as e:
+                return f"PDF parsing error: {e}", 1, 0, 0
+
         elif file_lower.endswith(('.xlsx', '.xls')):
-            # Excel 解析（实际应使用 openpyxl/pandas）
             try:
-                # 简单的 sheet 数据提取（模拟）
-                text = f"Excel file extracted. Size: {len(file_bytes)} bytes"
-                return text, 1, 1, 0
-            except Exception:
-                return "Excel parsing not fully supported in this environment", 1, 0, 0
-        
+                import openpyxl  # type: ignore[import]
+                wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+                text_parts = []
+                table_count = 0
+                for sheet in wb.sheetnames:
+                    ws = wb[sheet]
+                    rows_text = []
+                    for row in ws.iter_rows(values_only=True):
+                        cells = [str(cell) if cell is not None else "" for cell in row]
+                        row_text = "\t".join(cells).strip()
+                        if row_text:
+                            rows_text.append(row_text)
+                    if rows_text:
+                        text_parts.append(f"[Sheet: {sheet}]\n" + "\n".join(rows_text[:200]))
+                        table_count += 1
+                return "\n\n".join(text_parts), 1, table_count, 0
+            except ImportError:
+                return f"Excel file received ({len(file_bytes)} bytes). Install openpyxl for full parsing.", 1, 1, 0
+            except Exception as e:
+                return f"Excel parsing error: {e}", 1, 0, 0
+
         elif file_lower.endswith('.docx'):
-            # Word 文档解析（实际应使用 python-docx）
             try:
-                text = f"Word document extracted. Size: {len(file_bytes)} bytes"
-                return text, 1, 0, 0
-            except Exception:
-                return "DOCX parsing not fully supported in this environment", 1, 0, 0
-        
+                import docx  # type: ignore[import]
+                doc = docx.Document(io.BytesIO(file_bytes))
+                paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+                table_count = len(doc.tables)
+                table_texts = []
+                for table in doc.tables:
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        rows.append("\t".join(cells))
+                    table_texts.append("\n".join(rows))
+                all_text = "\n\n".join(paragraphs)
+                if table_texts:
+                    all_text += "\n\n" + "\n\n".join(table_texts)
+                return all_text, 1, table_count, 0
+            except ImportError:
+                return f"DOCX file received ({len(file_bytes)} bytes). Install python-docx for full parsing.", 1, 0, 0
+            except Exception as e:
+                return f"DOCX parsing error: {e}", 1, 0, 0
+
         else:
             return "Unsupported file format", 0, 0, 0
-    
+
     except Exception as e:
-        return f"Error extracting text: {str(e)}", 0, 0, 0
+        return f"Error extracting text: {e}", 0, 0, 0
 
 
 @router.post("/collections/{collection_id}/binary-import", response_model=BinaryImportJobResponse, status_code=202)
@@ -1324,9 +1411,11 @@ async def upload_binary_file_for_import(
     file: UploadFile = File(...),
     tenant_id: str = Query(...),
     project_id: str = Query(...),
+    model_provider_id: str | None = Query(default=None),
+    use_vision: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> BinaryImportJobResponse:
-    """上传二进制文件（PDF/XLSX/DOCX/TXT）进行异步导入"""
+    """上传二进制文件（PDF/XLSX/DOCX/TXT）进行异步导入，支持多模态LLM提取"""
     collection = db.execute(
         select(RagCollection).where(
             RagCollection.id == collection_id,
@@ -1356,7 +1445,32 @@ async def upload_binary_file_for_import(
     
     # 提取文本
     extracted_text, pages, tables, images = _extract_text_from_binary(file.filename, file_bytes)
-    
+
+    # 多模态 LLM 增强提取（可选）
+    if use_vision and model_provider_id:
+        try:
+            provider = db.get(ModelProvider, model_provider_id)
+            if provider and provider.deleted_at is None:
+                provider_settings = _load_provider_settings_rag(
+                    db,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    provider_id=model_provider_id,
+                )
+                vision_prompt = (
+                    f"请从以下文档内容中提取和整理关键信息，输出为结构化文本：\n\n{extracted_text[:4000]}"
+                )
+                enhanced = _call_provider_llm(
+                    provider=provider,
+                    provider_settings=provider_settings,
+                    prompt=vision_prompt,
+                    max_tokens=1500,
+                )
+                if enhanced:
+                    extracted_text = enhanced
+        except (requests.RequestException, ValueError):
+            pass  # 失败时使用原始提取文本
+
     # 存储到内存
     _binary_import_jobs[import_job_id] = {
         "tenant_id": tenant_id,
@@ -1441,4 +1555,285 @@ def get_binary_import_status(import_job_id: str) -> BinaryImportJobResponse:
         extracted_pages=job["extracted_pages"],
         extracted_tables=job["extracted_tables"],
         extracted_images=job["extracted_images"],
+    )
+
+
+class NovelRagInitRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    model_provider_id: str
+    novel_id: str
+    max_tokens: int = Field(default=1200, ge=200, le=3000)
+
+
+class NovelRagInitResponse(BaseModel):
+    collection_id: str
+    novel_id: str
+    documents_created: int
+    chunks_total: int
+    status: str
+
+
+def _load_provider_settings_rag(
+    db: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    provider_id: str,
+) -> dict:
+    row = db.execute(
+        select(CreativePolicyStack).where(
+            CreativePolicyStack.tenant_id == tenant_id,
+            CreativePolicyStack.project_id == project_id,
+            CreativePolicyStack.name == f"provider_settings:{provider_id}",
+            CreativePolicyStack.deleted_at.is_(None),
+        )
+    ).scalars().first()
+    if row is None:
+        return {}
+    return dict(row.stack_json or {})
+
+
+def _call_provider_llm(
+    *,
+    provider: ModelProvider,
+    provider_settings: dict,
+    prompt: str,
+    max_tokens: int,
+) -> str:
+    endpoint = (provider.endpoint or "").strip().rstrip("/")
+    token = str(provider_settings.get("access_token") or "").strip()
+    model_catalog = list(provider_settings.get("model_catalog") or [])
+    model_name = model_catalog[0] if model_catalog else "gpt-4o-mini"
+    if not endpoint or not token:
+        raise ValueError("missing provider endpoint/token")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "你是专业知识提取助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+    }
+    response = requests.post(
+        f"{endpoint}/chat/completions",
+        json=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        timeout=90.0,
+    )
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ValueError(f"provider_http_status_{response.status_code}")
+    parsed = response.json() if response.text else {}
+    choices = parsed.get("choices") or []
+    if not choices:
+        raise ValueError("provider_response_missing_choices")
+    return str((choices[0].get("message") or {}).get("content") or "").strip()
+
+
+_NOVEL_RAG_PROMPT = """请从以下小说章节内容中提取关键知识点，以便用于AI辅助创作：
+- 主要人物的性格、背景、关系
+- 重要地点和场景的描述
+- 关键情节节点和伏笔
+- 世界观规则和设定
+
+请将内容整理为结构化段落，每个知识点单独一段。
+
+章节内容：
+{content}
+"""
+
+
+@router.post("/collections/{collection_id}/novel-init", response_model=NovelRagInitResponse)
+def init_novel_rag(
+    collection_id: str,
+    body: NovelRagInitRequest,
+    db: Session = Depends(get_db),
+) -> NovelRagInitResponse:
+    collection = db.get(RagCollection, collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="RAG collection not found")
+
+    novel = db.get(Novel, body.novel_id)
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+
+    chapters = db.execute(
+        select(Chapter).where(
+            Chapter.novel_id == body.novel_id,
+            Chapter.deleted_at.is_(None),
+        ).order_by(Chapter.chapter_no.asc())
+    ).scalars().all()
+
+    if not chapters:
+        raise HTTPException(status_code=404, detail="no chapters found in novel")
+
+    provider_settings = _load_provider_settings_rag(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+
+    documents_created = 0
+    chunks_total = 0
+    now = datetime.now(timezone.utc)
+
+    for ch in chapters:
+        raw_text = (ch.raw_text or "").strip()
+        if not raw_text:
+            continue
+
+        # Try LLM extraction; fall back to direct chunking
+        try:
+            prompt = _NOVEL_RAG_PROMPT.format(content=raw_text[:4000])
+            extracted_text = _call_provider_llm(
+                provider=provider,
+                provider_settings=provider_settings,
+                prompt=prompt,
+                max_tokens=body.max_tokens,
+            )
+        except (requests.RequestException, ValueError):
+            extracted_text = raw_text
+
+        chunks = _chunk_text(extracted_text, chunk_size=480)
+
+        for idx, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
+            fingerprint = hashlib.sha1(chunk.encode("utf-8")).hexdigest()
+            doc = RagDocument(
+                id=f"doc_novel_{uuid4().hex}",
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                trace_id=f"tr_novel_rag_{uuid4().hex[:12]}",
+                correlation_id=f"cr_novel_rag_{uuid4().hex[:12]}",
+                idempotency_key=f"idem_novel_rag_{ch.id}_{idx}_{fingerprint[:8]}",
+                collection_id=collection_id,
+                novel_id=body.novel_id,
+                scope=RagScope.novel,
+                source_type=RagSourceType.chapter,
+                source_id=ch.id,
+                title=f"{novel.title} - 第{ch.chapter_no}章 [{idx + 1}]",
+                content_text=chunk,
+                language_code=ch.language_code or "zh",
+                metadata_json={"chapter_no": ch.chapter_no, "chunk_index": idx},
+            )
+            db.add(doc)
+            chunks_total += 1
+
+        documents_created += 1
+
+    db.commit()
+
+    notify_telegram_event(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        event_type="plan.prompt.generated",
+        summary="Novel RAG initialization completed",
+        trace_id=novel.trace_id,
+        correlation_id=novel.correlation_id,
+        extra={
+            "collection_id": collection_id,
+            "novel_id": body.novel_id,
+            "documents_created": documents_created,
+            "chunks_total": chunks_total,
+        },
+    )
+
+    return NovelRagInitResponse(
+        collection_id=collection_id,
+        novel_id=body.novel_id,
+        documents_created=documents_created,
+        chunks_total=chunks_total,
+        status="completed",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Effective KB — 三层 KB 合并接口（novel > role > persona）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class EffectiveKBItem(BaseModel):
+    collection_id: str
+    collection_name: str
+    bind_type: str
+    bind_id: str | None = None
+    priority: int  # 1=novel, 2=role, 3=persona, 4=global
+
+
+class EffectiveKBResponse(BaseModel):
+    persona_pack_id: str
+    role_id: str | None = None
+    novel_id: str | None = None
+    effective_collections: list[EffectiveKBItem] = Field(default_factory=list)
+
+
+@router.get("/effective-kb", response_model=EffectiveKBResponse)
+def get_effective_kb(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    persona_pack_id: str = Query(...),
+    novel_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> EffectiveKBResponse:
+    """计算 Persona 的生效 KB 列表（novel > role > persona > global）"""
+    persona = db.get(PersonaPack, persona_pack_id)
+    if persona is None:
+        raise HTTPException(status_code=404, detail="persona pack not found")
+
+    role_id = persona.role_id
+    seen_names: set[str] = set()
+    items: list[EffectiveKBItem] = []
+
+    def _collect(bt: KBBindType, bid: str | None, priority: int) -> None:
+        if bid is None and bt != KBBindType.global_:
+            return
+        stmt = select(RagCollection).where(
+            RagCollection.tenant_id == tenant_id,
+            RagCollection.project_id == project_id,
+            RagCollection.bind_type == bt,
+            RagCollection.deleted_at.is_(None),
+        )
+        if bt != KBBindType.global_:
+            stmt = stmt.where(RagCollection.bind_id == bid)
+        rows = db.execute(stmt.order_by(RagCollection.created_at.desc())).scalars().all()
+        for row in rows:
+            if row.name not in seen_names:
+                seen_names.add(row.name)
+                items.append(EffectiveKBItem(
+                    collection_id=row.id,
+                    collection_name=row.name,
+                    bind_type=row.bind_type.value if row.bind_type else "unknown",
+                    bind_id=row.bind_id,
+                    priority=priority,
+                ))
+
+    # 优先级 1: Novel KB（项目一致性第一）
+    if novel_id:
+        _collect(KBBindType.novel, novel_id, 1)
+    # 优先级 2: Role KB（职业专业知识）
+    if role_id:
+        _collect(KBBindType.role, role_id, 2)
+    # 优先级 3: Persona KB（个人风格）
+    _collect(KBBindType.persona, persona_pack_id, 3)
+    # 优先级 4: Global KB（全局知识）
+    _collect(KBBindType.global_, None, 4)
+
+    items.sort(key=lambda x: x.priority)
+
+    return EffectiveKBResponse(
+        persona_pack_id=persona_pack_id,
+        role_id=role_id,
+        novel_id=novel_id,
+        effective_collections=items,
     )

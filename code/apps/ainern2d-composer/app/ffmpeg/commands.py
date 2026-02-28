@@ -86,3 +86,56 @@ class FFmpegCommandBuilder:
         ]
         logger.debug("transcode: %s -> %s (codec=%s, quality=%s)", input_uri, output_uri, codec, quality)
         return cmd
+
+    def trim_media(
+        self,
+        input_uri: str,
+        output_uri: str,
+        start_sec: float,
+        end_sec: float
+    ) -> list[str]:
+        """Return ffmpeg args to trim a media file."""
+        duration = end_sec - start_sec
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-i", input_uri,
+            "-t", str(duration),
+            "-c", "copy",
+            output_uri
+        ]
+        logger.debug("trim_media: %s -> %s (start=%s, duration=%s)", input_uri, output_uri, start_sec, duration)
+        return cmd
+
+    def change_speed(
+        self,
+        input_uri: str,
+        output_uri: str,
+        speed_factor: float,
+        has_video: bool = True,
+        has_audio: bool = True
+    ) -> list[str]:
+        """Return ffmpeg args to change the speed of a media file."""
+        cmd = ["ffmpeg", "-y", "-i", input_uri]
+        
+        filter_complex = []
+        if has_video:
+            # setpts = 1/speed_factor * PTS
+            video_pts = 1.0 / speed_factor
+            filter_complex.append(f"[0:v]setpts={video_pts}*PTS[v]")
+            
+        if has_audio:
+            # atempo max is 2.0, min 0.5. For simpler implementation we just use one atempo.
+            # A robust implementation might chain atempos if speed > 2.0
+            filter_complex.append(f"[0:a]atempo={speed_factor}[a]")
+            
+        if filter_complex:
+            cmd.extend(["-filter_complex", ";".join(filter_complex)])
+            if has_video:
+                cmd.extend(["-map", "[v]"])
+            if has_audio:
+                cmd.extend(["-map", "[a]"])
+                
+        cmd.append(output_uri)
+        logger.debug("change_speed: %s -> %s (speed_factor=%s)", input_uri, output_uri, speed_factor)
+        return cmd

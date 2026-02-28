@@ -40,7 +40,7 @@
               <NInput v-model:value="novelSummary" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" />
             </NFormItem>
             <NSpace>
-              <NButton type="primary" @click="onCreateNovel">创建</NButton>
+              <NButton type="primary" @click="onCreateNovel">{{ t('common.create') }}</NButton>
               <NButton @click="showNovelCreate = false">收起</NButton>
             </NSpace>
           </div>
@@ -50,7 +50,7 @@
       </NGridItem>
 
       <NGridItem span="0:24 1200:18">
-        <NCard v-if="!selectedNovelId" title="章节管理" class="panel-card">
+        <NCard v-if="!selectedNovelId" :title="t('chapter.chapterMgmt')" class="panel-card">
           <NEmpty description="请先在左侧选择小说，再显示章节列表和编辑工作区。" />
         </NCard>
 
@@ -59,7 +59,7 @@
             <NSpace justify="space-between" align="center">
               <NInput v-model:value="chapterKeyword" placeholder="按章节名或编号过滤" />
               <NSpace>
-                <NButton @click="onListChapters">刷新</NButton>
+                <NButton @click="onListChapters">{{ t('common.refresh') }}</NButton>
                 <NButton type="primary" @click="showChapterCreate = !showChapterCreate">新建章节</NButton>
               </NSpace>
             </NSpace>
@@ -111,13 +111,13 @@
             </div>
 
             <NTabs type="line" animated>
-              <NTabPane name="preview" tab="预览结果 01~03">
+              <NTabPane name="preview" :tab="t('chapter.previewResult')">
                 <pre class="json-panel">{{ previewText }}</pre>
               </NTabPane>
-              <NTabPane name="revisions" tab="修订历史">
+              <NTabPane name="revisions" :tab="t('chapter.revisionHistory')">
                 <pre class="json-panel">{{ revisionsText }}</pre>
               </NTabPane>
-              <NTabPane name="assistant" tab="AI 扩写日志">
+              <NTabPane name="assistant" :tab="t('chapter.aiExpandLog')">
                 <pre class="json-panel">{{ assistText }}</pre>
               </NTabPane>
             </NTabs>
@@ -151,6 +151,8 @@ import {
   NTag,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type ChapterResponse,
@@ -170,6 +172,8 @@ interface SelectOption {
   label: string;
   value: string;
 }
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

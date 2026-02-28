@@ -120,6 +120,8 @@ import {
   NText,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type ProjectAssetItem,
@@ -141,6 +143,8 @@ interface DiffLine {
   kind: "context" | "add" | "remove";
   text: string;
 }
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

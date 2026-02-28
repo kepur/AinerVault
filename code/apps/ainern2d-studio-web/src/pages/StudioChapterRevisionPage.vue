@@ -127,6 +127,10 @@ interface Revision {
   previous_markdown_text: string
 }
 
+import { useI18n } from "@/composables/useI18n";
+
+const { t } = useI18n();
+
 const route = useRoute()
 const router = useRouter()
 

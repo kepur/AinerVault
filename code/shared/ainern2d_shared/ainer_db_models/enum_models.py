@@ -148,3 +148,27 @@ class RolloutStatus(str, enum.Enum):
 	canary = "canary"
 	full = "full"
 	rolled_back = "rolled_back"
+
+
+class KBBindType(str, enum.Enum):
+	role = "role"
+	persona = "persona"
+	novel = "novel"
+	global_ = "global"
+
+
+class KBPackStatus(str, enum.Enum):
+	draft = "draft"
+	embedded = "embedded"
+	published = "published"
+	deprecated = "deprecated"
+
+
+class KBSourceType(str, enum.Enum):
+	pdf = "pdf"
+	docx = "docx"
+	xlsx = "xlsx"
+	txt = "txt"
+	url = "url"
+	manual = "manual"
+

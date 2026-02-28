@@ -127,12 +127,13 @@ class TestProviderRegistry:
         reg = ProviderRegistry(db)
         assert reg.get_endpoint("nonexistent") is None
 
-    def test_check_health_returns_false_for_missing_provider(self):
+    def test_check_health_returns_error_for_missing_provider(self):
         from app.modules.model_router.provider_registry import ProviderRegistry
         db = _mock_db()
         db.get.return_value = None
         reg = ProviderRegistry(db)
-        assert reg.check_health("bad_profile") is False
+        res = reg.check_health("bad_profile")
+        assert res["status"] == "error"
 
     def test_check_health_probes_endpoint(self):
         from app.modules.model_router.provider_registry import ProviderRegistry
@@ -140,14 +141,18 @@ class TestProviderRegistry:
         db = _mock_db()
         profile = _make_profile("p1", provider_id="prov1")
         provider = _make_provider("prov1", endpoint="http://example.com")
-        db.get.side_effect = lambda model, id: profile if id == "p1" else provider
+        db.get.side_effect = lambda model, id: profile if id == "p1" else (provider if "prov" in id else None)
 
         reg = ProviderRegistry(db)
         with patch("app.modules.model_router.provider_registry.httpx.Client") as mock_client_cls:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
+            mock_resp.text = "OK"
             mock_client_cls.return_value.__enter__.return_value.head.return_value = mock_resp
-            assert reg.check_health("p1") is True
+            
+            res = reg.check_health("p1")
+            assert res["status"] == "success"
+            assert res["method"] == "HEAD"
 
 
 # ===========================================================================

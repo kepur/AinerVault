@@ -145,6 +145,8 @@ import {
   NSpace,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   type AssetBindingConsistencyItem,
@@ -154,6 +156,8 @@ import {
   markAssetAnchor,
   reviewPreviewVariant,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");

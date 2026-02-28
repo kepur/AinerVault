@@ -13,7 +13,7 @@
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="primary" @click="onReloadRuntimeData">刷新工作台数据</NButton>
+        <NButton type="primary" @click="onReloadRuntimeData">{{ t('common.refresh') }}</NButton>
       </NSpace>
     </NCard>
 
@@ -31,7 +31,7 @@
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="info" :disabled="!resolveRoleId || !resolveSkillId" @click="onResolveRuntime">解析运行时上下文</NButton>
+        <NButton type="info" :disabled="!resolveRoleId || !resolveSkillId" @click="onResolveRuntime">{{ t('common.details') }}</NButton>
       </NSpace>
       <pre class="json-panel">{{ resolveText }}</pre>
     </NCard>
@@ -50,7 +50,7 @@
         </NGridItem>
       </NGrid>
       <NSpace>
-        <NButton type="primary" :disabled="!resolveRoleId || !resolveSkillId" @click="onRunSkill">执行 Skill</NButton>
+        <NButton type="primary" :disabled="!resolveRoleId || !resolveSkillId" @click="onRunSkill">{{ t('common.submit') }}</NButton>
       </NSpace>
       <div>{{ runExecutionSummary }}</div>
       <NGrid :cols="2" :x-gap="8" :y-gap="8" responsive="screen" item-responsive>
@@ -122,6 +122,8 @@ import {
   NSpace,
   type DataTableColumns,
 } from "naive-ui";
+import { useI18n } from "@/composables/useI18n";
+
 
 import {
   bootstrapKnowledgePack,
@@ -137,6 +139,8 @@ import {
   type RoleProfileResponse,
   type SkillRegistryResponse,
 } from "@/api/product";
+
+const { t } = useI18n();
 
 const tenantId = ref("default");
 const projectId = ref("default");
