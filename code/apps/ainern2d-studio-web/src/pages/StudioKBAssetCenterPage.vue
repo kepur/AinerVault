@@ -303,9 +303,16 @@ const statusOptions = [
   { label: "已废弃", value: "deprecated" },
 ];
 const languageOptions = [
-  { label: "中文", value: "zh" },
-  { label: "English", value: "en" },
-  { label: "日本語", value: "ja" },
+  { label: "简体中文 (zh-CN)", value: "zh-CN" },
+  { label: "英语 (US/Global) / English", value: "en-US" },
+  { label: "日语 (ja-JP) / 日本語", value: "ja-JP" },
+  { label: "阿拉伯语 (ar-SA) / العربية", value: "ar-SA" },
+  { label: "西语 (es-MX) / Español", value: "es-MX" },
+  { label: "越南语 (vi-VN) / Tiếng Việt", value: "vi-VN" },
+  { label: "葡萄牙语 (pt-BR) / Português", value: "pt-BR" },
+  { label: "印地语 (hi-IN) / हिन्दी", value: "hi-IN" },
+  { label: "德语 (de-DE) / Deutsch", value: "de-DE" },
+  { label: "菲律宾语 (tl-PH) / Filipino", value: "tl-PH" },
 ];
 const culturePackOptions = [
   { label: "cn_wuxia", value: "cn_wuxia" },
