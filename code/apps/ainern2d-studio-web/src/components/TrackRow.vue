@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { useNleTimelineStore, type Clip } from '@/stores/useNleTimelineStore'
+import { useNleTimelineStore, type ClipDef } from '@/stores/useNleTimelineStore'
 
 const props = defineProps<{
   track: { id: string, name: string, type: string }
-  clips: Clip[]
+  clips: ClipDef[]
 }>()
 
 const store = useNleTimelineStore()
 
-const selectClip = (clip: Clip) => {
-  store.selectedClipId = clip.id
+const selectClip = (clip: ClipDef) => {
+  store.selectedClipId = clip.clip_id
 }
 </script>
 
@@ -18,18 +18,18 @@ const selectClip = (clip: Clip) => {
       <!-- 每个轨道上的独立剪辑块 -->
       <div 
         v-for="clip in clips" 
-        :key="clip.id"
+        :key="clip.clip_id"
         class="track-clip"
-        :class="store.selectedClipId === clip.id ? 'clip-selected' : ''"
+        :class="store.selectedClipId === clip.clip_id ? 'clip-selected' : ''"
         :style="{
           left: `${clip.start * store.zoomLevel}px`,
-          width: `${clip.duration * store.zoomLevel}px`
+          width: `${(clip.end - clip.start) * store.zoomLevel}px`
         }"
         @click.stop="selectClip(clip)"
       >
         <!-- 内容预览: 波形/文字/缩略图 -->
         <div class="clip-content">
-          {{ clip.content?.title || 'Unnamed Clip' }}
+          {{ clip.meta?.title || clip.meta?.text || 'Unnamed Clip' }}
         </div>
       </div>
   </div>

@@ -271,7 +271,13 @@ async function loadBaseData() {
     ]);
     providers.value = provRes;
     profiles.value = profRes;
-    workingRoutes.value = routerRes.routes || {};
+    const routes: Record<string, string> = {};
+    for (const [key, value] of Object.entries(routerRes.routes || {})) {
+      if (typeof value === "string" && value.trim()) {
+        routes[key] = value;
+      }
+    }
+    workingRoutes.value = routes;
   } catch (error) {
     console.error("Failed to load initial data", error);
   }

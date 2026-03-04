@@ -89,8 +89,14 @@ class DispatchHub:
             logger.warning("callback ignored: job %s not found", result.job_id)
             return
 
-        if result.status == "succeeded":
-            self._job_repo.update_status(result.job_id, JobStatus.succeeded)
+        status = str(result.status or "").strip().lower()
+        if status in {"success", "ok"}:
+            status = "succeeded"
+        elif status in {"error"}:
+            status = "failed"
+
+        if status == "succeeded":
+            self._job_repo.update_status(result.job_id, JobStatus.success)
             event_type = "job.succeeded"
         else:
             self._job_repo.update_status(result.job_id, JobStatus.failed)

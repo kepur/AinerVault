@@ -14,6 +14,8 @@ _LIPSYNC_DEFAULTS: dict[str, Any] = {
     "alignment_mode": "auto",
     "face_detect": True,
     "output_format": "mp4",
+    "backend": "auto",
+    "pads": [0, 10, 0, 0],
 }
 
 
@@ -31,6 +33,8 @@ class LipsyncWorkerAdapter:
             "alignment_mode": payload.get("alignment_mode", _LIPSYNC_DEFAULTS["alignment_mode"]),
             "face_detect": payload.get("face_detect", _LIPSYNC_DEFAULTS["face_detect"]),
             "output_format": payload.get("output_format", _LIPSYNC_DEFAULTS["output_format"]),
+            "backend": payload.get("backend", _LIPSYNC_DEFAULTS["backend"]),
+            "pads": payload.get("pads", _LIPSYNC_DEFAULTS["pads"]),
             "face_region": payload.get("face_region"),
         }
         if not dispatch["audio_uri"] or not dispatch["video_uri"]:

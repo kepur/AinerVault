@@ -14,6 +14,8 @@ import StudioProviderRouterPage from "@/pages/StudioProviderRouterPage.vue";
 import StudioRoleConfigPage from "@/pages/StudioRoleConfigPage.vue";
 import StudioRoleStudioPage from "@/pages/StudioRoleStudioPage.vue";
 import StudioRunCenterPage from "@/pages/StudioRunCenterPage.vue";
+import StudioProductionBoardPage from "@/pages/StudioProductionBoardPage.vue";
+import StudioOpsBridgePage from "@/pages/StudioOpsBridgePage.vue";
 
 import VoiceBindingPage from "@/pages/VoiceBindingPage.vue";
 import StudioAuditLogsPage from "@/pages/StudioAuditLogsPage.vue";
@@ -32,6 +34,7 @@ const StudioModelsAndProvidersPage = () => import("../pages/StudioModelsAndProvi
 const StudioNotificationSettingsPage = () => import("../pages/StudioNotificationSettingsPage.vue");
 const StudioNovelDetailPage = () => import("@/pages/StudioNovelDetailPage.vue");
 const StudioTranslationProjectPage = () => import("@/pages/StudioTranslationProjectPage.vue");
+const StudioTranslationsPage = () => import("@/pages/StudioTranslationsPage.vue");
 const StudioNleTimelinePage = () => import("@/pages/StudioNleTimelinePage.vue");
 
 const router = createRouter({
@@ -92,6 +95,16 @@ const router = createRouter({
       },
     },
     {
+      path: "/studio/production",
+      name: "studio-production-board",
+      component: StudioProductionBoardPage,
+      meta: {
+        requiresAuth: true,
+        title: "Production Board",
+        section: "studio",
+      },
+    },
+    {
       path: "/studio/runs",
       name: "studio-runs",
       component: StudioRunCenterPage,
@@ -118,6 +131,16 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "模型档案与路由映射",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/ops-bridge",
+      name: "studio-ops-bridge",
+      component: StudioOpsBridgePage,
+      meta: {
+        requiresAuth: true,
+        title: "开放接口接收 (Ops Bridge)",
         section: "studio",
       },
     },
@@ -296,6 +319,16 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "小说详情",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/translations",
+      name: "studio-translations",
+      component: StudioTranslationsPage,
+      meta: {
+        requiresAuth: true,
+        title: "转译工程",
         section: "studio",
       },
     },

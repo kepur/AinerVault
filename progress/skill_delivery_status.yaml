@@ -522,7 +522,13 @@ skills:
       - "code/apps/ainern2d-studio-web/src/api/product.ts + code/apps/ainern2d-studio-web/src/pages/StudioRunCenterPage.vue (Run 详情 + Prompt 回放 + Policy 回放可视化)"
       - "code/apps/ainern2d-studio-api/app/api/v1/tasks.py (GET /runs/{run_id}/dag + DAG 可视化返回节点/边/状态)"
       - "code/apps/ainern2d-studio-api/app/api/v1/tasks.py (POST /runs/{run_id}/rerun-stage + 阶段级重跑请求 + TG 通知)"
-    next_action: []
+      - "code/apps/ainern2d-studio-api/app/api/v1/translation.py (POST /translations/projects/{id}/run-gate + 章节级依赖检查: script_doc/translation/entity_map/world_model/plans)"
+      - "code/apps/ainern2d-studio-api/app/api/v1/translation.py (POST /translations/projects/{id}/create-run + 复用 create_task 从转译工程一键创建 Run)"
+      - "code/apps/ainern2d-studio-web/src/pages/StudioTranslationProjectPage.vue + src/api/product.ts (Run Gate + 从转译工程创建 Run 前端接入，自动回填 run_id 到 Timeline 加载器)"
+    next_action:
+      - "P1: 补充 /runs/{run_id}/nodes/{node_id} 详情接口（inputs/outputs/logs/cost）"
+      - "P1: 为 run-gate 返回 disabled_reason 细分枚举（provider_not_configured/dependency_not_ready 等）"
+      - "P2: 建立 TrackRegistry/TrackInstance/Clip 持久化与 /runs/{run_id}/tracks API"
 
   - skill_id: "SKILL_29"
     name: "Asset Library by Project"

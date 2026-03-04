@@ -25,6 +25,7 @@
 18) `code/docs/architecture/agent-coding-framework-guideline.md` (Agent编码框架与代码生成模板指南)
 19) `README_21_22_INTEGRATION_GUIDE.md`（01~22 主链接入权威）
 20) **实施前必须读取目标 SKILL 对应根目录规格**：`SKILL_XX_*.md`
+21) `code/docs/runbooks/agent-modular-deployment-playbook-zh.md`（模块化拆分部署权威）
 
 ## 2. 核心约束（必须遵守）
 - 主运行对象：`run/job/stage/event/artifact`。
@@ -114,3 +115,15 @@
 - 旧文档若出现 `skill.xx.completed` 事件命名，以 `ainer_event_types.md` 和 `ainer_contracts.md` 为准。
 - 新增/删除文档后，必须执行一次全仓引用扫描，确保无悬挂引用。
 - 进度权威以 `progress/skill_delivery_status.yaml` 为准，`SKILL_IMPLEMENTATION_PROGRESS.md` 作为历史明细参考。
+
+
+## 进程管理
+小说--> 场景（Scene）--> 镜头（Shot）--> 画面元素（Asset/Entity）--> 声音（Audio）对白
+
+
+- 声音: 包含对白、旁白、音效、背景音乐、环境声等所有音频元素
+可能需要每个时间段请求不同的声音元素组合，或者同一时间段内不同版本的声音元素（如不同语言的对白）。因此，声音元素需要支持多版本和时间段的灵活组合 每个文章可能有多段的bgm 多段的sfx 多段的ambience 每个场景可能有多段的bgm 多段的sfx 多段的ambience 每个镜头可能有多段的bgm 多段的sfx 多段的ambience 每个对白可能有多语言版本
+
+
+- 场景: 包含一个或多个镜头的故事单元，具有相
+- 分镜: 场景的视觉规划，包含镜头的时间线和构图信息

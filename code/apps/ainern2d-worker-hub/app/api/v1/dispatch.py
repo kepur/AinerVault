@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
@@ -43,6 +44,17 @@ class DispatchResponse(BaseSchema):
     status: str
 
 
+def _infer_job_type(payload: dict) -> JobType:
+    raw = str(payload.get("job_type", "")).strip()
+    if not raw:
+        return JobType.render_video
+    try:
+        return JobType(raw)
+    except Exception:
+        _logger.warning("unknown job_type=%s; fallback render_video", raw)
+        return JobType.render_video
+
+
 def _publish_status(event: EventEnvelope) -> None:
     try:
         publisher = RabbitMQPublisher(settings.rabbitmq_url)
@@ -60,27 +72,50 @@ def handle_job_dispatch(payload: dict) -> None:
     job_id = event.job_id or f"job_{uuid4().hex}"
     now = datetime.now(timezone.utc)
     worker_type = str(event.payload.get("worker_type", "worker-video"))
+    mock_auto_succeed = os.getenv("AINER_WORKER_HUB_MOCK_AUTOSUCCEED", "1") == "1"
 
     db = SessionLocal()
     try:
-        job = Job(
-            id=job_id,
-            tenant_id=event.tenant_id,
-            project_id=event.project_id,
-            trace_id=event.trace_id,
-            correlation_id=event.correlation_id,
-            idempotency_key=event.idempotency_key,
-            run_id=event.run_id,
-            job_type=JobType.render_video,
-            stage=RenderStage.execute,
-            status=JobStatus.running,
-            priority=0,
-            payload_json=event.payload,
-            locked_by=f"hub-{uuid4().hex[:8]}",
-            locked_at=now,
-        )
         job_repo = JobRepository(db)
-        job_repo.create(job)
+        job = job_repo.get(job_id)
+        if job is None:
+            job = Job(
+                id=job_id,
+                tenant_id=event.tenant_id,
+                project_id=event.project_id,
+                trace_id=event.trace_id,
+                correlation_id=event.correlation_id,
+                idempotency_key=event.idempotency_key,
+                run_id=event.run_id,
+                job_type=_infer_job_type(event.payload),
+                stage=RenderStage.execute,
+                status=JobStatus.running,
+                priority=0,
+                payload_json=event.payload,
+                locked_by=f"hub-{uuid4().hex[:8]}",
+                locked_at=now,
+            )
+            job_repo.create(job)
+        else:
+            # Prefer event payload routing when present.
+            merged_payload = dict(job.payload_json or {})
+            merged_payload.update(event.payload or {})
+            job.payload_json = merged_payload
+            worker_type = str(merged_payload.get("worker_type") or worker_type)
+            job.status = JobStatus.running
+            job.locked_by = f"hub-{uuid4().hex[:8]}"
+            job.locked_at = now
+
+        DISPATCH_JOBS[job_id] = {
+            "tenant_id": event.tenant_id,
+            "project_id": event.project_id,
+            "trace_id": event.trace_id,
+            "correlation_id": event.correlation_id,
+            "idempotency_key": event.idempotency_key,
+            "run_id": event.run_id,
+            "worker_type": worker_type,
+            "updated_at": now.isoformat(),
+        }
 
         claimed_event = EventEnvelope(
             event_type="job.claimed",
@@ -96,6 +131,10 @@ def handle_job_dispatch(payload: dict) -> None:
             payload={"worker_type": worker_type, "queue_status": "claimed"},
         )
         _publish_status(claimed_event)
+
+        if not mock_auto_succeed:
+            db.commit()
+            return
 
         # Mock: auto-succeed for dev
         succeeded_event = EventEnvelope(
@@ -142,7 +181,7 @@ def dispatch(body: DispatchRequest, db: Session = Depends(get_db)) -> DispatchRe
         correlation_id=body.correlation_id,
         idempotency_key=body.idempotency_key,
         run_id=body.run_id,
-        job_type=JobType.render_video,
+        job_type=_infer_job_type(body.payload),
         stage=RenderStage.execute,
         status=JobStatus.enqueued,
         priority=0,

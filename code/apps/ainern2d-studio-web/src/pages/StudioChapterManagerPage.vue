@@ -93,10 +93,16 @@
             </NGrid>
 
             <NSpace>
+              <NSelect
+                v-model:value="expandModelProviderId"
+                :options="expandModelProviderOptions"
+                placeholder="选择扩写模型 Provider"
+                style="width: 280px"
+              />
               <NButton type="warning" @click="onUpdateChapter">保存章节</NButton>
               <NButton type="info" @click="onPreview(selectedChapterId)">预览 01~03</NButton>
               <NButton @click="onLoadRevisions(selectedChapterId)">修订历史</NButton>
-              <NButton type="primary" @click="onAssistExpandChapter">一键 AI 扩写剧情</NButton>
+              <NButton type="primary" :disabled="!expandModelProviderId" @click="onAssistExpandChapter">一键 AI 扩写剧情</NButton>
             </NSpace>
 
             <div class="editor-split">
@@ -161,6 +167,7 @@ import {
   createChapter,
   createNovel,
   getLanguageSettings,
+  listAvailableModels,
   listChapterRevisions,
   listChapters,
   listNovels,
@@ -211,6 +218,8 @@ const editChapterMarkdown = ref("");
 const previewText = ref("{}");
 const revisionsText = ref("[]");
 const assistText = ref("{}");
+const expandModelProviderId = ref("");
+const expandModelProviderOptions = ref<SelectOption[]>([]);
 
 const message = ref("");
 const errorMessage = ref("");
@@ -386,6 +395,21 @@ async function onLoadLanguagePolicy(): Promise<void> {
   }
 }
 
+async function onLoadExpandModelProviders(): Promise<void> {
+  try {
+    const models = await listAvailableModels(tenantId.value, projectId.value);
+    expandModelProviderOptions.value = models.map((item) => ({
+      label: `${item.name} (${item.id})`,
+      value: item.id,
+    }));
+    if (!expandModelProviderId.value && expandModelProviderOptions.value.length > 0) {
+      expandModelProviderId.value = expandModelProviderOptions.value[0].value;
+    }
+  } catch (error) {
+    errorMessage.value = `load model providers failed: ${stringifyError(error)}`;
+  }
+}
+
 async function onCreateNovel(): Promise<void> {
   clearNotice();
   try {
@@ -504,10 +528,15 @@ async function onAssistExpandChapter(): Promise<void> {
     errorMessage.value = "select chapter first";
     return;
   }
+  if (!expandModelProviderId.value) {
+    errorMessage.value = "select model provider first";
+    return;
+  }
   try {
     const expanded = await assistExpandChapter(selectedChapterId.value, {
       tenant_id: tenantId.value,
       project_id: projectId.value,
+      model_provider_id: expandModelProviderId.value,
       instruction: "扩展冲突与反转，增加镜头化动作细节和角色心理层次",
       style_hint: "电影化叙事，段落清晰",
       target_language: editChapterLang.value,
@@ -552,6 +581,7 @@ async function onLoadRevisions(chapterId = selectedChapterId.value): Promise<voi
 
 onMounted(() => {
   void onLoadLanguagePolicy();
+  void onLoadExpandModelProviders();
   void onListNovels();
 });
 </script>

@@ -21,13 +21,17 @@ _logger = get_logger("worker-hub-callback")
 def worker_result_callback(result: WorkerResult) -> dict[str, object]:
 	now = datetime.now(timezone.utc)
 	record = DISPATCH_JOBS.get(result.job_id, {})
-	status = result.status.lower()
-
+	status = str(result.status or "").strip().lower()
+	if status in {"success", "ok"}:
+		status = "succeeded"
+	elif status in {"error"}:
+		status = "failed"
 	event_type = "job.succeeded" if status == "succeeded" else "job.failed"
 	payload: dict[str, object] = {
-		"worker_type": result.worker_type,
+		"worker_type": result.worker_type or str(record.get("worker_type", "worker-unknown")),
 		"artifact_uri": result.artifact_uri,
 		"metrics": result.metrics,
+		"output": result.output,
 	}
 
 	if event_type == "job.failed":
@@ -69,4 +73,3 @@ def worker_result_callback(result: WorkerResult) -> dict[str, object]:
 	except Exception as exc:
 		_logger.warning("publish callback job.status failed reason={}", str(exc))
 	return {"status": "accepted", "event_type": event_type}
-

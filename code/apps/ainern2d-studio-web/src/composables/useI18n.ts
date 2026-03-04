@@ -206,6 +206,65 @@ const translations: Record<string, Record<string, string>> = {
     'auth.newUser': { 'zh-CN': '新增用户', 'en-US': 'New User', 'ja-JP': '新規ユーザー', 'es-ES': 'Nuevo Usuario', 'ar-SA': 'مستخدم جديد' },
     'auth.editUser': { 'zh-CN': '编辑用户', 'en-US': 'Edit User', 'ja-JP': 'ユーザー編集', 'es-ES': 'Editar Usuario', 'ar-SA': 'تعديل المستخدم' },
     'auth.permRules': { 'zh-CN': '路由权限规则', 'en-US': 'Route Permission Rules', 'ja-JP': 'ルートパーミッションルール', 'es-ES': 'Reglas de Permisos de Rutas', 'ar-SA': 'قواعد أذونات التوجيه' },
+
+    // ── Script Workflow ──────────────────────────────────────────────────────────
+    'script.title':         { 'zh-CN': '剧本转换',     'en-US': 'Script Conversion' },
+    'script.formatDetect':  { 'zh-CN': '格式检测',     'en-US': 'Format Detect' },
+    'script.novelToScript': { 'zh-CN': '剧本转换',     'en-US': 'Novel→Script' },
+    'script.normalize':     { 'zh-CN': '剧本标准化',   'en-US': 'Script Normalize' },
+    'script.granularity':   { 'zh-CN': '切分粒度',     'en-US': 'Granularity' },
+    'script.coarse':        { 'zh-CN': '粗粒度',       'en-US': 'Coarse' },
+    'script.normal':        { 'zh-CN': '普通',         'en-US': 'Normal' },
+    'script.fine':          { 'zh-CN': '细粒度',       'en-US': 'Fine' },
+    'script.scenes':        { 'zh-CN': '场景列表',     'en-US': 'Scenes' },
+
+    // ── Script (extended) ────────────────────────────────────────────────────────
+    'script.loadExisting':  { 'zh-CN': '加载已有剧本', 'en-US': 'Load Existing' },
+    'script.regenerate':    { 'zh-CN': '重新生成（消耗 Token）', 'en-US': 'Regenerate (Uses Token)' },
+    'script.version':       { 'zh-CN': '版本',         'en-US': 'Version' },
+    'script.cachedHit':     { 'zh-CN': '命中缓存',     'en-US': 'Cache Hit' },
+
+    // ── World Model ──────────────────────────────────────────────────────────────
+    'world.title':          { 'zh-CN': '世界模型抽离', 'en-US': 'World Model Extract' },
+    'world.extractionLevel':{ 'zh-CN': '提取级别',     'en-US': 'Extraction Level' },
+    'world.characters':     { 'zh-CN': '人物',         'en-US': 'Characters' },
+    'world.locations':      { 'zh-CN': '场景',         'en-US': 'Locations' },
+    'world.props':          { 'zh-CN': '道具',         'en-US': 'Props' },
+    'world.beats':          { 'zh-CN': '剧情节拍',     'en-US': 'Story Beats' },
+    'world.styleHints':     { 'zh-CN': '风格提示',     'en-US': 'Style Hints' },
+    'world.extract':        { 'zh-CN': '开始抽离',     'en-US': 'Extract' },
+    'world.regenerate':     { 'zh-CN': '重新抽离（消耗 Token）', 'en-US': 'Regenerate (Uses Token)' },
+    'world.loadExisting':   { 'zh-CN': '加载已有世界模型', 'en-US': 'Load Existing' },
+    'world.writeToMapping': { 'zh-CN': '写入实体对应表','en-US': 'Write to Entity Mapping' },
+
+    // ── Entity Mapping ───────────────────────────────────────────────────────────
+    'entity.mappingTitle':  { 'zh-CN': '实体对应表',   'en-US': 'Entity Mapping' },
+    'entity.canonicalName': { 'zh-CN': '规范名',       'en-US': 'Canonical Name' },
+    'entity.status':        { 'zh-CN': '一致性状态',   'en-US': 'Continuity Status' },
+    'entity.merge':         { 'zh-CN': '合并',         'en-US': 'Merge' },
+    'entity.translate':     { 'zh-CN': '补译名（本土化）',       'en-US': 'Localized Name Fill' },
+    'entity.aliases':       { 'zh-CN': '别名',         'en-US': 'Aliases' },
+    'entity.translations':  { 'zh-CN': '多语言译名',   'en-US': 'Translations' },
+    'entity.evidence':      { 'zh-CN': '原文证据',     'en-US': 'Evidence' },
+    'entity.build':         { 'zh-CN': '生成实体对应表','en-US': 'Build Mapping' },
+    'entity.locked':        { 'zh-CN': '已锁定',       'en-US': 'Locked' },
+    'entity.namingPolicy':  { 'zh-CN': '命名策略',     'en-US': 'Naming Policy' },
+    'entity.rationale':     { 'zh-CN': '命名理由',     'en-US': 'Rationale' },
+
+    // ── Name Localization ─────────────────────────────────────────────────────────
+    'entity.nameLocalization': { 'zh-CN': '姓名本地化建议', 'en-US': 'Name Localization' },
+    'entity.suggestNames':     { 'zh-CN': 'AI 建议命名（消耗 Token）', 'en-US': 'AI Suggest Names (Uses Token)' },
+    'entity.cultureProfile':   { 'zh-CN': '文化背景',     'en-US': 'Culture Profile' },
+    'entity.applyAndLock':     { 'zh-CN': '应用并锁定',   'en-US': 'Apply & Lock' },
+
+    // ── SkillRun ──────────────────────────────────────────────────────────────────
+    'run.title':            { 'zh-CN': 'LLM 运行记录', 'en-US': 'Skill Runs' },
+    'run.status':           { 'zh-CN': '状态',          'en-US': 'Status' },
+    'run.skillId':          { 'zh-CN': '技能ID',         'en-US': 'Skill ID' },
+    'run.inputHash':        { 'zh-CN': '输入哈希',       'en-US': 'Input Hash' },
+    'run.tokenUsage':       { 'zh-CN': 'Token 用量',     'en-US': 'Token Usage' },
+    'run.costEstimate':     { 'zh-CN': '费用估算',       'en-US': 'Cost Estimate' },
+    'run.cached':           { 'zh-CN': '命中缓存',       'en-US': 'Cache Hit' },
 }
 
 

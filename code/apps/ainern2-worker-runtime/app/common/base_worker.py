@@ -36,6 +36,32 @@ class BaseWorker(ABC):
     # ------------------------------------------------------------------
     async def report_result(self, result: WorkerResult) -> None:
         """Publish a worker result payload to the hub callback stream."""
+        # Backward-compatible normalization:
+        # - legacy workers return status=success/error
+        # - hub expects succeeded/failed
+        status = (result.status or "").strip().lower()
+        if status in {"success", "ok"}:
+            result.status = "succeeded"
+        elif status in {"error", "failed"}:
+            result.status = "failed"
+
+        if not result.worker_type:
+            result.worker_type = self.worker_type
+
+        if not result.artifact_uri:
+            for key in ("video_uri", "audio_uri", "artifact_uri", "uri"):
+                val = result.output.get(key)
+                if isinstance(val, str) and val:
+                    result.artifact_uri = val
+                    break
+
+        if result.output:
+            merged_metrics = dict(result.metrics or {})
+            for key in ("latency_ms", "cost_estimate", "char_count", "backend", "model_id"):
+                if key in result.output and key not in merged_metrics:
+                    merged_metrics[key] = result.output[key]
+            result.metrics = merged_metrics
+
         self._publisher.publish(
             SYSTEM_TOPICS.WORKER_DETAIL,
             result.model_dump(mode="json"),

@@ -32,6 +32,8 @@ from app.api.v1.timesline import router as timeline_router
 from app.api.v1.translation import router as translation_router
 from app.api.v1.kb_assets import router as kb_assets_router
 from app.api.v1.nle_projects import router as nle_projects_router
+from app.api.v1.run_tracks import router as run_tracks_router
+from app.api.v1.ops_bridge import router as ops_bridge_router
 from app.security.auth_token import decode_access_token, extract_bearer_token
 from ainern2d_shared.db.session import SessionLocal
 
@@ -55,12 +57,15 @@ app.include_router(preview_router)
 app.include_router(translation_router)
 app.include_router(kb_assets_router)
 app.include_router(nle_projects_router)
+app.include_router(run_tracks_router)
+app.include_router(ops_bridge_router)
 
 _PUBLIC_PATHS = {
 	"/healthz",
 	"/api/v1/auth/login",
 	"/api/v1/auth/register",
 	"/api/v1/init/bootstrap-all",
+	"/api/v1/ops-bridge/report",
 }
 
 _PUBLIC_PREFIXES = (
@@ -75,6 +80,7 @@ _ADMIN_PREFIXES = (
 	"/api/v1/auth/audit/",
 	"/api/v1/auth/users",
 	"/api/v1/init/",
+	"/api/v1/ops-bridge/",
 )
 
 _ADMIN_ROUTES = {

@@ -229,7 +229,7 @@ const aclColumns: DataTableColumns<ProjectAclItem> = [
   {
     title: "Role",
     key: "role",
-    render: (row: UserListItem) => h(NTag, { type: "info", bordered: false }, { default: () => row.role }),
+    render: (row: ProjectAclItem) => h(NTag, { type: "info", bordered: false }, { default: () => row.role }),
   },
 ];
 

@@ -9,18 +9,110 @@
             <NButton size="small" type="primary" secondary @click="onAddNewProvider">{{ t('common.create') }}</NButton>
           </template>
           <NInput v-model:value="providerKeyword" placeholder="过滤厂商..." clearable style="margin-bottom: 12px" />
-          <NList hoverable clickable>
-            <NListItem
-              v-for="prov in filteredProviders"
-              :key="prov.id"
-              class="provider-item"
-              :class="{ 'active-item': selectedProviderId === prov.id }"
-              @click="onSelectProvider(prov)"
-            >
-              <NThing :title="prov.name" :description="prov.endpoint" />
-            </NListItem>
-            <NEmpty v-if="filteredProviders.length === 0" :description="t('common.noData')" style="margin-top: 24px" />
-          </NList>
+          <div class="provider-groups">
+            <div class="provider-group">
+              <div class="provider-group-title">
+                <NTag size="small" type="info" :bordered="false">Ops上报模型</NTag>
+                <NText depth="3">{{ opsFilteredProviders.length }}</NText>
+              </div>
+              <NList hoverable clickable>
+                <NListItem
+                  v-for="prov in opsFilteredProviders"
+                  :key="prov.id"
+                  class="provider-item"
+                  :class="{ 'active-item': selectedProviderId === prov.id }"
+                  @click="onSelectProvider(prov)"
+                >
+                  <div class="provider-row">
+                    <div class="provider-row-main">
+                      <NThing :title="prov.name" :description="prov.endpoint || undefined" />
+                      <NSpace :size="6" style="margin-top: 6px;">
+                        <NTag size="small" type="info" :bordered="false">ops上报</NTag>
+                        <NTag
+                          v-if="opsReportForProvider(prov.id)"
+                          size="small"
+                          :type="opsReportForProvider(prov.id)?.mapping_status === 'mapped' ? 'success' : 'warning'"
+                          :bordered="false"
+                        >
+                          {{ `映射:${opsReportForProvider(prov.id)?.mapping_status}` }}
+                        </NTag>
+                        <NTag
+                          v-if="opsReportForProvider(prov.id)"
+                          size="small"
+                          :type="opsReportForProvider(prov.id)?.connectivity_status === 'connected' ? 'success' : 'error'"
+                          :bordered="false"
+                        >
+                          {{ `联通:${opsReportForProvider(prov.id)?.connectivity_label || '未测试'}` }}
+                        </NTag>
+                      </NSpace>
+                    </div>
+                    <NSpace :size="6">
+                      <NButton
+                        size="tiny"
+                        secondary
+                        :loading="Boolean(opsAutoBinding[prov.id])"
+                        @click.stop="onRowAutoBindProvider(prov.id)"
+                      >
+                        AI自动接入
+                      </NButton>
+                      <NButton
+                        size="tiny"
+                        :loading="Boolean(opsTesting[prov.id])"
+                        @click.stop="onRowTestProvider(prov.id)"
+                      >
+                        测试
+                      </NButton>
+                    </NSpace>
+                  </div>
+                </NListItem>
+                <NEmpty v-if="opsFilteredProviders.length === 0" description="暂无 Ops 上报模型" style="margin-top: 12px" />
+              </NList>
+            </div>
+
+            <div class="provider-group">
+              <div class="provider-group-title">
+                <NTag size="small" :bordered="false">手动接入</NTag>
+                <NText depth="3">{{ manualFilteredProviders.length }}</NText>
+              </div>
+              <NList hoverable clickable>
+                <NListItem
+                  v-for="prov in manualFilteredProviders"
+                  :key="prov.id"
+                  class="provider-item"
+                  :class="{ 'active-item': selectedProviderId === prov.id }"
+                  @click="onSelectProvider(prov)"
+                >
+                  <div class="provider-row">
+                    <div class="provider-row-main">
+                      <NThing :title="prov.name" :description="prov.endpoint || undefined" />
+                      <NSpace :size="6" style="margin-top: 6px;">
+                        <NTag size="small" type="default" :bordered="false">手动接入</NTag>
+                      </NSpace>
+                    </div>
+                    <NSpace :size="6">
+                      <NButton
+                        size="tiny"
+                        secondary
+                        :loading="Boolean(opsAutoBinding[prov.id])"
+                        @click.stop="onRowAutoBindProvider(prov.id)"
+                      >
+                        AI自动接入
+                      </NButton>
+                      <NButton
+                        size="tiny"
+                        :loading="Boolean(opsTesting[prov.id])"
+                        @click.stop="onRowTestProvider(prov.id)"
+                      >
+                        测试
+                      </NButton>
+                    </NSpace>
+                  </div>
+                </NListItem>
+                <NEmpty v-if="manualFilteredProviders.length === 0" description="暂无手动接入模型" style="margin-top: 12px" />
+              </NList>
+            </div>
+          </div>
+          <NEmpty v-if="filteredProviders.length === 0" :description="t('common.noData')" style="margin-top: 12px" />
         </NCard>
       </div>
 
@@ -176,6 +268,7 @@ import {
   NTabPane,
   NTabs,
   NTag,
+  NText,
   NThing,
   type DataTableColumns,
 } from "naive-ui";
@@ -183,10 +276,14 @@ import { useI18n } from "@/composables/useI18n";
 
 
 import {
+  autoBindOpsProvider,
   deleteProvider,
   listProviders,
+  listOpsProviders,
+  testOpsProvider,
   testProviderConnection,
   upsertProvider,
+  type OpsProviderRow,
   type ProviderConnectionTestResponse,
   type ProviderResponse,
 } from "@/api/product";
@@ -198,6 +295,7 @@ const projectId = ref("default");
 
 const providerKeyword = ref("");
 const providers = ref<ProviderResponse[]>([]);
+const opsReports = ref<OpsProviderRow[]>([]);
 const selectedProviderId = ref("");
 const isAddingNew = ref(false);
 
@@ -222,6 +320,8 @@ const message = ref("");
 const errorMessage = ref("");
 const isSaving = ref(false);
 const isProbing = ref(false);
+const opsAutoBinding = ref<Record<string, boolean>>({});
+const opsTesting = ref<Record<string, boolean>>({});
 
 const authModeOptions = [
   { label: "API Key (Header)", value: "api_key" },
@@ -247,6 +347,26 @@ const filteredProviders = computed(() =>
   })
 );
 
+const opsFilteredProviders = computed(() =>
+  filteredProviders.value.filter((item) => Boolean(opsReportForProvider(item.id)))
+);
+
+const manualFilteredProviders = computed(() =>
+  filteredProviders.value.filter((item) => !opsReportForProvider(item.id))
+);
+
+const latestOpsByProvider = computed<Record<string, OpsProviderRow>>(() => {
+  const out: Record<string, OpsProviderRow> = {};
+  for (const row of opsReports.value) {
+    const providerId = row.matched_provider_id || "";
+    if (!providerId) continue;
+    if (!out[providerId]) {
+      out[providerId] = row;
+    }
+  }
+  return out;
+});
+
 const probeColumns: DataTableColumns<ProviderProbeRow> = [
   { title: "Status", key: "connected", render: (row: ProviderProbeRow) => h(NTag, { type: row.connected ? 'success' : 'error', size: 'small' }, { default: () => row.connected ? 'OK' : 'FAIL' }) },
   { title: "HTTP Code", key: "status_code", render: (row: ProviderProbeRow) => String(row.status_code ?? "-") },
@@ -267,10 +387,22 @@ function clearNotice(): void {
 async function onLoadProviders(): Promise<void> {
   clearNotice();
   try {
-    providers.value = await listProviders(tenantId.value, projectId.value);
+    const [providerList, reportList] = await Promise.all([
+      listProviders(tenantId.value, projectId.value),
+      listOpsProviders({
+        tenant_id: tenantId.value,
+        project_id: projectId.value,
+      }),
+    ]);
+    providers.value = providerList;
+    opsReports.value = reportList.items;
   } catch (error) {
     errorMessage.value = `加载服务商失败: ${stringifyError(error)}`;
   }
+}
+
+function opsReportForProvider(providerId: string): OpsProviderRow | null {
+  return latestOpsByProvider.value[providerId] || null;
 }
 
 function onAddNewProvider() {
@@ -417,6 +549,88 @@ async function onTestProvider(): Promise<void> {
   }
 }
 
+async function onOpsAutoBindProvider(providerId: string): Promise<void> {
+  const row = opsReportForProvider(providerId);
+  if (!row) {
+    errorMessage.value = "该模型没有Ops上报记录，无法自动接入";
+    return;
+  }
+  clearNotice();
+  opsAutoBinding.value = { ...opsAutoBinding.value, [providerId]: true };
+  try {
+    await autoBindOpsProvider(row.report_id);
+    await onLoadProviders();
+    message.value = `AI自动接入完成: ${row.provider_name}`;
+  } catch (error) {
+    errorMessage.value = `AI自动接入失败: ${stringifyError(error)}`;
+  } finally {
+    opsAutoBinding.value = { ...opsAutoBinding.value, [providerId]: false };
+  }
+}
+
+async function onOpsTestProvider(providerId: string): Promise<void> {
+  const row = opsReportForProvider(providerId);
+  if (!row) {
+    errorMessage.value = "该模型没有Ops上报记录，无法执行Ops测试";
+    return;
+  }
+  clearNotice();
+  opsTesting.value = { ...opsTesting.value, [providerId]: true };
+  try {
+    const resp = await testOpsProvider(row.report_id);
+    await onLoadProviders();
+    if (resp.ok) {
+      message.value = `Ops联通成功: ${resp.latency_ms ?? "-"}ms`;
+    } else {
+      errorMessage.value = `Ops联通失败: ${resp.detail}`;
+    }
+  } catch (error) {
+    errorMessage.value = `Ops测试失败: ${stringifyError(error)}`;
+  } finally {
+    opsTesting.value = { ...opsTesting.value, [providerId]: false };
+  }
+}
+
+async function onQuickProviderTest(providerId: string): Promise<void> {
+  clearNotice();
+  opsTesting.value = { ...opsTesting.value, [providerId]: true };
+  try {
+    const response = await testProviderConnection(providerId, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      probe_path: providerProbePath.value || "/models",
+      timeout_ms: 10000,
+    });
+    if (response.connected) {
+      message.value = `联通成功: ${response.provider_name} (${response.latency_ms ?? "-"}ms)`;
+    } else {
+      errorMessage.value = `联通失败: ${response.message}`;
+    }
+  } catch (error) {
+    errorMessage.value = `联通测试失败: ${stringifyError(error)}`;
+  } finally {
+    opsTesting.value = { ...opsTesting.value, [providerId]: false };
+  }
+}
+
+async function onRowAutoBindProvider(providerId: string): Promise<void> {
+  const row = opsReportForProvider(providerId);
+  if (!row) {
+    errorMessage.value = "该模型是手动接入，需先有 Ops 上报后才能执行 AI 自动接入";
+    return;
+  }
+  await onOpsAutoBindProvider(providerId);
+}
+
+async function onRowTestProvider(providerId: string): Promise<void> {
+  const row = opsReportForProvider(providerId);
+  if (row) {
+    await onOpsTestProvider(providerId);
+    return;
+  }
+  await onQuickProviderTest(providerId);
+}
+
 onMounted(() => {
   void onLoadProviders();
 });
@@ -441,6 +655,38 @@ onMounted(() => {
 
 .provider-list-card {
   min-height: calc(100vh - 120px);
+}
+
+.provider-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.provider-group {
+  border: 1px solid var(--n-border-color);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.provider-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.provider-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-row-main {
+  min-width: 0;
+  flex: 1;
 }
 
 .active-item {

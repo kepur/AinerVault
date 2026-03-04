@@ -308,14 +308,14 @@ def update_kb_pack(
     return _pack_to_response(pack)
 
 
-@router.delete("/packs/{pack_id}", status_code=204)
+@router.delete("/packs/{pack_id}", status_code=200)
 def delete_kb_pack(
     pack_id: str,
     tenant_id: str = Query(...),
     project_id: str = Query(...),
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
-) -> None:
+) -> dict[str, str]:
     pack = _get_pack_or_404(pack_id, db)
     if not force:
         # 检查是否有绑定
@@ -331,6 +331,7 @@ def delete_kb_pack(
             )
     pack.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    return {"status": "deleted"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -562,13 +563,14 @@ def update_role_kb_binding(
     )
 
 
-@router.delete("/bindings/role/{binding_id}", status_code=204)
-def delete_role_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> None:
+@router.delete("/bindings/role/{binding_id}", status_code=200)
+def delete_role_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     row = db.get(RoleKBMap, binding_id)
     if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="binding not found")
     row.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    return {"status": "deleted"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -669,13 +671,14 @@ def update_persona_kb_binding(
     )
 
 
-@router.delete("/bindings/persona/{binding_id}", status_code=204)
-def delete_persona_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> None:
+@router.delete("/bindings/persona/{binding_id}", status_code=200)
+def delete_persona_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     row = db.get(PersonaKBMap, binding_id)
     if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="binding not found")
     row.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    return {"status": "deleted"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -776,13 +779,14 @@ def update_novel_kb_binding(
     )
 
 
-@router.delete("/bindings/novel/{binding_id}", status_code=204)
-def delete_novel_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> None:
+@router.delete("/bindings/novel/{binding_id}", status_code=200)
+def delete_novel_kb_binding(binding_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
     row = db.get(NovelKBMap, binding_id)
     if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="binding not found")
     row.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    return {"status": "deleted"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

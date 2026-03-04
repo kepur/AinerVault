@@ -116,6 +116,88 @@ export interface RunDetailResponse {
   final_artifact_uri?: string | null;
 }
 
+export interface TrackInitItem {
+  track_type: string;
+  track_run_id: string;
+  units_created: number;
+  status: string;
+}
+
+export interface InitTracksResponse {
+  run_id: string;
+  tracks: TrackInitItem[];
+}
+
+export interface TrackSummary {
+  track_run_id: string;
+  track_type: string;
+  worker_type?: string | null;
+  status: string;
+  blocked_reason?: string | null;
+  total_units: number;
+  success_units: number;
+  failed_units: number;
+  running_units: number;
+  blocked_units: number;
+}
+
+export interface TrackUnitItem {
+  unit_id: string;
+  unit_ref_id: string;
+  unit_kind: string;
+  status: string;
+  planned_start_ms?: number | null;
+  planned_end_ms?: number | null;
+  attempt_count: number;
+  max_attempts: number;
+  blocked_reason?: string | null;
+  last_error_code?: string | null;
+  last_error_message?: string | null;
+  selected_asset_id?: string | null;
+  selected_job_id?: string | null;
+  output_candidates?: Array<Record<string, unknown>>;
+}
+
+export interface RunTrackResponse {
+  run_id: string;
+  track_type: string;
+  track_run_id: string;
+  track_status: string;
+  jobs_created: number;
+  blocked_reason?: string | null;
+}
+
+export interface RetryTrackUnitResponse {
+  run_id: string;
+  track_run_id: string;
+  track_unit_id: string;
+  job_id: string;
+  status: string;
+}
+
+export interface TrackUnitAttemptResponse {
+  attempt_id: string;
+  attempt_no: number;
+  trigger_type: string;
+  status: string;
+  job_id?: string | null;
+  artifact_id?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  duration_ms?: number | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface SelectTrackUnitCandidateResponse {
+  run_id: string;
+  track_run_id: string;
+  track_unit_id: string;
+  selected_asset_id: string;
+  selected_job_id?: string | null;
+  status: string;
+}
+
 export interface PromptPlanReplayItem {
   plan_id: string;
   run_id: string;
@@ -161,6 +243,130 @@ export interface ProviderResponse {
     supports_tool_calling?: boolean;
     supports_reasoning?: boolean;
   };
+}
+
+export interface OpsTokenResponse {
+  token_id: string;
+  name: string;
+  token_masked: string;
+  is_active: boolean;
+  created_at: string;
+  expires_at: string;
+  days_remaining: number;
+  last_used_at?: string | null;
+}
+
+export interface OpsTokenRevealResponse {
+  token_id: string;
+  name: string;
+  token: string;
+  expires_at: string;
+}
+
+export interface CapabilityStandardItem {
+  capability_type: string;
+  display_name: string;
+  track_targets: string[];
+  min_required_tier: "low" | "medium" | "high";
+  tiers: {
+    low: string[];
+    medium: string[];
+    high: string[];
+  };
+}
+
+export interface CapabilityStandardsResponse {
+  supported_track_types: string[];
+  items: CapabilityStandardItem[];
+}
+
+export interface AdapterSpecResponse {
+  items: Record<
+    string,
+    {
+      request_required: string[];
+      response_required: string[];
+      response_optional?: string[];
+    }
+  >;
+}
+
+export interface OpsProviderRow {
+  report_id: string;
+  provider_key: string;
+  provider_name: string;
+  capability_type: string;
+  capability_tier: "none" | "low" | "medium" | "high";
+  min_required_tier: "low" | "medium" | "high";
+  meets_minimum: boolean;
+  integration_status: string;
+  integration_status_label: string;
+  matched_provider_id?: string | null;
+  matched_provider_name?: string | null;
+  endpoint_base_url?: string | null;
+  protocol: string;
+  openapi_url?: string | null;
+  model_catalog: string[];
+  last_reported_at?: string | null;
+  last_tested_at?: string | null;
+  integration_notes?: string | null;
+  mapping_status: "pending" | "mapped" | "partial" | "failed";
+  mapping_confidence?: number | null;
+  request_coverage?: number | null;
+  response_coverage?: number | null;
+  feature_coverage?: number | null;
+  mapping_gaps: string[];
+  mapping_generated_at?: string | null;
+  connectivity_status: "connected" | "disconnected" | "untested" | "testing";
+  connectivity_label: string;
+  last_connectivity_detail?: string | null;
+  last_checked_url?: string | null;
+  last_latency_ms?: number | null;
+}
+
+export interface OpsProviderListResponse {
+  items: OpsProviderRow[];
+}
+
+export interface OpsProviderReportPayload {
+  tenant_id: string;
+  project_id: string;
+  provider_key: string;
+  provider_name: string;
+  capability_type: string;
+  endpoint_base_url?: string;
+  protocol?: string;
+  openapi_url?: string;
+  model_catalog?: string[];
+  features?: Record<string, unknown>;
+  constraints?: Record<string, unknown>;
+  health?: Record<string, unknown>;
+  adapter_spec?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface OpsProviderReportUpsertResponse {
+  report_id: string;
+  provider_key: string;
+  capability_type: string;
+  capability_tier: "none" | "low" | "medium" | "high";
+  integration_status: string;
+  matched_provider_id?: string | null;
+  meets_minimum: boolean;
+  adapter_gap_features: string[];
+  mapping_status: "pending" | "mapped" | "partial" | "failed";
+  mapping_confidence?: number | null;
+  mapping_gaps: string[];
+}
+
+export interface OpsProviderTestResponse {
+  report_id: string;
+  ok: boolean;
+  status: string;
+  latency_ms?: number | null;
+  detail: string;
+  checked_url?: string | null;
+  connectivity_status: "connected" | "disconnected" | "untested" | "testing";
 }
 
 export interface ModelProfileResponse {
@@ -953,6 +1159,64 @@ export async function getRunPolicyStacks(runId: string): Promise<PolicyStackRepl
   return data;
 }
 
+export async function initRunTracks(
+  runId: string,
+  payload: { track_types?: string[]; recreate?: boolean },
+): Promise<InitTracksResponse> {
+  const { data } = await http.post<InitTracksResponse>(`/api/v1/runs/${runId}/tracks/init`, payload);
+  return data;
+}
+
+export async function listRunTracks(runId: string): Promise<TrackSummary[]> {
+  const { data } = await http.get<TrackSummary[]>(`/api/v1/runs/${runId}/tracks`);
+  return data;
+}
+
+export async function listRunTrackUnits(runId: string, trackType: string): Promise<TrackUnitItem[]> {
+  const { data } = await http.get<TrackUnitItem[]>(`/api/v1/runs/${runId}/tracks/${trackType}/units`);
+  return data;
+}
+
+export async function runTrack(
+  runId: string,
+  trackType: string,
+  payload: { unit_ids?: string[]; only_failed?: boolean; force?: boolean } = {},
+): Promise<RunTrackResponse> {
+  const { data } = await http.post<RunTrackResponse>(`/api/v1/runs/${runId}/tracks/${trackType}/run`, payload);
+  return data;
+}
+
+export async function retryTrackUnit(
+  runId: string,
+  unitId: string,
+  payload: { patch?: Record<string, unknown> } = {},
+): Promise<RetryTrackUnitResponse> {
+  const { data } = await http.post<RetryTrackUnitResponse>(
+    `/api/v1/runs/${runId}/tracks/units/${unitId}/retry`,
+    payload,
+  );
+  return data;
+}
+
+export async function listTrackUnitAttempts(runId: string, unitId: string): Promise<TrackUnitAttemptResponse[]> {
+  const { data } = await http.get<TrackUnitAttemptResponse[]>(
+    `/api/v1/runs/${runId}/tracks/units/${unitId}/attempts`,
+  );
+  return data;
+}
+
+export async function selectTrackUnitCandidate(
+  runId: string,
+  unitId: string,
+  payload: { artifact_id?: string; candidate_index?: number } = {},
+): Promise<SelectTrackUnitCandidateResponse> {
+  const { data } = await http.post<SelectTrackUnitCandidateResponse>(
+    `/api/v1/runs/${runId}/tracks/units/${unitId}/select-candidate`,
+    payload,
+  );
+  return data;
+}
+
 export async function upsertProvider(payload: {
   tenant_id: string;
   project_id: string;
@@ -973,6 +1237,87 @@ export async function listProviders(tenantId: string, projectId: string): Promis
   const { data } = await http.get<ProviderResponse[]>("/api/v1/config/providers", {
     params: { tenant_id: tenantId, project_id: projectId },
   });
+  return data;
+}
+
+export async function getOpsCapabilityStandards(): Promise<CapabilityStandardsResponse> {
+  const { data } = await http.get<CapabilityStandardsResponse>("/api/v1/ops-bridge/capability-standards");
+  return data;
+}
+
+export async function getOpsAdapterSpec(): Promise<AdapterSpecResponse> {
+  const { data } = await http.get<AdapterSpecResponse>("/api/v1/ops-bridge/adapter-spec");
+  return data;
+}
+
+export async function getOpsToken(params: {
+  tenant_id: string;
+  project_id: string;
+  name?: string;
+}): Promise<OpsTokenResponse> {
+  const { data } = await http.get<OpsTokenResponse>("/api/v1/ops-bridge/token", { params });
+  return data;
+}
+
+export async function revealOpsToken(payload: {
+  tenant_id: string;
+  project_id: string;
+  name?: string;
+}): Promise<OpsTokenRevealResponse> {
+  const { data } = await http.post<OpsTokenRevealResponse>("/api/v1/ops-bridge/token/reveal", payload);
+  return data;
+}
+
+export async function regenerateOpsToken(payload: {
+  tenant_id: string;
+  project_id: string;
+  name?: string;
+}): Promise<OpsTokenRevealResponse> {
+  const { data } = await http.post<OpsTokenRevealResponse>("/api/v1/ops-bridge/token/regenerate", payload);
+  return data;
+}
+
+export async function reportOpsProvider(
+  payload: OpsProviderReportPayload,
+  opsToken: string,
+): Promise<OpsProviderReportUpsertResponse> {
+  const { data } = await http.post<OpsProviderReportUpsertResponse>(
+    "/api/v1/ops-bridge/report",
+    payload,
+    {
+      headers: {
+        "X-AinerOps-Token": opsToken,
+      },
+    },
+  );
+  return data;
+}
+
+export async function listOpsProviders(params: {
+  tenant_id: string;
+  project_id: string;
+  capability_type?: string;
+  integration_status?: string;
+}): Promise<OpsProviderListResponse> {
+  const { data } = await http.get<OpsProviderListResponse>("/api/v1/ops-bridge/providers", { params });
+  return data;
+}
+
+export async function autoBindOpsProvider(reportId: string): Promise<OpsProviderRow> {
+  const { data } = await http.post<OpsProviderRow>(`/api/v1/ops-bridge/providers/${reportId}/auto-bind`);
+  return data;
+}
+
+export async function manualBindOpsProvider(
+  reportId: string,
+  payload: { provider_id?: string | null; integration_notes?: string },
+): Promise<OpsProviderRow> {
+  const { data } = await http.post<OpsProviderRow>(`/api/v1/ops-bridge/providers/${reportId}/manual-bind`, payload);
+  return data;
+}
+
+export async function testOpsProvider(reportId: string): Promise<OpsProviderTestResponse> {
+  const { data } = await http.post<OpsProviderTestResponse>(`/api/v1/ops-bridge/providers/${reportId}/test`);
   return data;
 }
 
@@ -1710,7 +2055,34 @@ export interface TranslationProjectResponse {
   model_provider_id: string | null;
   term_dictionary_json: Record<string, string> | null;
   stats_json: Record<string, unknown> | null;
+  scope_mode: string;
+  scope_payload: Record<string, unknown> | null;
+  granularity: string;
+  batch_size: number;
+  max_cost: number | null;
+  max_tokens: number | null;
+  run_policy: string;
+  culture_mode: string;
+  culture_packs: Array<Record<string, unknown>> | null;
+  temporal_enabled: boolean;
+  temporal_layers: Array<Record<string, unknown>> | null;
+  temporal_detect_policy: string;
+  naming_policy_by_lang: Record<string, string> | null;
+  auto_fill_missing_names: boolean;
   created_at: string;
+}
+
+export interface TranslationPlanItemResponse {
+  id: string;
+  scope_type: string;
+  chapter_id: string | null;
+  scene_id: string | null;
+  segment_id: string | null;
+  order_no: number;
+  item_status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  retry_count: number;
+  last_error: string | null;
+  last_run_id: string | null;
 }
 
 export interface ScriptBlockResponse {
@@ -1749,6 +2121,23 @@ export interface ConsistencyWarningResponse {
   translation_block_id: string | null;
 }
 
+export interface TranslationRunGateResponse {
+  ready_to_run: boolean;
+  chapter_id: string | null;
+  missing: string[];
+  stale: string[];
+  recommended_actions: string[];
+  disabled_reason: string | null;
+}
+
+export interface TranslationCreateRunResponse {
+  run_id: string | null;
+  status: string;
+  chapter_id: string | null;
+  gate: TranslationRunGateResponse;
+  message: string | null;
+}
+
 // ── Translation Project Functions ─────────────────────────────────────────────
 export async function createTranslationProject(payload: {
   tenant_id?: string;
@@ -1759,6 +2148,20 @@ export async function createTranslationProject(payload: {
   model_provider_id?: string | null;
   consistency_mode?: string;
   term_dictionary_json?: Record<string, string> | null;
+  scope_mode?: string;
+  scope_payload?: Record<string, unknown> | null;
+  granularity?: string;
+  batch_size?: number;
+  max_cost?: number | null;
+  max_tokens?: number | null;
+  run_policy?: string;
+  culture_mode?: string;
+  culture_packs?: Array<Record<string, unknown>> | null;
+  temporal_enabled?: boolean;
+  temporal_layers?: Array<Record<string, unknown>> | null;
+  temporal_detect_policy?: string;
+  naming_policy_by_lang?: Record<string, string> | null;
+  auto_fill_missing_names?: boolean;
 }): Promise<TranslationProjectResponse> {
   const { data } = await http.post<TranslationProjectResponse>(
     "/api/v1/translations/projects",
@@ -1768,9 +2171,10 @@ export async function createTranslationProject(payload: {
 }
 
 export async function listTranslationProjects(params: {
-  novel_id: string;
+  novel_id?: string;
   tenant_id?: string;
   project_id?: string;
+  status?: string;
 }): Promise<TranslationProjectResponse[]> {
   const { data } = await http.get<TranslationProjectResponse[]>(
     "/api/v1/translations/projects",
@@ -1786,12 +2190,31 @@ export async function updateTranslationProject(
     consistency_mode?: string;
     model_provider_id?: string | null;
     status?: string;
+    scope_mode?: string;
+    scope_payload?: Record<string, unknown> | null;
+    granularity?: string;
+    batch_size?: number;
+    max_cost?: number | null;
+    max_tokens?: number | null;
+    run_policy?: string;
+    culture_mode?: string;
+    culture_packs?: Array<Record<string, unknown>> | null;
+    temporal_enabled?: boolean;
+    temporal_layers?: Array<Record<string, unknown>> | null;
+    temporal_detect_policy?: string;
+    naming_policy_by_lang?: Record<string, string> | null;
+    auto_fill_missing_names?: boolean;
   },
 ): Promise<TranslationProjectResponse> {
   const { data } = await http.put<TranslationProjectResponse>(
     `/api/v1/translations/projects/${projectId}`,
     payload,
   );
+  return data;
+}
+
+export async function deleteTranslationProject(projectId: string): Promise<{ status: string }> {
+  const { data } = await http.delete<{ status: string }>(`/api/v1/translations/projects/${projectId}`);
   return data;
 }
 
@@ -1812,6 +2235,8 @@ export async function translateBlocks(
     tenant_id?: string;
     project_id?: string;
     chapter_id?: string | null;
+    script_block_ids?: string[] | null;
+    model_provider_id?: string | null;
     batch_size?: number;
   },
 ): Promise<{ translated: number; warnings: number }> {
@@ -1821,6 +2246,13 @@ export async function translateBlocks(
     { timeout: 120000 },
   );
   return data;
+}
+
+export async function deleteTranslationBlock(
+  projectId: string,
+  blockId: string,
+): Promise<void> {
+  await http.delete(`/api/v1/translations/projects/${projectId}/blocks/${blockId}`);
 }
 
 export async function listScriptBlocks(
@@ -1917,6 +2349,138 @@ export async function resolveWarning(
 export async function checkConsistency(projectId: string): Promise<{ warnings_created: number }> {
   const { data } = await http.post<{ warnings_created: number }>(
     `/api/v1/translations/projects/${projectId}/check-consistency`,
+  );
+  return data;
+}
+
+export async function listTranslationPlanItems(
+  projectId: string,
+  params?: { status?: string },
+): Promise<TranslationPlanItemResponse[]> {
+  const { data } = await http.get<TranslationPlanItemResponse[]>(
+    `/api/v1/translations/projects/${projectId}/plan`,
+    { params },
+  );
+  return data;
+}
+
+export async function executeTranslationPlan(
+  projectId: string,
+  payload: {
+    batch_size?: number;
+    only_failed?: boolean;
+    only_pending?: boolean;
+    only_untranslated?: boolean;
+    selected_item_ids?: string[];
+    model_provider_id?: string | null;
+  },
+): Promise<{ executed: number; succeeded: number; failed: number; warnings: number }> {
+  const { data } = await http.post<{ executed: number; succeeded: number; failed: number; warnings: number }>(
+    `/api/v1/translations/projects/${projectId}/plan/execute`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function gateTranslationProjectRun(
+  projectId: string,
+  payload: { chapter_id?: string | null },
+): Promise<TranslationRunGateResponse> {
+  const { data } = await http.post<TranslationRunGateResponse>(
+    `/api/v1/translations/projects/${projectId}/run-gate`,
+    payload,
+  );
+  return data;
+}
+
+export async function createRunFromTranslationProject(
+  projectId: string,
+  payload: {
+    tenant_id?: string;
+    project_id?: string;
+    chapter_id?: string | null;
+    requested_quality?: string;
+    language_context?: string | null;
+    force_rerun?: boolean;
+    use_cache?: boolean;
+    dry_run?: boolean;
+  },
+): Promise<TranslationCreateRunResponse> {
+  const { data } = await http.post<TranslationCreateRunResponse>(
+    `/api/v1/translations/projects/${projectId}/create-run`,
+    payload,
+  );
+  return data;
+}
+
+export async function deleteTranslationJob(
+  jobId: string,
+  params?: { delete_with_artifacts?: boolean },
+): Promise<{ deleted: boolean; job_id: string }> {
+  const { data } = await http.delete<{ deleted: boolean; job_id: string }>(
+    `/api/v1/translation_jobs/${jobId}`,
+    { params },
+  );
+  return data;
+}
+
+export async function batchDeleteTranslationJobs(payload: {
+  job_ids: string[];
+  delete_with_artifacts?: boolean;
+}): Promise<{ deleted: number; skipped: number }> {
+  const { data } = await http.post<{ deleted: number; skipped: number }>(
+    "/api/v1/translation_jobs/batch_delete",
+    payload,
+  );
+  return data;
+}
+
+export async function cancelTranslationJob(jobId: string): Promise<{ canceled: boolean; job_id: string }> {
+  const { data } = await http.post<{ canceled: boolean; job_id: string }>(
+    `/api/v1/translation_jobs/${jobId}/cancel`,
+  );
+  return data;
+}
+
+export async function batchCancelTranslationJobs(payload: {
+  job_ids: string[];
+}): Promise<{ canceled: number; skipped: number }> {
+  const { data } = await http.post<{ canceled: number; skipped: number }>(
+    "/api/v1/translation_jobs/batch_cancel",
+    payload,
+  );
+  return data;
+}
+
+export async function batchRetryTranslationJobs(payload: {
+  job_ids: string[];
+}): Promise<{ retried: number; skipped: number }> {
+  const { data } = await http.post<{ retried: number; skipped: number }>(
+    "/api/v1/translation_jobs/batch_retry",
+    payload,
+  );
+  return data;
+}
+
+export async function listTranslationConflicts(
+  projectId: string,
+  params?: { lang?: string },
+): Promise<ConsistencyWarningResponse[]> {
+  const { data } = await http.get<ConsistencyWarningResponse[]>(
+    `/api/v1/translations/projects/${projectId}/conflicts`,
+    { params },
+  );
+  return data;
+}
+
+export async function listTranslationDrift(
+  projectId: string,
+  params?: { lang?: string },
+): Promise<Array<Record<string, unknown>>> {
+  const { data } = await http.get<Array<Record<string, unknown>>>(
+    `/api/v1/translations/projects/${projectId}/drift`,
+    { params },
   );
   return data;
 }
@@ -2216,5 +2780,408 @@ export async function getKBEffective(params: {
   novel_id?: string;
 }): Promise<KBEffectiveResponse> {
   const { data } = await http.get<KBEffectiveResponse>("/api/v1/kb/effective", { params });
+  return data;
+}
+
+// ── Script Workflow ─────────────────────────────────────────────────────────────
+
+export interface FormatDetectResponse {
+  chapter_id: string;
+  format: "novel" | "script" | "unknown";
+  confidence: number;
+  signals: string[];
+  method: "llm" | "regex_fallback";
+}
+
+export interface DialogueBlock {
+  speaker: string;
+  line: string;
+}
+
+export interface SceneItem {
+  scene_id: string;
+  title: string;
+  time: string;
+  location: string;
+  weather: string;
+  mood: string;
+  narration: string;
+  dialogue_blocks: DialogueBlock[];
+  actions: string[];
+}
+
+export interface ScriptResponse {
+  chapter_id: string;
+  scenes: SceneItem[];
+  summary: string;
+  warnings: string[];
+  version: number;
+  run_id: string | null;
+  cached: boolean;
+  script_updated_at: string | null;
+}
+
+export interface WorldModelCharacter {
+  name: string;
+  aliases: string[];
+  appearance: string;
+  signature_features: string;
+  voice_hints: string;
+  props_on_body: string[];
+  evidence: string[];
+}
+
+export interface WorldModelLocation {
+  name: string;
+  type: string;
+  visual_keywords: string[];
+  ambience: string[];
+  mood: string;
+  evidence: string[];
+}
+
+export interface WorldModelProp {
+  name: string;
+  type: string;
+  material_condition: string;
+  owner: string;
+  usage: string;
+  evidence: string[];
+}
+
+export interface WorldModelBeat {
+  title: string;
+  participants: string[];
+  location: string;
+  time: string;
+  tension_level: number;
+  evidence: string[];
+}
+
+export interface WorldModelStyleHint {
+  lighting_style: string;
+  camera_language: string;
+  pacing: string;
+  genre_tags: string[];
+  evidence: string[];
+}
+
+export interface WorldModelResponse {
+  chapter_id: string;
+  characters: WorldModelCharacter[];
+  locations: WorldModelLocation[];
+  props: WorldModelProp[];
+  beats: WorldModelBeat[];
+  style_hints: WorldModelStyleHint[];
+  version: number;
+  run_id: string | null;
+  cached: boolean;
+  world_model_updated_at: string | null;
+}
+
+export async function detectFormat(chapterId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id?: string;
+}): Promise<FormatDetectResponse> {
+  const { data } = await http.post<FormatDetectResponse>(
+    `/api/v1/chapters/${chapterId}/format-detect`,
+    payload,
+    { timeout: 30000 },
+  );
+  return data;
+}
+
+export async function getScript(chapterId: string): Promise<ScriptResponse> {
+  const { data } = await http.get<ScriptResponse>(`/api/v1/chapters/${chapterId}/script`);
+  return data;
+}
+
+export async function generateScript(chapterId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  granularity?: string;
+  style_hint?: string;
+  force?: boolean;
+}): Promise<ScriptResponse> {
+  const { data } = await http.post<ScriptResponse>(
+    `/api/v1/chapters/${chapterId}/script/generate`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function regenerateScript(chapterId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  granularity?: string;
+  style_hint?: string;
+}): Promise<ScriptResponse> {
+  const { data } = await http.post<ScriptResponse>(
+    `/api/v1/chapters/${chapterId}/script/regenerate`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function getWorldModel(chapterId: string): Promise<WorldModelResponse> {
+  const { data } = await http.get<WorldModelResponse>(`/api/v1/chapters/${chapterId}/world-model`);
+  return data;
+}
+
+export async function generateWorldModel(chapterId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  level?: string;
+  force?: boolean;
+}): Promise<WorldModelResponse> {
+  const { data } = await http.post<WorldModelResponse>(
+    `/api/v1/chapters/${chapterId}/world-model/generate`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function regenerateWorldModel(chapterId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  level?: string;
+}): Promise<WorldModelResponse> {
+  const { data } = await http.post<WorldModelResponse>(
+    `/api/v1/chapters/${chapterId}/world-model/regenerate`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+// Legacy aliases for backward compatibility
+export const convertNovelToScript = generateScript;
+export const normalizeScript = regenerateScript;
+export const extractWorldModel = generateWorldModel;
+
+// ── Entity Mapping ──────────────────────────────────────────────────────────────
+
+export interface EntityMappingItem {
+  id: string;
+  novel_id: string | null;
+  entity_type: string | null;
+  canonical_name: string;
+  source_language: string;
+  translations_json: Record<string, string> | null;
+  aliases_json: string[] | null;
+  culture_tags_json: string[] | null;
+  world_model_source: string | null;
+  anchor_asset_id: string | null;
+  continuity_status: string;
+  notes: string | null;
+  naming_policy: string | null;
+  locked: boolean;
+  style_tags_json: string[] | null;
+  rationale: string | null;
+  localization_candidates_json: Array<Record<string, unknown>> | null;
+  drift_score: number;
+  locked_langs_json: Record<string, boolean> | null;
+  naming_policy_by_lang_json: Record<string, string> | null;
+  updated_by_ai: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BuildEntityMappingResponse {
+  created: number;
+  updated: number;
+  total: number;
+}
+
+export async function buildEntityMapping(novelId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+}): Promise<BuildEntityMappingResponse> {
+  const { data } = await http.post<BuildEntityMappingResponse>(
+    `/api/v1/novels/${novelId}/entity-mapping/build`,
+    payload,
+  );
+  return data;
+}
+
+export async function listEntityMappings(novelId: string, params?: {
+  keyword?: string;
+  entity_type?: string;
+  status?: string;
+}): Promise<EntityMappingItem[]> {
+  const { data } = await http.get<EntityMappingItem[]>(
+    `/api/v1/novels/${novelId}/entity-mapping`,
+    { params },
+  );
+  return data;
+}
+
+export async function getEntityMapping(entityUid: string): Promise<EntityMappingItem> {
+  const { data } = await http.get<EntityMappingItem>(`/api/v1/entity-mapping/${entityUid}`);
+  return data;
+}
+
+export async function updateEntityMapping(entityUid: string, payload: {
+  canonical_name?: string;
+  translations_json?: Record<string, string>;
+  aliases_json?: string[];
+  culture_tags_json?: string[];
+  anchor_asset_id?: string;
+  continuity_status?: string;
+  notes?: string;
+}): Promise<EntityMappingItem> {
+  const { data } = await http.patch<EntityMappingItem>(`/api/v1/entity-mapping/${entityUid}`, payload);
+  return data;
+}
+
+export async function mergeEntityMapping(entityUid: string, targetUid: string): Promise<EntityMappingItem> {
+  const { data } = await http.post<EntityMappingItem>(`/api/v1/entity-mapping/${entityUid}/merge`, {
+    target_uid: targetUid,
+  });
+  return data;
+}
+
+export async function translateEntityMapping(entityUid: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  target_languages?: string[];
+}): Promise<EntityMappingItem> {
+  const { data } = await http.post<EntityMappingItem>(
+    `/api/v1/entity-mapping/${entityUid}/translate`,
+    payload,
+    { timeout: 30000 },
+  );
+  return data;
+}
+
+export async function deleteEntityMapping(entityUid: string): Promise<void> {
+  await http.delete(`/api/v1/entity-mapping/${entityUid}`);
+}
+
+// ── SkillRun ────────────────────────────────────────────────────────────────────
+
+export interface SkillRunItem {
+  id: string;
+  skill_id: string;
+  chapter_id: string | null;
+  novel_id: string | null;
+  status: "queued" | "running" | "succeeded" | "failed";
+  input_hash: string | null;
+  model_provider_id: string | null;
+  model_name: string | null;
+  token_usage: Record<string, number> | null;
+  cost_estimate: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export async function listSkillRuns(params: {
+  tenant_id?: string;
+  project_id?: string;
+  skill_id?: string;
+  chapter_id?: string;
+  novel_id?: string;
+  status?: string;
+  limit?: number;
+}): Promise<SkillRunItem[]> {
+  const { data } = await http.get<SkillRunItem[]>("/api/v1/skill-runs", { params });
+  return data;
+}
+
+export async function getSkillRun(runId: string): Promise<SkillRunItem> {
+  const { data } = await http.get<SkillRunItem>(`/api/v1/skill-runs/${runId}`);
+  return data;
+}
+
+// ── Name Localization ──────────────────────────────────────────────────────────
+
+export interface NameCandidate {
+  name: string;
+  naming_policy: "transliteration" | "literal" | "cultural_equivalent" | "hybrid" | "character_driven" | "setting_authentic";
+  rationale: string;
+}
+
+export interface NameSuggestion {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string | null;
+  candidates: NameCandidate[];
+  recommended_name: string | null;
+  rationale: string | null;
+}
+
+export interface SuggestNameResponse {
+  suggestions: NameSuggestion[];
+  run_id: string | null;
+  total: number;
+}
+
+export interface NameLocalizationListItem {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string | null;
+  source_language: string;
+  naming_policy: string | null;
+  locked: boolean;
+  rationale: string | null;
+  translations_json: Record<string, string> | null;
+  localization_candidates_json: Array<Record<string, unknown>> | null;
+  drift_score: number;
+  locked_langs_json: Record<string, boolean> | null;
+  naming_policy_by_lang_json: Record<string, string> | null;
+}
+
+export async function listNameLocalizations(novelId: string, params?: {
+  entity_type?: string;
+  locked?: boolean;
+  target_language?: string;
+}): Promise<NameLocalizationListItem[]> {
+  const { data } = await http.get<NameLocalizationListItem[]>(
+    `/api/v1/novels/${novelId}/name-localization`,
+    { params },
+  );
+  return data;
+}
+
+export async function suggestNames(novelId: string, payload: {
+  tenant_id?: string;
+  project_id?: string;
+  model_provider_id: string;
+  entity_uids?: string[];
+  target_language?: string;
+  culture_profile?: string;
+  era_profile?: string;
+  social_class?: string;
+  max_entities?: number;
+}): Promise<SuggestNameResponse> {
+  const { data } = await http.post<SuggestNameResponse>(
+    `/api/v1/novels/${novelId}/name-localization/suggest`,
+    payload,
+    { timeout: 120000 },
+  );
+  return data;
+}
+
+export async function applyName(novelId: string, payload: {
+  entity_uid: string;
+  chosen_name: string;
+  target_language?: string;
+  naming_policy?: string;
+  rationale?: string;
+  lock?: boolean;
+}): Promise<Record<string, unknown>> {
+  const { data } = await http.post<Record<string, unknown>>(
+    `/api/v1/novels/${novelId}/name-localization/apply`,
+    payload,
+  );
   return data;
 }

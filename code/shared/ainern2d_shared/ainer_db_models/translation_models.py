@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,14 @@ class WarningStatus(str, Enum):
     ignored = "ignored"
 
 
+class PlanItemStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+
+
 # ── Models ─────────────────────────────────────────────────────────────────────
 
 class TranslationProject(Base, StandardColumnsMixin):
@@ -73,6 +81,41 @@ class TranslationProject(Base, StandardColumnsMixin):
     )
     term_dictionary_json: Mapped[dict | None] = mapped_column(JSONB)
     stats_json: Mapped[dict | None] = mapped_column(JSONB)
+    # V4 scope / execution config
+    scope_mode: Mapped[str] = mapped_column(String(32), default="chapters_selected", nullable=False)
+    scope_payload_json: Mapped[dict | None] = mapped_column(JSONB)
+    granularity: Mapped[str] = mapped_column(String(16), default="chapter", nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    max_cost: Mapped[float | None] = mapped_column(Float)
+    max_tokens: Mapped[int | None] = mapped_column(Integer)
+    run_policy: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
+    culture_mode: Mapped[str] = mapped_column(String(16), default="auto", nullable=False)
+    culture_packs_json: Mapped[list | None] = mapped_column(JSONB)
+    temporal_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    temporal_layers_json: Mapped[list | None] = mapped_column(JSONB)
+    temporal_detect_policy: Mapped[str] = mapped_column(String(24), default="off", nullable=False)
+    naming_policy_by_lang_json: Mapped[dict | None] = mapped_column(JSONB)
+    auto_fill_missing_names: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class TranslationPlanItem(Base, StandardColumnsMixin):
+    __tablename__ = "translation_plan_items"
+    __table_args__ = (
+        Index("ix_tpi_project_status", "translation_project_id", "item_status"),
+        Index("ix_tpi_project_order", "translation_project_id", "order_no"),
+    )
+
+    translation_project_id: Mapped[str] = mapped_column(
+        ForeignKey("translation_projects.id", ondelete="CASCADE"), nullable=False
+    )
+    scope_type: Mapped[str] = mapped_column(String(16), default="chapter", nullable=False)
+    chapter_id: Mapped[str | None] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"))
+    scene_id: Mapped[str | None] = mapped_column(String(64))
+    segment_id: Mapped[str | None] = mapped_column(String(64))
+    order_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_status: Mapped[str] = mapped_column(String(16), default=PlanItemStatus.pending.value, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_run_id: Mapped[str | None] = mapped_column(String(64))
 
 
 class ScriptBlock(Base, StandardColumnsMixin):

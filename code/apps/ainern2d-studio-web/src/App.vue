@@ -164,7 +164,7 @@ async function onResetPassword() {
     message.error(t.value.pwdMismatch);
     return;
   }
-  const userId = authStore.user?.user_id ?? authStore.user?.id;
+  const userId = authStore.user?.user_id;
   if (!userId) {
     message.error('No user session');
     return;
@@ -205,6 +205,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     models: "模型与路由",
     modelAssets: "模型资产管理",
     modelRouting: "AI 路由与策略",
+    opsBridge: "开放接口接收",
     languages: "多语言设置",
     knowledge: "知识与资产",
     kbAssets: "知识资产中心",
@@ -214,8 +215,10 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     production: "项目与生产",
     novels: "小说管理",
     rolePerson: "角色与 Persona",
+    productionBoard: "Production Board",
     runCenter: "Run 运行中心",
     prTimeline: "PR 时间线 (NLE)",
+    translations: "转译工程",
     settings: "系统设置",
     notifications: "通知中心",
     auth: "账号与权限",
@@ -239,6 +242,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     models: "Models & Routing",
     modelAssets: "Model Assets",
     modelRouting: "AI Routing & Strategy",
+    opsBridge: "Open Ingress (Ops Bridge)",
     languages: "Language Settings",
     knowledge: "Knowledge & Assets",
     kbAssets: "KB Asset Center",
@@ -248,8 +252,10 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     production: "Projects & Production",
     novels: "Novel Management",
     rolePerson: "Role & Persona",
+    productionBoard: "Production Board",
     runCenter: "Run Center",
     prTimeline: "PR Timeline (NLE)",
+    translations: "Translation Projects",
     settings: "System Settings",
     notifications: "Notifications",
     auth: "Accounts & Permissions",
@@ -273,6 +279,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     models: "モデルとルーティング",
     modelAssets: "モデル資産管理",
     modelRouting: "AIルーティング",
+    opsBridge: "外部連携受信",
     languages: "言語設定",
     knowledge: "ナレッジと資産",
     kbAssets: "KBアセットセンター",
@@ -282,8 +289,10 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     production: "プロジェクトと生産",
     novels: "小説管理",
     rolePerson: "ロールとペルソナ",
+    productionBoard: "Production Board",
     runCenter: "実行センター",
     prTimeline: "PRタイムライン (NLE)",
+    translations: "翻訳プロジェクト",
     settings: "システム設定",
     notifications: "通知センター",
     auth: "アカウントと権限",
@@ -307,6 +316,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     models: "Modelos y Rutas",
     modelAssets: "Activos de Modelos",
     modelRouting: "Estrategia de Rutas IA",
+    opsBridge: "Ingreso Abierto",
     languages: "Configuración de Idioma",
     knowledge: "Conocimiento y Activos",
     kbAssets: "Centro de Activos KB",
@@ -316,8 +326,10 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     production: "Proyectos y Producción",
     novels: "Novelas",
     rolePerson: "Rol y Persona",
+    productionBoard: "Production Board",
     runCenter: "Centro de Ejecución",
     prTimeline: "Línea de Tiempo PR (NLE)",
+    translations: "Proyectos de Traducción",
     settings: "Configuración del Sistema",
     notifications: "Notificaciones",
     auth: "Cuentas y Permisos",
@@ -341,6 +353,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     models: "النماذج والتوجيه",
     modelAssets: "أصول النماذج",
     modelRouting: "استراتيجية توجيه الذكاء",
+    opsBridge: "استقبال الواجهات المفتوحة",
     languages: "إعدادات اللغة",
     knowledge: "المعرفة والأصول",
     kbAssets: "مركز الأصول",
@@ -350,8 +363,10 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     production: "المشاريع والإنتاج",
     novels: "إدارة الروايات",
     rolePerson: "الدور والشخصية",
+    productionBoard: "Production Board",
     runCenter: "مركز التشغيل",
     prTimeline: "الجدول الزمني PR",
+    translations: "مشاريع الترجمة",
     settings: "إعدادات النظام",
     notifications: "الإشعارات",
     auth: "الحسابات والأذونات",
@@ -387,6 +402,7 @@ const menuOptions = computed<MenuOption[]>(() => [
     children: [
       { key: "/studio/models-providers", label: t.value.modelAssets },
       { key: "/studio/model-routing", label: t.value.modelRouting },
+      { key: "/studio/ops-bridge", label: t.value.opsBridge },
       { key: "/studio/languages", label: t.value.languages },
     ],
   },
@@ -406,8 +422,10 @@ const menuOptions = computed<MenuOption[]>(() => [
     children: [
       { key: "/studio/novels", label: t.value.novels },
       { key: "/studio/roles/config", label: t.value.rolePerson },
+      { key: "/studio/production", label: t.value.productionBoard },
       { key: "/studio/runs", label: t.value.runCenter },
       { key: "/studio/timeline", label: t.value.prTimeline },
+      { key: "/studio/translations", label: t.value.translations },
     ],
   },
   {
@@ -434,6 +452,9 @@ const themeOverrides = {
 const isPublicRoute = computed(() => Boolean(route.meta.public));
 
 const activeMenuKey = computed(() => {
+  if (route.path.startsWith("/studio/translations/")) {
+    return "/studio/translations";
+  }
   if (route.path.startsWith("/studio/")) {
     return route.path;
   }

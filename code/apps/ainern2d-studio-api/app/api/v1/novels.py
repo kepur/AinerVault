@@ -1238,6 +1238,94 @@ def debug_entity_extract(
     }
 
 
+# ── Debug: LLM Run ─────────────────────────────────────────────────────────────
+
+class DebugLLMRunRequest(BaseModel):
+    system_prompt: str = "你是助手，请完成用户任务。"
+    user_prompt: str = Field(..., min_length=1)
+    tenant_id: str = "default"
+    project_id: str = "default"
+    model_provider_id: str = "provider_deepseek"
+    max_tokens: int = 2000
+    expect_json: bool = False
+
+
+@router.post("/debug/llm-run")
+def debug_llm_run(
+    body: DebugLLMRunRequest,
+    db: Session = Depends(get_db),
+):
+    import re as _re
+    from loguru import logger
+
+    provider = db.get(ModelProvider, body.model_provider_id)
+    if provider is None or provider.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="model provider not found")
+
+    settings = _load_provider_settings(
+        db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        provider_id=provider.id,
+    )
+
+    model_catalog = list(settings.get("model_catalog") or [])
+    model_name = model_catalog[0] if model_catalog else "unknown"
+    run_id = str(uuid4()).replace("-", "")[:16]
+
+    prompt_full = f"{body.system_prompt}\n\n{body.user_prompt}"
+    raw_response = ""
+    parsed_json = None
+    validation_errors: list[str] = []
+    token_usage: dict = {}
+    finish_reason = ""
+
+    try:
+        raw_response, _provider_name, _model_name = _expand_with_provider(
+            provider=provider,
+            provider_settings=settings,
+            prompt=prompt_full,
+            max_tokens=body.max_tokens,
+        )
+    except Exception as exc:
+        return {
+            "run_id": run_id,
+            "provider_name": provider.name,
+            "model_name": model_name,
+            "input_text_len": len(prompt_full),
+            "text_preview": prompt_full[:200],
+            "raw_response": "",
+            "parsed_json": None,
+            "validation_errors": [str(exc)],
+            "token_usage": {},
+            "finish_reason": "error",
+        }
+
+    if body.expect_json:
+        cleaned = _re.sub(r"^```(?:json)?\s*", "", raw_response.strip(), flags=_re.MULTILINE)
+        cleaned = _re.sub(r"\s*```$", "", cleaned.strip(), flags=_re.MULTILINE)
+        try:
+            m = _re.search(r"\{[\s\S]*\}", cleaned)
+            if m:
+                parsed_json = json.loads(m.group())
+            else:
+                validation_errors.append("No JSON object found in response")
+        except Exception as exc:
+            validation_errors.append(f"JSON parse error: {exc}")
+
+    return {
+        "run_id": run_id,
+        "provider_name": provider.name,
+        "model_name": model_name,
+        "input_text_len": len(prompt_full),
+        "text_preview": prompt_full[:200],
+        "raw_response": raw_response,
+        "parsed_json": parsed_json,
+        "validation_errors": validation_errors,
+        "token_usage": token_usage,
+        "finish_reason": finish_reason,
+    }
+
 
 _ENTITY_EXTRACTION_PROMPT = """请从以下章节内提取实体信息，以严格的 JSON 格式输出，不要输出任何多余内容（不带 Markdown 标记）。如果文本长度超过 200 字，必须至少提取出主要角色和事件！
 
