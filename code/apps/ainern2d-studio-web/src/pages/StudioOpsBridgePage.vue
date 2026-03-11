@@ -78,6 +78,98 @@
       </NGridItem>
 
       <NGridItem span="0:2 960:1">
+        <NCard title="MinIO / Object Storage" size="small" class="storage-card">
+          <NSpace vertical :size="10">
+            <NAlert type="info" :bordered="false">
+              可直接在后台维护 MinIO 配置；保存后会同步更新运行时配置，并写回 code/.env，便于复制给其他系统。
+            </NAlert>
+            <NForm label-placement="left" :label-width="96">
+              <NFormItem label="Provider">
+                <div class="ingress-value">{{ storageConfig?.provider || "-" }}</div>
+              </NFormItem>
+              <NFormItem label="公开地址">
+                <NInput
+                  :value="storageForm.endpoint"
+                  placeholder="http://localhost:9000"
+                  @update:value="(value) => storageForm.endpoint = value"
+                />
+              </NFormItem>
+              <NFormItem label="内部地址">
+                <NInput
+                  :value="storageForm.internal_endpoint"
+                  placeholder="http://minio:9000"
+                  @update:value="(value) => storageForm.internal_endpoint = value"
+                />
+              </NFormItem>
+              <NFormItem label="Console">
+                <NInput
+                  :value="storageForm.console_endpoint"
+                  placeholder="http://localhost:9001"
+                  @update:value="(value) => storageForm.console_endpoint = value"
+                />
+              </NFormItem>
+              <NFormItem label="Bucket">
+                <NInput
+                  :value="storageForm.bucket"
+                  placeholder="ainer-assets"
+                  @update:value="(value) => storageForm.bucket = value"
+                />
+              </NFormItem>
+              <NFormItem label="Region">
+                <NInput
+                  :value="storageForm.region"
+                  placeholder="us-east-1"
+                  @update:value="(value) => storageForm.region = value"
+                />
+              </NFormItem>
+              <NFormItem label="Access Key">
+                <NInput
+                  :value="storageForm.access_key"
+                  placeholder="ainer_minio"
+                  @update:value="(value) => storageForm.access_key = value"
+                />
+              </NFormItem>
+              <NFormItem label="Secret Key">
+                <NInput
+                  type="password"
+                  show-password-on="click"
+                  :value="storageForm.secret_key"
+                  placeholder="ainer_minio_2024"
+                  @update:value="(value) => storageForm.secret_key = value"
+                />
+              </NFormItem>
+              <NFormItem label="Root User">
+                <NInput
+                  :value="storageForm.root_user"
+                  placeholder="ainer_minio"
+                  @update:value="(value) => storageForm.root_user = value"
+                />
+              </NFormItem>
+              <NFormItem label="Root Pass">
+                <NInput
+                  type="password"
+                  show-password-on="click"
+                  :value="storageForm.root_password"
+                  placeholder="ainer_minio_2024"
+                  @update:value="(value) => storageForm.root_password = value"
+                />
+              </NFormItem>
+            </NForm>
+            <NSpace wrap>
+              <NButton type="primary" size="small" :loading="storageSaving" @click="onSaveStorageConfig">保存配置</NButton>
+              <NButton size="small" :disabled="!storageDirty" @click="resetStorageForm">重置</NButton>
+              <NButton size="small" @click="onCopyText(storageForm.endpoint || '', 'MinIO公开地址')">复制公开地址</NButton>
+              <NButton size="small" @click="onCopyText(storageForm.internal_endpoint || '', 'MinIO内部地址')">复制内部地址</NButton>
+              <NButton size="small" @click="onCopyText(storageForm.access_key || '', 'Access Key')">复制 Access Key</NButton>
+              <NButton size="small" @click="onCopyText(storageForm.secret_key || '', 'Secret Key')">复制 Secret Key</NButton>
+              <NButton size="small" @click="onCopyText(storageConfig?.copy_env_block || '', 'MinIO环境块')">复制环境块</NButton>
+            </NSpace>
+            <NText depth="3">保存后可直接复制给 AinerOps 或其他系统使用。</NText>
+          </NSpace>
+        </NCard>
+      </NGridItem>
+
+      <NGridItem span="0:2 960:1">
         <NCard title="Adapter Spec (Unified Contract)" size="small">
           <NAlert type="warning" :bordered="false" style="margin-bottom: 10px;">
             AinerOps 只上报原始地址/文档/能力。Studio 本地中间层负责自动解析文档并映射为统一键值，不把业务直接绑到厂商私有 API。
@@ -108,6 +200,146 @@
         :pagination="{ pageSize: 8 }"
         size="small"
         :bordered="false"
+      />
+    </NCard>
+
+    <NCard title="Requirement Negotiation / Auto Integration" size="small" style="margin-top: 12px;">
+      <NGrid :cols="2" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
+        <NGridItem span="0:2 960:1">
+          <NSpace vertical :size="10">
+            <NAlert type="info" :bordered="false">
+              这里可直接模拟 AinerOps 需求协商：输入目标能力、档位、约束与偏好后，Studio 会生成 RoutePlan / GapReport，并可一键固化为可回滚的对接版本。
+            </NAlert>
+            <NForm label-placement="left" :label-width="112">
+              <NFormItem label="能力类型">
+                <NSelect
+                  :value="planForm.capability"
+                  :options="requirementCapabilityOptions"
+                  placeholder="请选择能力"
+                  filterable
+                  clearable
+                  @update:value="(value) => { planForm.capability = String(value || ''); void reloadIntegrations(); }"
+                />
+              </NFormItem>
+              <NFormItem label="目标档位">
+                <NSelect
+                  :value="planForm.tier"
+                  :options="tierOptions"
+                  @update:value="onUpdatePlanTier"
+                />
+              </NFormItem>
+              <NFormItem label="必需特性">
+                <NInput
+                  :value="planForm.requiredFeaturesText"
+                  type="textarea"
+                  :rows="3"
+                  placeholder="多值可使用逗号或换行分隔，如&#10;streaming&#10;image_to_video"
+                  @update:value="(value) => planForm.requiredFeaturesText = value"
+                />
+              </NFormItem>
+              <NFormItem label="约束(JSON)">
+                <NInput
+                  :value="planForm.constraintsText"
+                  type="textarea"
+                  :rows="5"
+                  @update:value="(value) => planForm.constraintsText = value"
+                />
+              </NFormItem>
+              <NFormItem label="偏好(JSON)">
+                <NInput
+                  :value="planForm.preferencesText"
+                  type="textarea"
+                  :rows="5"
+                  @update:value="(value) => planForm.preferencesText = value"
+                />
+              </NFormItem>
+            </NForm>
+            <NSpace>
+              <NButton type="primary" :loading="planLoading" @click="onCreatePlan">一键自动对接</NButton>
+              <NButton :loading="integrationLoading" @click="reloadIntegrations">刷新版本列表</NButton>
+              <NButton @click="reloadRequirementConfig">刷新协商Schema</NButton>
+            </NSpace>
+          </NSpace>
+        </NGridItem>
+
+        <NGridItem span="0:2 960:1">
+          <NSpace vertical :size="10">
+            <div class="plan-panel">
+              <div class="plan-panel__title">当前能力要求</div>
+              <div class="plan-panel__line">
+                aliases: {{ selectedRequirementDefinition?.aliases?.join(", ") || "-" }}
+              </div>
+              <div class="plan-panel__line">
+                must_support: {{ selectedRequirementTier?.must_support?.join(", ") || "-" }}
+              </div>
+              <div class="plan-panel__line">
+                optional_support: {{ selectedRequirementTier?.optional_support?.join(", ") || "-" }}
+              </div>
+              <div class="plan-panel__line">
+                target_values: {{ JSON.stringify(selectedRequirementTier?.target_values || {}, null, 2) }}
+              </div>
+            </div>
+
+            <div class="plan-panel">
+              <div class="plan-panel__title">最新协商结果</div>
+              <div class="plan-panel__line">status: {{ latestPlan?.status || "-" }}</div>
+              <div class="plan-panel__line">route_plan: {{ routePlanSummary(latestPlan?.route_plan) }}</div>
+              <div class="plan-panel__line">gap_report: {{ gapSummary(latestPlan?.gap_report) }}</div>
+              <div class="plan-panel__line">
+                candidates_considered: {{ latestPlan?.candidates_considered ?? "-" }}
+              </div>
+              <div class="plan-panel__line">
+                integration_version: {{ latestPlan?.integration ? `v${latestPlan.integration.version} / ${latestPlan.integration.status}` : "-" }}
+              </div>
+            </div>
+
+            <div class="plan-panel">
+              <div class="plan-panel__title">协商 Schema 版本</div>
+              <div class="plan-panel__line">schema_version: {{ requirementSchema?.schema_version || "-" }}</div>
+              <div class="plan-panel__line">
+                tier_aliases: {{ Object.keys(requirementSchema?.tier_aliases || {}).join(", ") || "-" }}
+              </div>
+            </div>
+          </NSpace>
+        </NGridItem>
+      </NGrid>
+
+      <div v-if="displayCapabilityStats.length" class="capability-stats-grid">
+        <div v-for="item in displayCapabilityStats" :key="item.capability_type" class="capability-stat-card">
+          <div class="capability-stat-card__header">
+            <div class="capability-stat-card__title">{{ item.capability_type }}</div>
+            <NTag :type="item.latest_status === 'success' ? 'success' : item.latest_status === 'failed' ? 'error' : 'default'" size="small" :bordered="false">
+              {{ item.latest_status === 'success' ? '最近成功' : item.latest_status === 'failed' ? '最近失败' : '暂无记录' }}
+            </NTag>
+          </div>
+          <div class="capability-stat-card__metrics">
+            <div>
+              <div class="capability-stat-card__label">成功率</div>
+              <div class="capability-stat-card__value">{{ formatSuccessRate(item.success_rate, item.total_runs) }}</div>
+            </div>
+            <div>
+              <div class="capability-stat-card__label">最近耗时</div>
+              <div class="capability-stat-card__value">{{ formatLatency(item.latest_latency_ms) }}</div>
+            </div>
+          </div>
+          <div class="capability-stat-card__meta">
+            <div>成功次数：{{ item.success_runs }} / {{ item.total_runs }}</div>
+            <div>Provider：{{ item.latest_provider_name || '-' }}</div>
+            <div>最近时间：{{ item.latest_at ? formatTime(item.latest_at) : '-' }}</div>
+          </div>
+        </div>
+      </div>
+
+      <NDivider style="margin: 12px 0;" />
+
+      <NDataTable
+        :columns="integrationColumns"
+        :data="integrationRows"
+        :loading="integrationLoading"
+        :pagination="{ pageSize: 6 }"
+        size="small"
+        :bordered="false"
+        :scroll-x="900"
       />
     </NCard>
 
@@ -147,6 +379,54 @@
     <NModal v-model:show="mappingModalVisible" preset="card" title="映射详情" style="width: 780px;">
       <pre class="mapping-detail">{{ mappingDetailText(mappingModalRow) }}</pre>
     </NModal>
+
+    <NModal v-model:show="quickRunModalVisible" preset="card" title="快速试调用结果" style="width: 780px;">
+      <div v-if="quickRunResult" class="quickrun-stack">
+        <div class="quickrun-summary-grid">
+          <div class="quickrun-tile">
+            <div class="quickrun-tile__label">模式</div>
+            <div class="quickrun-tile__value">{{ quickRunResult.mode }}</div>
+          </div>
+          <div class="quickrun-tile">
+            <div class="quickrun-tile__label">能力</div>
+            <div class="quickrun-tile__value">{{ quickRunResult.integration.capability_type }}</div>
+          </div>
+          <div class="quickrun-tile">
+            <div class="quickrun-tile__label">Provider</div>
+            <div class="quickrun-tile__value">{{ quickRunResult.integration.provider_name }}</div>
+          </div>
+          <div class="quickrun-tile">
+            <div class="quickrun-tile__label">Profile</div>
+            <div class="quickrun-tile__value">{{ quickRunResult.profile_name || '-' }}</div>
+          </div>
+        </div>
+
+        <div class="quickrun-panel">
+          <div class="quickrun-panel__title">联通探测</div>
+          <div class="quickrun-panel__line">status: {{ quickRunProbe.status || '-' }}</div>
+          <div class="quickrun-panel__line">detail: {{ quickRunProbe.detail || '-' }}</div>
+          <div class="quickrun-panel__line">latency_ms: {{ quickRunProbe.latency_ms ?? '-' }}</div>
+        </div>
+
+        <div class="quickrun-panel">
+          <div class="quickrun-panel__title">真实调用摘要</div>
+          <div class="quickrun-panel__line">ok: {{ quickRunLiveResponse.ok ?? '-' }}</div>
+          <div class="quickrun-panel__line">status_code: {{ quickRunLiveResponse.status_code ?? '-' }}</div>
+          <div class="quickrun-panel__line">detail: {{ quickRunLiveResponse.detail || '-' }}</div>
+        </div>
+
+        <div class="quickrun-panel">
+          <div class="quickrun-panel__title">请求预览</div>
+          <pre class="mapping-detail">{{ JSON.stringify(quickRunResult.request_preview || {}, null, 2) }}</pre>
+        </div>
+
+        <div class="quickrun-panel">
+          <div class="quickrun-panel__title">真实响应体</div>
+          <pre class="mapping-detail">{{ JSON.stringify(quickRunLiveResponse.body || quickRunLiveResponse || {}, null, 2) }}</pre>
+        </div>
+      </div>
+      <div v-else class="quickrun-empty">-</div>
+    </NModal>
   </div>
 </template>
 
@@ -176,21 +456,42 @@ import {
 } from "naive-ui";
 
 import {
+  applyOpsRuntimeRouting,
   autoBindOpsProvider,
+  createOpsPlan,
+  getOpsRuntimeRouting,
+  getRequirementSchema,
+  getRequirementTiers,
   getOpsAdapterSpec,
   getOpsCapabilityStandards,
+  getOpsStorageConfig,
   getOpsToken,
+  listOpsIntegrations,
   listOpsProviders,
   listProviders,
   manualBindOpsProvider,
+  quickRunOpsIntegration,
   regenerateOpsToken,
+  rollbackOpsIntegration,
   revealOpsToken,
   testOpsProvider,
+  updateOpsStorageConfig,
   type AdapterSpecResponse,
   type CapabilityStandardItem,
+  type CapabilityRequirementDefinition,
+  type OpsGapReport,
+  type OpsIntegrationVersion,
+  type OpsPlanResponse,
   type OpsProviderRow,
+  type QuickRunResponse,
+  type OpsRoutePlan,
+  type OpsStorageConfigResponse,
+  type OpsStorageConfigUpdatePayload,
   type OpsTokenResponse,
   type ProviderResponse,
+  type RuntimeCapabilityStatResponse,
+  type RequirementSchemaResponse,
+  type RequirementTiersResponse,
 } from "@/api/product";
 
 const message = useMessage();
@@ -201,10 +502,45 @@ const projectId = ref("default");
 const loading = ref(false);
 const tokenLoading = ref(false);
 const providerLoading = ref(false);
+const storageSaving = ref(false);
+const planLoading = ref(false);
+const integrationLoading = ref(false);
+const rollbackLoadingId = ref<string | null>(null);
+const runtimeApplyLoadingId = ref<string | null>(null);
+const promoteRuntimeLoadingId = ref<string | null>(null);
+const quickRunLoadingId = ref<string | null>(null);
 
 const tokenInfo = ref<OpsTokenResponse | null>(null);
 const tokenVisible = ref(false);
 const revealedToken = ref("");
+const storageConfig = ref<OpsStorageConfigResponse | null>(null);
+const requirementTiers = ref<RequirementTiersResponse | null>(null);
+const requirementSchema = ref<RequirementSchemaResponse | null>(null);
+const latestPlan = ref<OpsPlanResponse | null>(null);
+const integrationRows = ref<OpsIntegrationVersion[]>([]);
+const runtimeCapabilityStats = ref<RuntimeCapabilityStatResponse[]>([]);
+const quickRunResult = ref<QuickRunResponse | null>(null);
+const quickRunModalVisible = ref(false);
+const storageForm = reactive<OpsStorageConfigUpdatePayload>({
+  endpoint: "",
+  internal_endpoint: "",
+  console_endpoint: "",
+  bucket: "",
+  region: "us-east-1",
+  access_key: "",
+  secret_key: "",
+  root_user: "",
+  root_password: "",
+});
+const planForm = reactive({
+  capability: "",
+  tier: "standard" as "basic" | "standard" | "advanced",
+  requiredFeaturesText: "",
+  constraintsText: '{\n  "max_latency_ms": 12000\n}',
+  preferencesText: '{\n  "prefer_connected": true\n}',
+  autoIntegrate: true,
+  validateConnectivity: true,
+});
 
 const capabilityRows = ref<CapabilityStandardItem[]>([]);
 const adapterSpec = ref<AdapterSpecResponse | null>(null);
@@ -302,13 +638,206 @@ const providerOptions = computed<SelectOption[]>(() =>
 
 const adapterSpecItems = computed(() => {
   if (!adapterSpec.value?.items) return [];
-  return Object.entries(adapterSpec.value.items).map(([capability, spec]) => ({
+  return Object.entries(adapterSpec.value.items).map(([capability, spec]: [string, AdapterSpecResponse["items"][string]]) => ({
     capability,
     requestRequired: spec.request_required || [],
     responseRequired: spec.response_required || [],
     responseOptional: spec.response_optional || [],
   }));
 });
+
+const requirementCapabilityOptions = computed<SelectOption[]>(() =>
+  (requirementTiers.value?.items || []).map((item) => ({
+    label: `${item.display_name} (${item.capability_type})`,
+    value: item.capability_type,
+  })),
+);
+
+const selectedRequirementDefinition = computed<CapabilityRequirementDefinition | null>(() =>
+  (requirementTiers.value?.items || []).find((item) => item.capability_type === planForm.capability) || null,
+);
+
+const selectedRequirementTier = computed(() =>
+  selectedRequirementDefinition.value?.tiers?.[planForm.tier] || null,
+);
+
+const displayCapabilityStats = computed(() => {
+  const items = runtimeCapabilityStats.value || [];
+  if (!planForm.capability) {
+    return items;
+  }
+  const filtered = items.filter((item) => item.capability_type === planForm.capability);
+  return filtered.length ? filtered : items;
+});
+
+const quickRunProbe = computed<Record<string, unknown>>(() =>
+  (quickRunResult.value?.probe as Record<string, unknown> | undefined) || {},
+);
+
+const quickRunLiveResponse = computed<Record<string, unknown>>(() =>
+  (quickRunResult.value as unknown as { live_response?: Record<string, unknown> } | null)?.live_response || {},
+);
+
+const tierOptions: SelectOption[] = [
+  { label: "Basic", value: "basic" },
+  { label: "Standard", value: "standard" },
+  { label: "Advanced", value: "advanced" },
+];
+
+const storageDirty = computed(() => {
+  if (!storageConfig.value) return false;
+  return [
+    storageConfig.value.endpoint !== storageForm.endpoint,
+    storageConfig.value.internal_endpoint !== storageForm.internal_endpoint,
+    (storageConfig.value.console_endpoint || "") !== (storageForm.console_endpoint || ""),
+    storageConfig.value.bucket !== storageForm.bucket,
+    storageConfig.value.region !== storageForm.region,
+    storageConfig.value.access_key !== storageForm.access_key,
+    storageConfig.value.secret_key !== storageForm.secret_key,
+    storageConfig.value.root_user !== storageForm.root_user,
+    storageConfig.value.root_password !== storageForm.root_password,
+  ].some(Boolean);
+});
+
+const integrationColumns = computed<DataTableColumns<OpsIntegrationVersion>>(() => [
+  {
+    title: "Capability",
+    key: "capability_type",
+    width: 180,
+    render: (row) =>
+      h("div", [
+        h("div", { style: "font-weight:600;" }, row.capability_type),
+        h("div", { style: "font-size:12px;color:#666;" }, `tier: ${String(row.tier).toUpperCase()}`),
+      ]),
+  },
+  {
+    title: "Provider",
+    key: "provider_name",
+    width: 220,
+    render: (row) =>
+      h("div", [
+        h("div", { style: "font-weight:600;" }, row.provider_name),
+        h("div", { style: "font-size:12px;color:#666;" }, row.provider_key),
+      ]),
+  },
+  {
+    title: "Version",
+    key: "version",
+    width: 90,
+  },
+  {
+    title: "Status",
+    key: "status",
+    width: 120,
+    render: (row) =>
+      h(
+        NTag,
+        {
+          bordered: false,
+          size: "small",
+          type: row.status === "active" ? "success" : "default",
+        },
+        { default: () => row.status },
+      ),
+  },
+  {
+    title: "Mapping",
+    key: "mapping_status",
+    width: 120,
+    render: (row) =>
+      h(
+        NTag,
+        {
+          bordered: false,
+          size: "small",
+          type: row.mapping_status === "mapped" ? "success" : row.mapping_status === "partial" ? "warning" : "error",
+        },
+        { default: () => row.mapping_status },
+      ),
+  },
+  {
+    title: "Created",
+    key: "created_at",
+    width: 180,
+    render: (row) => (row.created_at ? formatTime(row.created_at) : "-"),
+  },
+  {
+    title: "最近状态/耗时",
+    key: "latest_runtime_status",
+    width: 180,
+    render: (row) => {
+      const stat = runtimeCapabilityStats.value.find((item) => item.capability_type === row.capability_type);
+      if (!stat) {
+        return "-";
+      }
+      const statusLabel = stat.latest_status === "success"
+        ? "成功"
+        : stat.latest_status === "failed"
+          ? "失败"
+          : "暂无记录";
+      const latencyLabel = formatLatency(stat.latest_latency_ms);
+      return h("div", [
+        h(
+          NTag,
+          {
+            bordered: false,
+            size: "small",
+            type: stat.latest_status === "success" ? "success" : stat.latest_status === "failed" ? "error" : "default",
+          },
+          { default: () => statusLabel },
+        ),
+        h("div", { style: "font-size:12px;color:#666;margin-top:4px;" }, latencyLabel),
+      ]);
+    },
+  },
+  {
+    title: "Actions",
+    key: "actions",
+    width: 320,
+    render: (row) =>
+      h(NSpace, { size: 6 }, () => [
+        h(
+          NButton,
+          {
+            size: "small",
+            type: "warning",
+            loading: promoteRuntimeLoadingId.value === row.integration_id,
+            onClick: () => onPromoteAndApplyRuntimeRouting(row),
+          },
+          { default: () => "设主并写路由" },
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            type: "primary",
+            loading: runtimeApplyLoadingId.value === row.integration_id,
+            onClick: () => onApplyRuntimeRouting(row),
+          },
+          { default: () => "写入运行时路由" },
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            loading: quickRunLoadingId.value === row.integration_id,
+            onClick: () => onQuickRunIntegration(row),
+          },
+          { default: () => "快速试调用" },
+        ),
+        h(
+          NButton,
+          {
+            size: "small",
+            disabled: row.status === "active" || rollbackLoadingId.value === row.integration_id,
+            loading: rollbackLoadingId.value === row.integration_id,
+            onClick: () => onRollbackIntegration(row),
+          },
+          { default: () => "回滚到此版本" },
+        ),
+      ]),
+  },
+]);
 
 const capabilityColumns = computed<DataTableColumns<CapabilityStandardItem>>(() => [
   {
@@ -537,6 +1066,16 @@ function formatCoverage(value?: number | null): string {
   return `${Math.round(Number(value) * 100)}%`;
 }
 
+function formatLatency(value?: number | null): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value} ms` : "-";
+}
+
+function formatSuccessRate(rate?: number | null, totalRuns?: number | null): string {
+  if (!totalRuns) return "-";
+  const normalized = typeof rate === "number" && Number.isFinite(rate) ? rate : 0;
+  return `${normalized.toFixed(1)}%`;
+}
+
 function onShowMapping(row: OpsProviderRow): void {
   mappingModalRow.value = row;
   mappingModalVisible.value = true;
@@ -566,11 +1105,258 @@ async function reloadAll(): Promise<void> {
   try {
     await Promise.all([
       reloadToken(),
+      reloadStorageConfig(),
+      reloadRequirementConfig(),
       reloadCapabilities(),
+      reloadIntegrations(),
+      reloadRuntimeStats(),
       reloadProviders(),
     ]);
   } finally {
     loading.value = false;
+  }
+}
+
+function normalizeRequirementFeatures(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function onUpdatePlanTier(value: string | number | null): void {
+  if (value === "basic" || value === "standard" || value === "advanced") {
+    planForm.tier = value;
+    return;
+  }
+  planForm.tier = "standard";
+}
+
+function parseJsonObjectInput(value: string, label: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error(`${label} 必须是 JSON 对象`);
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`${label} 解析失败: ${String(error)}`);
+  }
+}
+
+function routePlanSummary(routePlan?: OpsRoutePlan | null): string {
+  if (!routePlan) return "-";
+  return [
+    `provider=${routePlan.selected_provider_name}`,
+    `template=${routePlan.selected_template_id}@${routePlan.selected_template_version}`,
+    `mapping=${routePlan.mapping_status}`,
+  ].join(" / ");
+}
+
+function gapSummary(gapReport?: OpsGapReport | null): string {
+  if (!gapReport) return "-";
+  return `${gapReport.summary}${gapReport.missing_features?.length ? ` / missing: ${gapReport.missing_features.join(", ")}` : ""}`;
+}
+
+async function reloadRequirementConfig(): Promise<void> {
+  try {
+    const [tiersResp, schemaResp] = await Promise.all([
+      getRequirementTiers(),
+      getRequirementSchema(),
+    ]);
+    requirementTiers.value = tiersResp;
+    requirementSchema.value = schemaResp;
+    if (!planForm.capability && tiersResp.items.length) {
+      planForm.capability = tiersResp.items[0]?.capability_type || "";
+    }
+  } catch (error) {
+    message.error(`加载需求协商配置失败: ${String(error)}`);
+  }
+}
+
+async function reloadIntegrations(): Promise<void> {
+  integrationLoading.value = true;
+  try {
+    const resp = await listOpsIntegrations({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      capability_type: planForm.capability || undefined,
+    });
+    integrationRows.value = resp.items;
+  } catch (error) {
+    message.error(`加载自动对接版本失败: ${String(error)}`);
+  } finally {
+    integrationLoading.value = false;
+  }
+}
+
+async function reloadRuntimeStats(): Promise<void> {
+  try {
+    const resp = await getOpsRuntimeRouting({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+    });
+    runtimeCapabilityStats.value = resp.capability_stats || [];
+  } catch (error) {
+    message.error(`加载 quick-run 统计失败: ${String(error)}`);
+  }
+}
+
+async function reloadStorageConfig(): Promise<void> {
+  try {
+    storageConfig.value = await getOpsStorageConfig();
+    resetStorageForm();
+  } catch (error) {
+    message.error(`加载 MinIO 配置失败: ${String(error)}`);
+  }
+}
+
+function resetStorageForm(): void {
+  storageForm.endpoint = storageConfig.value?.endpoint || "";
+  storageForm.internal_endpoint = storageConfig.value?.internal_endpoint || "";
+  storageForm.console_endpoint = storageConfig.value?.console_endpoint || "";
+  storageForm.bucket = storageConfig.value?.bucket || "";
+  storageForm.region = storageConfig.value?.region || "us-east-1";
+  storageForm.access_key = storageConfig.value?.access_key || "";
+  storageForm.secret_key = storageConfig.value?.secret_key || "";
+  storageForm.root_user = storageConfig.value?.root_user || "";
+  storageForm.root_password = storageConfig.value?.root_password || "";
+}
+
+async function onSaveStorageConfig(): Promise<void> {
+  storageSaving.value = true;
+  try {
+    storageConfig.value = await updateOpsStorageConfig({
+      endpoint: storageForm.endpoint,
+      internal_endpoint: storageForm.internal_endpoint,
+      console_endpoint: storageForm.console_endpoint,
+      bucket: storageForm.bucket,
+      region: storageForm.region,
+      access_key: storageForm.access_key,
+      secret_key: storageForm.secret_key,
+      root_user: storageForm.root_user,
+      root_password: storageForm.root_password,
+    });
+    resetStorageForm();
+    message.success("MinIO 配置已保存");
+  } catch (error) {
+    message.error(`保存 MinIO 配置失败: ${String(error)}`);
+  } finally {
+    storageSaving.value = false;
+  }
+}
+
+async function onCreatePlan(): Promise<void> {
+  if (!planForm.capability) {
+    message.warning("请先选择能力类型");
+    return;
+  }
+  planLoading.value = true;
+  try {
+    latestPlan.value = await createOpsPlan({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      capability: planForm.capability,
+      tier: planForm.tier,
+      required_features: normalizeRequirementFeatures(planForm.requiredFeaturesText),
+      constraints: parseJsonObjectInput(planForm.constraintsText, "约束条件"),
+      preferences: parseJsonObjectInput(planForm.preferencesText, "偏好配置"),
+      auto_integrate: planForm.autoIntegrate,
+      validate_connectivity: planForm.validateConnectivity,
+      initiated_by: "studio_ops_bridge",
+    });
+    await Promise.all([reloadIntegrations(), reloadProviders()]);
+    await reloadRuntimeStats();
+    if (latestPlan.value.status === "planned") {
+      message.success("自动对接方案已生成");
+    } else {
+      message.warning("已生成 Gap Report，请按建议补齐能力");
+    }
+  } catch (error) {
+    message.error(`生成自动对接方案失败: ${String(error)}`);
+  } finally {
+    planLoading.value = false;
+  }
+}
+
+async function onRollbackIntegration(row: OpsIntegrationVersion): Promise<void> {
+  rollbackLoadingId.value = row.integration_id;
+  try {
+    const resp = await rollbackOpsIntegration(row.integration_id, {
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+    });
+    await Promise.all([reloadIntegrations(), reloadProviders(), reloadRuntimeStats()]);
+    message.success(`已回滚到版本 v${resp.integration.version}`);
+  } catch (error) {
+    message.error(`版本回滚失败: ${String(error)}`);
+  } finally {
+    rollbackLoadingId.value = null;
+  }
+}
+
+async function onApplyRuntimeRouting(row: OpsIntegrationVersion): Promise<void> {
+  runtimeApplyLoadingId.value = row.integration_id;
+  try {
+    await applyOpsRuntimeRouting({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      integration_id: row.integration_id,
+    });
+    await reloadRuntimeStats();
+    message.success(`已将 ${row.capability_type} 写入运行时路由`);
+  } catch (error) {
+    message.error(`写入运行时路由失败: ${String(error)}`);
+  } finally {
+    runtimeApplyLoadingId.value = null;
+  }
+}
+
+async function onPromoteAndApplyRuntimeRouting(row: OpsIntegrationVersion): Promise<void> {
+  promoteRuntimeLoadingId.value = row.integration_id;
+  try {
+    if (row.status !== "active") {
+      await rollbackOpsIntegration(row.integration_id, {
+        tenant_id: tenantId.value,
+        project_id: projectId.value,
+      });
+    }
+    await applyOpsRuntimeRouting({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      integration_id: row.integration_id,
+    });
+    await Promise.all([reloadIntegrations(), reloadRuntimeStats()]);
+    message.success(`已将 ${row.capability_type} 设为主版本并写入运行时路由`);
+  } catch (error) {
+    message.error(`设主并写路由失败: ${String(error)}`);
+  } finally {
+    promoteRuntimeLoadingId.value = null;
+  }
+}
+
+async function onQuickRunIntegration(row: OpsIntegrationVersion): Promise<void> {
+  quickRunLoadingId.value = row.integration_id;
+  try {
+    quickRunResult.value = await quickRunOpsIntegration({
+      tenant_id: tenantId.value,
+      project_id: projectId.value,
+      integration_id: row.integration_id,
+      sample_input: {
+        prompt: "生成一个简短测试样例",
+        scene: "moonlit courtyard",
+      },
+      probe_connectivity: true,
+    });
+    await reloadRuntimeStats();
+    quickRunModalVisible.value = true;
+    message.success("快速试调用完成");
+  } catch (error) {
+    message.error(`快速试调用失败: ${String(error)}`);
+  } finally {
+    quickRunLoadingId.value = null;
   }
 }
 
@@ -767,6 +1553,10 @@ onMounted(() => {
   min-width: 88px;
 }
 
+.storage-card :deep(.n-form-item-label) {
+  min-width: 92px;
+}
+
 .ingress-value {
   margin-top: 2px;
   padding: 6px 8px;
@@ -791,5 +1581,134 @@ onMounted(() => {
   word-break: break-word;
   line-height: 1.5;
   color: #2b2f36;
+}
+
+.plan-panel {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f7f8fa;
+}
+
+.plan-panel__title {
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.plan-panel__line {
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #4a5160;
+}
+
+.capability-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.capability-stat-card {
+  padding: 14px;
+  border-radius: 12px;
+  background: #f7f8fa;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capability-stat-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.capability-stat-card__title {
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.capability-stat-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.capability-stat-card__label {
+  font-size: 12px;
+  color: #7a8190;
+  margin-bottom: 4px;
+}
+
+.capability-stat-card__value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2329;
+}
+
+.capability-stat-card__meta {
+  font-size: 12px;
+  color: #4a5160;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quickrun-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quickrun-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quickrun-tile {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f7f8fa;
+}
+
+.quickrun-tile__label {
+  font-size: 12px;
+  color: #7a8190;
+  margin-bottom: 4px;
+}
+
+.quickrun-tile__value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+  word-break: break-word;
+}
+
+.quickrun-panel {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f7f8fa;
+}
+
+.quickrun-panel__title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.quickrun-panel__line {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #4a5160;
+  word-break: break-word;
+}
+
+.quickrun-empty {
+  color: #7a8190;
 }
 </style>

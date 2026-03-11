@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.ops_bridge_models import OpsBridgeToken, OpsProviderReport
 from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
+from ainern2d_shared.config.setting import settings
 
 from app.api.deps import get_db
 
@@ -458,6 +460,33 @@ class CapabilityStandardsResponse(BaseModel):
 
 class AdapterSpecResponse(BaseModel):
     items: dict[str, dict[str, Any]]
+
+
+class OpsStorageConfigResponse(BaseModel):
+    storage_backend: str
+    provider: str
+    endpoint: str
+    internal_endpoint: str
+    console_endpoint: str | None = None
+    bucket: str
+    region: str
+    access_key: str
+    secret_key: str
+    root_user: str
+    root_password: str
+    copy_env_block: str
+
+
+class OpsStorageConfigUpdateRequest(BaseModel):
+    endpoint: str
+    internal_endpoint: str
+    console_endpoint: str | None = None
+    bucket: str
+    region: str = "us-east-1"
+    access_key: str
+    secret_key: str
+    root_user: str
+    root_password: str
 
 
 class OpsTokenResponse(BaseModel):
@@ -963,6 +992,89 @@ def _connectivity_label(code: str) -> str:
     return "未测试"
 
 
+def _build_storage_env_block() -> str:
+    lines = [
+        f"STORAGE_BACKEND={settings.storage_backend}",
+        f"S3_ENDPOINT={settings.s3_endpoint}",
+        f"S3_PUBLIC_ENDPOINT={settings.s3_public_endpoint}",
+        f"S3_ACCESS_KEY={settings.s3_access_key}",
+        f"S3_SECRET_KEY={settings.s3_secret_key}",
+        f"S3_BUCKET={settings.s3_bucket}",
+        f"S3_REGION={settings.s3_region}",
+        f"MINIO_ROOT_USER={settings.minio_root_user}",
+        f"MINIO_ROOT_PASSWORD={settings.minio_root_password}",
+    ]
+    if settings.minio_console_endpoint:
+        lines.append(f"MINIO_CONSOLE_ENDPOINT={settings.minio_console_endpoint}")
+    return "\n".join(lines)
+
+
+def _env_file_path() -> Path:
+    return Path(__file__).resolve().parents[5] / ".env"
+
+
+def _upsert_env_assignments(env_text: str, assignments: dict[str, str]) -> str:
+    lines = env_text.splitlines()
+    seen: set[str] = set()
+    updated_lines: list[str] = []
+    pattern_cache = {
+        key: re.compile(rf"^{re.escape(key)}=")
+        for key in assignments
+    }
+
+    for line in lines:
+        replaced = False
+        for key, pattern in pattern_cache.items():
+            if pattern.match(line):
+                updated_lines.append(f"{key}={assignments[key]}")
+                seen.add(key)
+                replaced = True
+                break
+        if not replaced:
+            updated_lines.append(line)
+
+    if updated_lines and updated_lines[-1].strip():
+        updated_lines.append("")
+    for key, value in assignments.items():
+        if key not in seen:
+            updated_lines.append(f"{key}={value}")
+    return "\n".join(updated_lines).rstrip() + "\n"
+
+
+def _apply_storage_config_update(payload: OpsStorageConfigUpdateRequest) -> None:
+    settings.storage_backend = "minio"
+    settings.s3_public_endpoint = payload.endpoint.strip()
+    settings.s3_endpoint = payload.internal_endpoint.strip()
+    settings.minio_console_endpoint = (payload.console_endpoint or "").strip() or ""
+    settings.s3_bucket = payload.bucket.strip()
+    settings.s3_region = payload.region.strip()
+    settings.s3_access_key = payload.access_key.strip()
+    settings.s3_secret_key = payload.secret_key.strip()
+    settings.minio_root_user = payload.root_user.strip()
+    settings.minio_root_password = payload.root_password.strip()
+
+    env_path = _env_file_path()
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    env_path.write_text(
+        _upsert_env_assignments(
+            existing,
+            {
+                "STORAGE_BACKEND": settings.storage_backend,
+                "S3_ENDPOINT": settings.s3_endpoint,
+                "S3_PUBLIC_ENDPOINT": settings.s3_public_endpoint,
+                "S3_ACCESS_KEY": settings.s3_access_key,
+                "S3_SECRET_KEY": settings.s3_secret_key,
+                "S3_BUCKET": settings.s3_bucket,
+                "S3_REGION": settings.s3_region,
+                "MINIO_ROOT_USER": settings.minio_root_user,
+                "MINIO_ROOT_PASSWORD": settings.minio_root_password,
+                "MINIO_CONSOLE_ENDPOINT": settings.minio_console_endpoint,
+            },
+        ),
+        encoding="utf-8",
+    )
+
+
 def _tier_requirements(capability_type: str, tier: str) -> list[str]:
     spec = CAPABILITY_STANDARDS.get(capability_type) or {}
     tiers: dict[str, list[str]] = spec.get("tiers", {})
@@ -1330,6 +1442,47 @@ def get_capability_standards() -> CapabilityStandardsResponse:
 @router.get("/adapter-spec", response_model=AdapterSpecResponse)
 def get_adapter_spec() -> AdapterSpecResponse:
     return AdapterSpecResponse(items=ADAPTER_SPEC)
+
+
+@router.get("/storage-config", response_model=OpsStorageConfigResponse)
+def get_storage_config() -> OpsStorageConfigResponse:
+    endpoint = settings.s3_public_endpoint or settings.s3_endpoint
+    provider = "minio" if settings.storage_backend.strip().lower() == "minio" else settings.storage_backend
+    return OpsStorageConfigResponse(
+        storage_backend=settings.storage_backend,
+        provider=provider,
+        endpoint=endpoint,
+        internal_endpoint=settings.s3_endpoint,
+        console_endpoint=settings.minio_console_endpoint or None,
+        bucket=settings.s3_bucket,
+        region=settings.s3_region,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        root_user=settings.minio_root_user,
+        root_password=settings.minio_root_password,
+        copy_env_block=_build_storage_env_block(),
+    )
+
+
+@router.put("/storage-config", response_model=OpsStorageConfigResponse)
+def update_storage_config(payload: OpsStorageConfigUpdateRequest) -> OpsStorageConfigResponse:
+    if not payload.endpoint.strip():
+        raise HTTPException(status_code=400, detail="endpoint is required")
+    if not payload.internal_endpoint.strip():
+        raise HTTPException(status_code=400, detail="internal_endpoint is required")
+    if not payload.bucket.strip():
+        raise HTTPException(status_code=400, detail="bucket is required")
+    if not payload.access_key.strip():
+        raise HTTPException(status_code=400, detail="access_key is required")
+    if not payload.secret_key.strip():
+        raise HTTPException(status_code=400, detail="secret_key is required")
+    if not payload.root_user.strip():
+        raise HTTPException(status_code=400, detail="root_user is required")
+    if not payload.root_password.strip():
+        raise HTTPException(status_code=400, detail="root_password is required")
+
+    _apply_storage_config_update(payload)
+    return get_storage_config()
 
 
 @router.get("/token", response_model=OpsTokenResponse)

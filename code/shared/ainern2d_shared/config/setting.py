@@ -15,9 +15,14 @@ class Settings(BaseModel):
 
     storage_backend: str = Field(default="minio")
     s3_endpoint: str = Field(default="http://localhost:9000")
+    s3_public_endpoint: str = Field(default="http://localhost:9000")
     s3_access_key: str = Field(default="minioadmin")
     s3_secret_key: str = Field(default="minioadmin")
     s3_bucket: str = Field(default="ainer-artifacts")
+    s3_region: str = Field(default="us-east-1")
+    minio_root_user: str = Field(default="minioadmin")
+    minio_root_password: str = Field(default="minioadmin")
+    minio_console_endpoint: str = Field(default="http://localhost:9001")
 
     log_level: str = Field(default="INFO")
 
@@ -44,9 +49,14 @@ class Settings(BaseModel):
             rabbitmq_url=os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
             storage_backend=os.getenv("STORAGE_BACKEND", "minio"),
             s3_endpoint=os.getenv("S3_ENDPOINT", "http://localhost:9000"),
+            s3_public_endpoint=os.getenv("S3_PUBLIC_ENDPOINT", os.getenv("S3_ENDPOINT", "http://localhost:9000")),
             s3_access_key=os.getenv("S3_ACCESS_KEY", "minioadmin"),
             s3_secret_key=os.getenv("S3_SECRET_KEY", "minioadmin"),
             s3_bucket=os.getenv("S3_BUCKET", "ainer-artifacts"),
+            s3_region=os.getenv("S3_REGION", "us-east-1"),
+            minio_root_user=os.getenv("MINIO_ROOT_USER", os.getenv("S3_ACCESS_KEY", "minioadmin")),
+            minio_root_password=os.getenv("MINIO_ROOT_PASSWORD", os.getenv("S3_SECRET_KEY", "minioadmin")),
+            minio_console_endpoint=os.getenv("MINIO_CONSOLE_ENDPOINT", "http://localhost:9001"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),

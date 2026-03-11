@@ -8,3 +8,8 @@ __pycache__/
 .mypy_cache/
 .vscode/
 code/apps/logs/
+node_modules/
+dist/
+build/
+*.sql
+!code/db/init_sql/*.sql

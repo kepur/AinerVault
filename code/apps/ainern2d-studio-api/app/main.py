@@ -18,6 +18,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.auto_router import router as auto_router_router
 from app.api.v1.config_center import router as config_center_router
 from app.api.v1.culture_packs import router as culture_packs_router
+from app.api.v1.entity_mapping import router as entity_mapping_router
 from app.api.v1.init import router as init_router
 from app.api.v1.novels import router as novels_router
 from app.api.v1.observer import router as observer_router
@@ -27,8 +28,10 @@ from app.api.v1.preview import router as preview_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.rag_console import router as rag_console_router
 from app.api.v1.regenerate import router as regenerate_router
+from app.api.v1.requirements import router as requirements_router
 from app.api.v1.tasks import router as task_router
 from app.api.v1.timesline import router as timeline_router
+from app.api.v1.script_workflow import router as script_workflow_router
 from app.api.v1.translation import router as translation_router
 from app.api.v1.kb_assets import router as kb_assets_router
 from app.api.v1.nle_projects import router as nle_projects_router
@@ -54,6 +57,9 @@ app.include_router(assets_router)
 app.include_router(timeline_router)
 app.include_router(regenerate_router)
 app.include_router(preview_router)
+app.include_router(script_workflow_router)
+app.include_router(entity_mapping_router)
+app.include_router(requirements_router)
 app.include_router(translation_router)
 app.include_router(kb_assets_router)
 app.include_router(nle_projects_router)

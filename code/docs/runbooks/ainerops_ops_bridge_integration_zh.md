@@ -35,6 +35,7 @@ Token 来源：
   - `GET /api/v1/ops-bridge/token`
   - `POST /api/v1/ops-bridge/token/reveal`
   - `POST /api/v1/ops-bridge/token/regenerate`
+  - `GET /api/v1/ops-bridge/storage-config`（复制 MinIO / S3 接入配置）
 
 规则：
 
@@ -47,6 +48,26 @@ X-AinerOps-Token: <ops_token>
 ```
 
 ## 3. 上报接口（AinerOps 必接）
+
+### 2.1 对象存储配置（AinerOps 可直接复制）
+
+如需让 AinerOps 直接接入当前系统对象存储，可调用：
+
+- `GET /api/v1/ops-bridge/storage-config`
+
+返回包含：
+
+- `endpoint`：推荐给 AinerOps 使用的公开地址
+- `internal_endpoint`：容器内地址
+- `access_key` / `secret_key`
+- `bucket` / `region`
+- `root_user` / `root_password`
+- `copy_env_block`：可直接复制到部署侧的环境变量块
+
+建议：
+
+- 跨 Docker 网络接入时，优先配置 `S3_PUBLIC_ENDPOINT`
+- 若需要网页管理台，同时配置 `MINIO_CONSOLE_ENDPOINT`
 
 Endpoint：
 

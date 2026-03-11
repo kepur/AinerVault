@@ -291,6 +291,199 @@ export interface AdapterSpecResponse {
   >;
 }
 
+export interface OpsStorageConfigResponse {
+  storage_backend: string;
+  provider: string;
+  endpoint: string;
+  internal_endpoint: string;
+  console_endpoint?: string | null;
+  bucket: string;
+  region: string;
+  access_key: string;
+  secret_key: string;
+  root_user: string;
+  root_password: string;
+  copy_env_block: string;
+}
+
+export interface OpsStorageConfigUpdatePayload {
+  endpoint: string;
+  internal_endpoint: string;
+  console_endpoint?: string | null;
+  bucket: string;
+  region: string;
+  access_key: string;
+  secret_key: string;
+  root_user: string;
+  root_password: string;
+}
+
+export interface RequirementTierDefinition {
+  tier: "basic" | "standard" | "advanced";
+  target_values: Record<string, unknown>;
+  must_support: string[];
+  optional_support: string[];
+}
+
+export interface CapabilityRequirementDefinition {
+  capability_type: string;
+  display_name: string;
+  aliases: string[];
+  tiers: Record<string, RequirementTierDefinition>;
+}
+
+export interface RequirementTiersResponse {
+  schema_version: string;
+  items: CapabilityRequirementDefinition[];
+}
+
+export interface RequirementSchemaResponse {
+  schema_version: string;
+  capability_aliases: Record<string, string>;
+  tier_aliases: Record<string, string>;
+  requirement_profile_schema: Record<string, unknown>;
+  route_plan_schema: Record<string, unknown>;
+  gap_report_schema: Record<string, unknown>;
+}
+
+export interface OpsIntegrationVersion {
+  integration_id: string;
+  capability_type: string;
+  tier: string;
+  provider_key: string;
+  provider_name: string;
+  version: number;
+  status: string;
+  mapping_status: string;
+  created_at?: string | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface OpsRoutePlan {
+  selected_provider_key: string;
+  selected_provider_name: string;
+  selected_report_id: string;
+  matched_provider_id?: string | null;
+  data_endpoint?: string | null;
+  selected_template_id: string;
+  selected_template_version: string;
+  workflow_hash: string;
+  resolved_params: Record<string, unknown>;
+  bindings: Record<string, unknown>;
+  fallback_chain: Array<Record<string, unknown>>;
+  mapping_status: string;
+  mapping_confidence?: number | null;
+}
+
+export interface OpsGapReport {
+  gap_type: string;
+  summary: string;
+  missing_features: string[];
+  unmet_constraints: Record<string, unknown>;
+  repair_actions: Record<string, unknown>;
+  candidate_summaries: Array<Record<string, unknown>>;
+}
+
+export interface OpsPlanRequestPayload {
+  tenant_id: string;
+  project_id: string;
+  capability: string;
+  tier: "basic" | "standard" | "advanced";
+  constraints?: Record<string, unknown>;
+  required_features?: string[];
+  preferences?: Record<string, unknown>;
+  auto_integrate?: boolean;
+  validate_connectivity?: boolean;
+  initiated_by?: string;
+}
+
+export interface OpsPlanResponse {
+  status: "planned" | "gap";
+  capability: string;
+  tier: string;
+  requirement_profile: Record<string, unknown>;
+  route_plan?: OpsRoutePlan | null;
+  gap_report?: OpsGapReport | null;
+  integration?: OpsIntegrationVersion | null;
+  candidates_considered: number;
+}
+
+export interface OpsIntegrationListResponse {
+  items: OpsIntegrationVersion[];
+}
+
+export interface RuntimeRouteDecisionResponse {
+  decision_id: string;
+  created_at?: string | null;
+  capability_type: string;
+  provider_key?: string | null;
+  provider_name?: string | null;
+  profile_name?: string | null;
+  integration_id?: string | null;
+  mode?: string | null;
+  probe_ok?: boolean | null;
+  probe_detail?: string | null;
+  probe_latency_ms?: number | null;
+  live_ok?: boolean | null;
+  live_status_code?: number | null;
+  live_latency_ms?: number | null;
+}
+
+export interface RuntimeCapabilityStatResponse {
+  capability_type: string;
+  total_runs: number;
+  success_runs: number;
+  success_rate: number;
+  latest_status: string;
+  latest_latency_ms?: number | null;
+  latest_provider_name?: string | null;
+  latest_at?: string | null;
+}
+
+export interface RuntimeRouteItemResponse {
+  integration_id: string;
+  capability_type: string;
+  tier: string;
+  provider_key: string;
+  provider_name: string;
+  version: number;
+  status: string;
+  mapping_status: string;
+  profile_name?: string | null;
+  runtime_route_key: string;
+  feature_route_key: string;
+  applied_profile_name?: string | null;
+  applied_route_profile_name?: string | null;
+  route_plan: Record<string, unknown>;
+  requirement_profile: Record<string, unknown>;
+  fallback_chain: Array<Record<string, unknown>>;
+  evidence: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface RuntimeRoutingViewResponse {
+  tenant_id: string;
+  project_id: string;
+  stage_routes: Record<string, unknown>;
+  feature_routes: Record<string, unknown>;
+  fallback_chain: Record<string, unknown>;
+  items: RuntimeRouteItemResponse[];
+  recent_decisions: RuntimeRouteDecisionResponse[];
+  capability_stats: RuntimeCapabilityStatResponse[];
+}
+
+export interface QuickRunResponse {
+  mode: string;
+  integration: OpsIntegrationVersion;
+  runtime_route_key: string;
+  profile_name?: string | null;
+  request_preview: Record<string, unknown>;
+  probe: Record<string, unknown>;
+  live_request: Record<string, unknown>;
+  live_response: Record<string, unknown>;
+  decision_id?: string | null;
+}
+
 export interface OpsProviderRow {
   report_id: string;
   provider_key: string;
@@ -1247,6 +1440,82 @@ export async function getOpsCapabilityStandards(): Promise<CapabilityStandardsRe
 
 export async function getOpsAdapterSpec(): Promise<AdapterSpecResponse> {
   const { data } = await http.get<AdapterSpecResponse>("/api/v1/ops-bridge/adapter-spec");
+  return data;
+}
+
+export async function getOpsStorageConfig(): Promise<OpsStorageConfigResponse> {
+  const { data } = await http.get<OpsStorageConfigResponse>("/api/v1/ops-bridge/storage-config");
+  return data;
+}
+
+export async function getRequirementTiers(): Promise<RequirementTiersResponse> {
+  const { data } = await http.get<RequirementTiersResponse>("/api/v1/requirements/tiers");
+  return data;
+}
+
+export async function getRequirementSchema(): Promise<RequirementSchemaResponse> {
+  const { data } = await http.get<RequirementSchemaResponse>("/api/v1/requirements/schema");
+  return data;
+}
+
+export async function createOpsPlan(payload: OpsPlanRequestPayload): Promise<OpsPlanResponse> {
+  const { data } = await http.post<OpsPlanResponse>("/api/v1/ops/plan", payload);
+  return data;
+}
+
+export async function listOpsIntegrations(params: {
+  tenant_id: string;
+  project_id: string;
+  capability_type?: string;
+}): Promise<OpsIntegrationListResponse> {
+  const { data } = await http.get<OpsIntegrationListResponse>("/api/v1/ops/integrations", { params });
+  return data;
+}
+
+export async function rollbackOpsIntegration(
+  integrationId: string,
+  payload: { tenant_id: string; project_id: string },
+): Promise<{ integration: OpsIntegrationVersion; status: string }> {
+  const { data } = await http.post<{ integration: OpsIntegrationVersion; status: string }>(
+    `/api/v1/ops/integrations/${integrationId}/rollback`,
+    payload,
+  );
+  return data;
+}
+
+export async function getOpsRuntimeRouting(params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<RuntimeRoutingViewResponse> {
+  const { data } = await http.get<RuntimeRoutingViewResponse>("/api/v1/ops/runtime-routing", { params });
+  return data;
+}
+
+export async function applyOpsRuntimeRouting(payload: {
+  tenant_id: string;
+  project_id: string;
+  integration_id: string;
+}): Promise<RuntimeRoutingViewResponse> {
+  const { data } = await http.post<RuntimeRoutingViewResponse>("/api/v1/ops/runtime-routing/apply", payload);
+  return data;
+}
+
+export async function quickRunOpsIntegration(payload: {
+  tenant_id: string;
+  project_id: string;
+  integration_id?: string;
+  capability_type?: string;
+  sample_input?: Record<string, unknown>;
+  probe_connectivity?: boolean;
+}): Promise<QuickRunResponse> {
+  const { data } = await http.post<QuickRunResponse>("/api/v1/ops/quick-run", payload);
+  return data;
+}
+
+export async function updateOpsStorageConfig(
+  payload: OpsStorageConfigUpdatePayload,
+): Promise<OpsStorageConfigResponse> {
+  const { data } = await http.put<OpsStorageConfigResponse>("/api/v1/ops-bridge/storage-config", payload);
   return data;
 }
 

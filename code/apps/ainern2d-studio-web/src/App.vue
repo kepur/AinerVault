@@ -204,7 +204,7 @@ const MENU_I18N: Record<string, Record<string, string>> = {
     dashboard: "控制台",
     models: "模型与路由",
     modelAssets: "模型资产管理",
-    modelRouting: "AI 路由与策略",
+    modelRouting: "AI 路由与运行时路由",
     opsBridge: "开放接口接收",
     languages: "多语言设置",
     knowledge: "知识与资产",

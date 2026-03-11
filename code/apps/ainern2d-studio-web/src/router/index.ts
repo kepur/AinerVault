@@ -130,7 +130,7 @@ const router = createRouter({
       component: StudioModelRoutingPage,
       meta: {
         requiresAuth: true,
-        title: "模型档案与路由映射",
+        title: "模型档案与运行时路由",
         section: "studio",
       },
     },
@@ -190,7 +190,7 @@ const router = createRouter({
       component: StudioModelRoutingPage,
       meta: {
         requiresAuth: true,
-        title: "AI 自动路由顾问",
+        title: "AI 自动路由与运行时路由",
         section: "studio",
       },
     },
