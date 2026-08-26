@@ -38,6 +38,7 @@ from .knowledge_models import (
 	Entity,
 	EntityAlias,
 	EntityCanonicalization,
+	EntityPromptVariant,
 	EntityState,
 	Relationship,
 	StoryEvent,
@@ -92,6 +93,11 @@ from .translation_models import (
 	ConsistencyMode,
 	ConsistencyWarning,
 	EntityNameVariant,
+	GlossaryCandidate,
+	GlossaryCandidateStatus,
+	GlossaryTerm,
+	GlossaryTermStatus,
+	GlossaryTermType,
 	PlanItemStatus,
 	ScriptBlock,
 	TranslationBlock,
@@ -101,6 +107,12 @@ from .translation_models import (
 	TranslationProjectStatus,
 	WarningStatus,
 	WarningType,
+)
+from .prompt_asset_models import (
+	CharacterStageProfile,
+	PromptSnapshot,
+	SemanticAsset,
+	ShotAssetBinding,
 )
 
 __all__ = [
@@ -161,6 +173,7 @@ __all__ = [
 	"Entity",
 	"EntityAlias",
 	"EntityCanonicalization",
+	"EntityPromptVariant",
 	"CulturalBinding",
 	"Relationship",
 	"StoryEvent",
@@ -219,4 +232,14 @@ __all__ = [
 	"ConsistencyWarning",
 	"WarningType",
 	"WarningStatus",
+	"GlossaryTerm",
+	"GlossaryTermStatus",
+	"GlossaryTermType",
+	"GlossaryCandidate",
+	"GlossaryCandidateStatus",
+	# Prompt Asset Library & Character Growth (SKILL 33)
+	"SemanticAsset",
+	"CharacterStageProfile",
+	"ShotAssetBinding",
+	"PromptSnapshot",
 ]

@@ -1180,6 +1180,160 @@ export async function extractNovelEntities(
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Entity Prompt Management
+// ---------------------------------------------------------------------------
+
+export interface PromptStruct {
+  positive_zh: string;
+  negative_zh: string;
+  positive_en: string;
+  negative_en: string;
+}
+
+export interface EntityPromptItem {
+  entity_id: string;
+  type: string;
+  label: string;
+  canonical_label: string | null;
+  anchor_prompt: string | null;
+  prompt_struct: PromptStruct | null;
+  traits_json: Record<string, unknown> | null;
+  alias_list: string[];
+  reference_images: { id: string; url: string; filename: string; uploaded_at: string }[];
+  role_tag: string | null;
+  persistence_type: string | null;
+  growth_type: string | null;
+  chapter_count: number;
+  culture_pack_id?: string | null;
+  prompt_origin?: "base" | "variant" | "inherited";
+}
+
+export interface EntityPromptsResponse {
+  novel_id: string;
+  total: number;
+  by_type: Record<string, EntityPromptItem[]>;
+  culture_pack_id?: string | null;
+  stats: {
+    total: number;
+    with_prompt: number;
+    without_prompt: number;
+    by_role: Record<string, number>;
+    by_persistence: Record<string, number>;
+  };
+}
+
+export interface AnchorPromptUpdatePayload {
+  anchor_prompt?: string | null;
+  prompt_struct?: PromptStruct | null;
+  traits_json?: Record<string, unknown> | null;
+  culture_pack_id?: string | null;
+}
+
+export interface AnchorPromptUpdateResponse {
+  entity_id: string;
+  anchor_prompt: string | null;
+  traits_json: Record<string, unknown> | null;
+  updated: boolean;
+}
+
+export interface ChapterBeatItem {
+  chapter_id: string;
+  chapter_no: number;
+  chapter_title: string | null;
+  beats: Record<string, unknown>[];
+  style_hints: Record<string, unknown>[];
+}
+
+export interface ChapterBeatsResponse {
+  novel_id: string;
+  chapters: ChapterBeatItem[];
+}
+
+export interface BatchAnchorPromptItem {
+  entity_id: string;
+  anchor_prompt: string;
+  prompt_struct?: PromptStruct | null;
+}
+
+export interface BatchAnchorPromptResponse {
+  updated: number;
+  skipped: number;
+}
+
+export async function getEntityPrompts(
+  novelId: string,
+  params: { tenant_id: string; project_id: string; entity_type?: string; culture_pack_id?: string },
+): Promise<EntityPromptsResponse> {
+  const { data } = await http.get<EntityPromptsResponse>(
+    `/api/v1/novels/${novelId}/entity-prompts`,
+    { params },
+  );
+  return data;
+}
+
+export async function updateAnchorPrompt(
+  entityId: string,
+  payload: AnchorPromptUpdatePayload,
+): Promise<AnchorPromptUpdateResponse> {
+  const { data } = await http.put<AnchorPromptUpdateResponse>(
+    `/api/v1/entities/${entityId}/anchor-prompt`,
+    payload,
+  );
+  return data;
+}
+
+export interface EntityReferenceImageResponse {
+  entity_id: string;
+  reference_images: { id: string; url: string; filename: string; uploaded_at: string }[];
+}
+
+export async function uploadEntityReferenceImage(
+  entityId: string,
+  file: File,
+): Promise<EntityReferenceImageResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await http.post<EntityReferenceImageResponse>(
+    `/api/v1/entities/${entityId}/reference-images`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
+
+export async function deleteEntityReferenceImage(
+  entityId: string,
+  imageId: string,
+): Promise<EntityReferenceImageResponse> {
+  const { data } = await http.delete<EntityReferenceImageResponse>(
+    `/api/v1/entities/${entityId}/reference-images/${imageId}`,
+  );
+  return data;
+}
+
+export async function getChapterBeats(
+  novelId: string,
+  params: { tenant_id: string; project_id: string },
+): Promise<ChapterBeatsResponse> {
+  const { data } = await http.get<ChapterBeatsResponse>(
+    `/api/v1/novels/${novelId}/chapter-beats`,
+    { params },
+  );
+  return data;
+}
+
+export async function batchUpdateAnchorPrompts(
+  novelId: string,
+  payload: { items: BatchAnchorPromptItem[]; culture_pack_id?: string },
+): Promise<BatchAnchorPromptResponse> {
+  const { data } = await http.put<BatchAnchorPromptResponse>(
+    `/api/v1/novels/${novelId}/entity-prompts/batch`,
+    payload,
+  );
+  return data;
+}
+
 export async function initNovelRag(
   collectionId: string,
   payload: {
@@ -1587,6 +1741,112 @@ export async function manualBindOpsProvider(
 
 export async function testOpsProvider(reportId: string): Promise<OpsProviderTestResponse> {
   const { data } = await http.post<OpsProviderTestResponse>(`/api/v1/ops-bridge/providers/${reportId}/test`);
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Ops Bridge: Batch Import
+// ---------------------------------------------------------------------------
+
+export interface ImportChapterItem {
+  chapter_no: number;
+  title?: string;
+  language_code?: string;
+  markdown_text: string;
+}
+
+export interface ImportNovelItem {
+  title: string;
+  summary?: string;
+  default_language_code?: string;
+  chapters?: ImportChapterItem[];
+}
+
+export interface ImportNovelsPayload {
+  tenant_id: string;
+  project_id: string;
+  novels: ImportNovelItem[];
+}
+
+export interface ImportedNovelResult {
+  title: string;
+  novel_id: string;
+  created: boolean;
+  chapter_count: number;
+}
+
+export interface ImportNovelsResponse {
+  imported: number;
+  skipped: number;
+  results: ImportedNovelResult[];
+}
+
+export interface ImportChaptersPayload {
+  tenant_id: string;
+  project_id: string;
+  chapters: ImportChapterItem[];
+}
+
+export interface ImportedChapterResult {
+  chapter_id: string;
+  chapter_no: number;
+  created: boolean;
+}
+
+export interface ImportChaptersResponse {
+  novel_id: string;
+  imported: number;
+  skipped: number;
+  results: ImportedChapterResult[];
+}
+
+export interface OpsNovelItem {
+  id: string;
+  title: string;
+  summary: string | null;
+  default_language_code: string;
+  chapter_count: number;
+  created_at: string;
+}
+
+export interface OpsNovelsListResponse {
+  total: number;
+  novels: OpsNovelItem[];
+}
+
+export async function opsImportNovels(
+  payload: ImportNovelsPayload,
+  token: string,
+): Promise<ImportNovelsResponse> {
+  const { data } = await http.post<ImportNovelsResponse>(
+    '/api/v1/ops-bridge/import/novels',
+    payload,
+    { headers: { 'X-AinerOps-Token': token } },
+  );
+  return data;
+}
+
+export async function opsImportChapters(
+  novelId: string,
+  payload: ImportChaptersPayload,
+  token: string,
+): Promise<ImportChaptersResponse> {
+  const { data } = await http.post<ImportChaptersResponse>(
+    `/api/v1/ops-bridge/import/novels/${novelId}/chapters`,
+    payload,
+    { headers: { 'X-AinerOps-Token': token } },
+  );
+  return data;
+}
+
+export async function opsListNovels(
+  params: { tenant_id: string; project_id: string; keyword?: string; language?: string; offset?: number; limit?: number },
+  token: string,
+): Promise<OpsNovelsListResponse> {
+  const { data } = await http.get<OpsNovelsListResponse>(
+    '/api/v1/ops-bridge/novels',
+    { params, headers: { 'X-AinerOps-Token': token } },
+  );
   return data;
 }
 
@@ -2283,8 +2543,9 @@ export async function updateNovel(novelId: string, payload: {
 export async function deleteNovel(novelId: string, params: {
   tenant_id: string;
   project_id: string;
-}): Promise<{ status: string }> {
-  const { data } = await http.delete<{ status: string }>(`/api/v1/novels/${novelId}`, { params });
+  force?: boolean;
+}): Promise<{ status: string; cancelled_runs?: number }> {
+  const { data } = await http.delete<{ status: string; cancelled_runs?: number }>(`/api/v1/novels/${novelId}`, { params });
   return data;
 }
 
@@ -2388,6 +2649,56 @@ export interface ConsistencyWarningResponse {
   expected_canonical: string | null;
   status: "open" | "resolved" | "ignored";
   translation_block_id: string | null;
+}
+
+export interface GlossaryTermResponse {
+  id: string;
+  novel_id: string | null;
+  translation_project_id: string | null;
+  source_language_code: string;
+  target_language_code: string;
+  source_term: string;
+  target_term: string;
+  term_type: "proper_noun" | "artifact" | "creature" | "place" | "faction" | "technique" | "cultural" | "other";
+  status: "draft" | "approved" | "archived";
+  aliases_json: string[] | null;
+  notes: string | null;
+  context_json: Record<string, unknown> | null;
+  metadata_json: Record<string, unknown> | null;
+  hit_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GlossaryCandidateResponse {
+  id: string;
+  translation_project_id: string;
+  novel_id: string;
+  source_language_code: string;
+  target_language_code: string;
+  source_term: string;
+  suggested_target_term: string | null;
+  term_type: "proper_noun" | "artifact" | "creature" | "place" | "faction" | "technique" | "cultural" | "other";
+  status: "pending_review" | "approved" | "rejected" | "merged";
+  confidence_score: number | null;
+  source_excerpt: string | null;
+  source_block_id: string | null;
+  normalized_term: string | null;
+  candidate_reason: string | null;
+  review_notes: string | null;
+  approved_term_id: string | null;
+  metadata_json: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GlossaryAuditLogResponse {
+  event_id: string;
+  event_type: string;
+  action: string;
+  producer: string;
+  occurred_at: string;
+  payload: Record<string, unknown>;
 }
 
 export interface TranslationRunGateResponse {
@@ -2508,8 +2819,8 @@ export async function translateBlocks(
     model_provider_id?: string | null;
     batch_size?: number;
   },
-): Promise<{ translated: number; warnings: number }> {
-  const { data } = await http.post<{ translated: number; warnings: number }>(
+): Promise<{ translated: number; warnings: number; glossary_candidates_created?: number; glossary_candidates_skipped?: number }> {
+  const { data } = await http.post<{ translated: number; warnings: number; glossary_candidates_created?: number; glossary_candidates_skipped?: number }>(
     `/api/v1/translations/projects/${projectId}/translate`,
     payload,
     { timeout: 120000 },
@@ -2618,6 +2929,114 @@ export async function resolveWarning(
 export async function checkConsistency(projectId: string): Promise<{ warnings_created: number }> {
   const { data } = await http.post<{ warnings_created: number }>(
     `/api/v1/translations/projects/${projectId}/check-consistency`,
+  );
+  return data;
+}
+
+export async function listGlossaryTerms(
+  projectId: string,
+  params?: { status?: string; term_type?: string; include_global?: boolean },
+): Promise<GlossaryTermResponse[]> {
+  const { data } = await http.get<GlossaryTermResponse[]>(
+    `/api/v1/translations/projects/${projectId}/glossary/terms`,
+    { params },
+  );
+  return data;
+}
+
+export async function createGlossaryTerm(
+  projectId: string,
+  payload: {
+    tenant_id?: string;
+    project_id?: string;
+    novel_id?: string | null;
+    translation_project_id?: string | null;
+    source_language_code?: string;
+    target_language_code?: string;
+    source_term: string;
+    target_term: string;
+    term_type?: string;
+    status?: string;
+    aliases_json?: string[] | null;
+    notes?: string | null;
+    context_json?: Record<string, unknown> | null;
+    metadata_json?: Record<string, unknown> | null;
+  },
+): Promise<GlossaryTermResponse> {
+  const { data } = await http.post<GlossaryTermResponse>(
+    `/api/v1/translations/projects/${projectId}/glossary/terms`,
+    payload,
+  );
+  return data;
+}
+
+export async function updateGlossaryTerm(
+  projectId: string,
+  termId: string,
+  payload: {
+    target_term?: string;
+    term_type?: string;
+    status?: string;
+    aliases_json?: string[] | null;
+    notes?: string | null;
+    context_json?: Record<string, unknown> | null;
+    metadata_json?: Record<string, unknown> | null;
+  },
+): Promise<GlossaryTermResponse> {
+  const { data } = await http.patch<GlossaryTermResponse>(
+    `/api/v1/translations/projects/${projectId}/glossary/terms/${termId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function listGlossaryCandidates(
+  projectId: string,
+  params?: { status?: string },
+): Promise<GlossaryCandidateResponse[]> {
+  const { data } = await http.get<GlossaryCandidateResponse[]>(
+    `/api/v1/translations/projects/${projectId}/glossary/candidates`,
+    { params },
+  );
+  return data;
+}
+
+export async function extractGlossaryCandidates(
+  projectId: string,
+  payload?: { tenant_id?: string; project_id?: string; chapter_id?: string | null; max_candidates?: number },
+): Promise<{ created: number; skipped: number }> {
+  const { data } = await http.post<{ created: number; skipped: number }>(
+    `/api/v1/translations/projects/${projectId}/glossary/candidates/extract`,
+    payload ?? {},
+  );
+  return data;
+}
+
+export async function reviewGlossaryCandidate(
+  projectId: string,
+  candidateId: string,
+  payload: {
+    action: "approve" | "reject" | "merge";
+    target_term?: string | null;
+    term_type?: string;
+    notes?: string | null;
+    merge_term_id?: string | null;
+  },
+): Promise<GlossaryCandidateResponse> {
+  const { data } = await http.patch<GlossaryCandidateResponse>(
+    `/api/v1/translations/projects/${projectId}/glossary/candidates/${candidateId}/review`,
+    payload,
+  );
+  return data;
+}
+
+export async function listGlossaryAuditLogs(
+  projectId: string,
+  params?: { limit?: number },
+): Promise<GlossaryAuditLogResponse[]> {
+  const { data } = await http.get<GlossaryAuditLogResponse[]>(
+    `/api/v1/translations/projects/${projectId}/glossary/audit-logs`,
+    { params },
   );
   return data;
 }
@@ -3450,6 +3869,335 @@ export async function applyName(novelId: string, payload: {
 }): Promise<Record<string, unknown>> {
   const { data } = await http.post<Record<string, unknown>>(
     `/api/v1/novels/${novelId}/name-localization/apply`,
+    payload,
+  );
+  return data;
+}
+
+
+// ─── Entity Prompt Generation & Classification ────────────────────────────────
+
+export interface GenerateEntityPromptsResponse {
+  novel_id: string;
+  total: number;
+  generated: number;
+  classified: number;
+  skipped: number;
+  items: {
+    entity_id: string;
+    label: string;
+    type: string;
+    role_tag: string | null;
+    persistence_type: string | null;
+    growth_type: string | null;
+    chapter_count: number;
+    anchor_prompt: string | null;
+    prompt_source: string;
+  }[];
+}
+
+export async function generateEntityPrompts(novelId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  model_provider_id?: string;
+  overwrite?: boolean;
+  chapter_ids?: string[];
+  culture_pack_id?: string;
+}): Promise<GenerateEntityPromptsResponse> {
+  const { data } = await http.post<GenerateEntityPromptsResponse>(
+    `/api/v1/novels/${novelId}/generate-entity-prompts`,
+    payload,
+    { timeout: 60000 },
+  );
+  return data;
+}
+
+export async function updateEntityClassification(entityId: string, payload: {
+  role_tag?: string;
+  persistence_type?: string;
+  growth_type?: string;
+}): Promise<{ entity_id: string; updated: boolean }> {
+  const { data } = await http.put<{ entity_id: string; updated: boolean }>(
+    `/api/v1/entities/${entityId}/classification`,
+    payload,
+  );
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SKILL 33 — Prompt Assets & Character Growth Continuity
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface SemanticAssetItem {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  novel_id: string;
+  entity_id: string | null;
+  asset_type: string;
+  canonical_name: string;
+  aliases_json: string[] | null;
+  tags_json: string[] | null;
+  structured_json: Record<string, unknown> | null;
+  prompt_json: Record<string, unknown> | null;
+  negative_prompt_json: Record<string, unknown> | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterStageItem {
+  id: string;
+  entity_id: string;
+  stage_name: string;
+  chapter_start: number | null;
+  chapter_end: number | null;
+  appearance_override_json: Record<string, unknown> | null;
+  temperament_override_json: Record<string, unknown> | null;
+  default_costume_asset_id: string | null;
+  emotional_baseline_json: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShotAssetBindingItem {
+  id: string;
+  run_id: string | null;
+  chapter_id: string | null;
+  shot_id: string | null;
+  entity_id: string | null;
+  binding_role: string;
+  stage_profile_id: string | null;
+  selected_asset_ids_json: string[] | null;
+  state_override_json: Record<string, unknown> | null;
+  prompt_snapshot_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptSnapshotItem {
+  id: string;
+  chapter_id: string | null;
+  shot_id: string | null;
+  entity_id: string | null;
+  source_type: string;
+  merged_prompt_text: string | null;
+  merged_negative_prompt_text: string | null;
+  merged_json: Record<string, unknown> | null;
+  generation_params_json: Record<string, unknown> | null;
+  consistency_hash: string | null;
+  regenerate_parent_snapshot_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConsistencyCheckResult {
+  ok: boolean;
+  violations: Array<{
+    entity_id: string;
+    rule_type: string;
+    detail: string;
+    severity: string;
+  }>;
+}
+
+// ── Semantic Assets ─────────────────────────────────────────────────────────
+
+export async function listSemanticAssets(params: {
+  tenant_id: string;
+  project_id: string;
+  novel_id?: string;
+  asset_type?: string;
+  entity_id?: string;
+}): Promise<SemanticAssetItem[]> {
+  const { data } = await http.get<SemanticAssetItem[]>(
+    "/api/v1/prompt-assets",
+    { params },
+  );
+  return data;
+}
+
+export async function createSemanticAsset(payload: {
+  tenant_id: string;
+  project_id: string;
+  novel_id: string;
+  entity_id?: string;
+  asset_type: string;
+  canonical_name: string;
+  aliases?: string[];
+  tags?: string[];
+  structured?: Record<string, unknown>;
+  prompt?: Record<string, unknown>;
+  negative_prompt?: Record<string, unknown>;
+}): Promise<SemanticAssetItem> {
+  const { data } = await http.post<SemanticAssetItem>(
+    "/api/v1/prompt-assets",
+    payload,
+  );
+  return data;
+}
+
+export async function getSemanticAsset(assetId: string): Promise<SemanticAssetItem> {
+  const { data } = await http.get<SemanticAssetItem>(
+    `/api/v1/prompt-assets/${assetId}`,
+  );
+  return data;
+}
+
+export async function updateSemanticAsset(assetId: string, payload: {
+  canonical_name?: string;
+  aliases?: string[];
+  tags?: string[];
+  structured?: Record<string, unknown>;
+  prompt?: Record<string, unknown>;
+  negative_prompt?: Record<string, unknown>;
+  is_active?: boolean;
+}): Promise<SemanticAssetItem> {
+  const { data } = await http.patch<SemanticAssetItem>(
+    `/api/v1/prompt-assets/${assetId}`,
+    payload,
+  );
+  return data;
+}
+
+// ── Character Stages ────────────────────────────────────────────────────────
+
+export async function listCharacterStages(entityId: string, params: {
+  tenant_id: string;
+  project_id: string;
+}): Promise<CharacterStageItem[]> {
+  const { data } = await http.get<CharacterStageItem[]>(
+    `/api/v1/characters/${entityId}/stages`,
+    { params },
+  );
+  return data;
+}
+
+export async function createCharacterStage(entityId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  stage_name: string;
+  chapter_start?: number;
+  chapter_end?: number;
+  appearance_override?: Record<string, unknown>;
+  temperament_override?: Record<string, unknown>;
+  default_costume_asset_id?: string;
+  emotional_baseline?: Record<string, unknown>;
+}): Promise<CharacterStageItem> {
+  const { data } = await http.post<CharacterStageItem>(
+    `/api/v1/characters/${entityId}/stages`,
+    payload,
+  );
+  return data;
+}
+
+export async function updateCharacterStage(stageId: string, payload: {
+  stage_name?: string;
+  chapter_start?: number;
+  chapter_end?: number;
+  appearance_override?: Record<string, unknown>;
+  temperament_override?: Record<string, unknown>;
+  default_costume_asset_id?: string;
+  emotional_baseline?: Record<string, unknown>;
+}): Promise<CharacterStageItem> {
+  const { data } = await http.patch<CharacterStageItem>(
+    `/api/v1/character-stages/${stageId}`,
+    payload,
+  );
+  return data;
+}
+
+// ── Shot Asset Bindings ─────────────────────────────────────────────────────
+
+export async function listShotAssetBindings(chapterId: string, params?: {
+  entity_id?: string;
+}): Promise<ShotAssetBindingItem[]> {
+  const { data } = await http.get<ShotAssetBindingItem[]>(
+    `/api/v1/chapters/${chapterId}/shot-asset-bindings`,
+    { params },
+  );
+  return data;
+}
+
+export async function createShotAssetBinding(shotId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  chapter_id: string;
+  entity_id?: string;
+  binding_role: string;
+  stage_profile_id?: string;
+  selected_asset_ids?: string[];
+  state_override?: Record<string, unknown>;
+}): Promise<ShotAssetBindingItem> {
+  const { data } = await http.post<ShotAssetBindingItem>(
+    `/api/v1/shots/${shotId}/asset-bindings`,
+    payload,
+  );
+  return data;
+}
+
+export async function updateShotAssetBinding(bindingId: string, payload: {
+  binding_role?: string;
+  stage_profile_id?: string;
+  selected_asset_ids?: string[];
+  state_override?: Record<string, unknown>;
+}): Promise<ShotAssetBindingItem> {
+  const { data } = await http.patch<ShotAssetBindingItem>(
+    `/api/v1/shot-asset-bindings/${bindingId}`,
+    payload,
+  );
+  return data;
+}
+
+// ── Prompt Snapshots ────────────────────────────────────────────────────────
+
+export async function listPromptSnapshots(shotId: string, params?: {
+  entity_id?: string;
+}): Promise<PromptSnapshotItem[]> {
+  const { data } = await http.get<PromptSnapshotItem[]>(
+    `/api/v1/shots/${shotId}/prompt-snapshots`,
+    { params },
+  );
+  return data;
+}
+
+export async function createPromptSnapshot(shotId: string, payload: {
+  tenant_id: string;
+  project_id: string;
+  chapter_id: string;
+  entity_id?: string;
+  source_type?: string;
+  merged_prompt_text?: string;
+  merged_negative_prompt_text?: string;
+  merged_json?: Record<string, unknown>;
+  generation_params?: Record<string, unknown>;
+  regenerate_parent_snapshot_id?: string;
+}): Promise<PromptSnapshotItem> {
+  const { data } = await http.post<PromptSnapshotItem>(
+    `/api/v1/shots/${shotId}/prompt-snapshots`,
+    payload,
+  );
+  return data;
+}
+
+export async function getPromptSnapshot(snapshotId: string): Promise<PromptSnapshotItem> {
+  const { data } = await http.get<PromptSnapshotItem>(
+    `/api/v1/prompt-snapshots/${snapshotId}`,
+  );
+  return data;
+}
+
+// ── Consistency Check ───────────────────────────────────────────────────────
+
+export async function checkPromptAssetConsistency(payload: {
+  tenant_id: string;
+  project_id: string;
+  novel_id: string;
+  entity_ids?: string[];
+  chapter_ids?: string[];
+}): Promise<ConsistencyCheckResult> {
+  const { data } = await http.post<ConsistencyCheckResult>(
+    "/api/v1/prompt-assets/consistency-check",
     payload,
   );
   return data;

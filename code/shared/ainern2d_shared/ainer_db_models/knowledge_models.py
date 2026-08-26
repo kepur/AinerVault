@@ -20,7 +20,33 @@ class Entity(Base, StandardColumnsMixin):
 	label: Mapped[str] = mapped_column(String(256), nullable=False)
 	canonical_label: Mapped[str | None] = mapped_column(String(256))
 	anchor_prompt: Mapped[str | None] = mapped_column(Text)
+	prompt_struct_json: Mapped[dict | None] = mapped_column(JSONB, comment="结构化提示词 {positive_zh, negative_zh, positive_en, negative_en}")
 	traits_json: Mapped[dict | None] = mapped_column(JSONB)
+	reference_images_json: Mapped[list | None] = mapped_column(JSONB, comment="参考图片列表 [{url, filename, uploaded_at}]")
+
+
+class EntityPromptVariant(Base, StandardColumnsMixin):
+	__tablename__ = "entity_prompt_variants"
+	__table_args__ = (
+		UniqueConstraint(
+			"tenant_id",
+			"project_id",
+			"entity_id",
+			"culture_pack_id",
+			name="uq_entity_prompt_variants_scope_entity_pack",
+		),
+		Index("ix_entity_prompt_variants_scope_novel", "tenant_id", "project_id", "novel_id"),
+		Index("ix_entity_prompt_variants_scope_entity", "tenant_id", "project_id", "entity_id"),
+		Index("ix_entity_prompt_variants_scope_pack", "tenant_id", "project_id", "culture_pack_id"),
+	)
+
+	novel_id: Mapped[str] = mapped_column(ForeignKey("novels.id", ondelete="CASCADE"), nullable=False)
+	entity_id: Mapped[str] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+	culture_pack_id: Mapped[str] = mapped_column(String(64), nullable=False)
+	anchor_prompt: Mapped[str | None] = mapped_column(Text)
+	prompt_struct_json: Mapped[dict | None] = mapped_column(JSONB, comment="文化包变体提示词 {positive_zh, negative_zh, positive_en, negative_en}")
+	source: Mapped[str | None] = mapped_column(String(32))
+	meta_json: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class EntityAlias(Base, StandardColumnsMixin):

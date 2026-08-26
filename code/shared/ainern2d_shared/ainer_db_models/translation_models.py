@@ -42,6 +42,8 @@ class WarningType(str, Enum):
     name_drift = "name_drift"
     new_variant = "new_variant"
     cross_chapter = "cross_chapter"
+    glossary_missing = "glossary_missing"
+    glossary_drift = "glossary_drift"
 
 
 class WarningStatus(str, Enum):
@@ -56,6 +58,30 @@ class PlanItemStatus(str, Enum):
     succeeded = "succeeded"
     failed = "failed"
     skipped = "skipped"
+
+
+class GlossaryTermStatus(str, Enum):
+    draft = "draft"
+    approved = "approved"
+    archived = "archived"
+
+
+class GlossaryTermType(str, Enum):
+    proper_noun = "proper_noun"
+    artifact = "artifact"
+    creature = "creature"
+    place = "place"
+    faction = "faction"
+    technique = "technique"
+    cultural = "cultural"
+    other = "other"
+
+
+class GlossaryCandidateStatus(str, Enum):
+    pending_review = "pending_review"
+    approved = "approved"
+    rejected = "rejected"
+    merged = "merged"
 
 
 # ── Models ─────────────────────────────────────────────────────────────────────
@@ -195,4 +221,73 @@ class ConsistencyWarning(Base, StandardColumnsMixin):
     expected_canonical: Mapped[str | None] = mapped_column(String(256))
     status: Mapped[WarningStatus] = mapped_column(
         default=WarningStatus.open, nullable=False
+    )
+
+
+class GlossaryTerm(Base, StandardColumnsMixin):
+    __tablename__ = "glossary_terms"
+    __table_args__ = (
+        Index("ix_gt_lang_status", "source_language_code", "target_language_code", "status"),
+        Index("ix_gt_source_term", "source_term"),
+        Index("ix_gt_project_scope", "translation_project_id"),
+    )
+
+    novel_id: Mapped[str | None] = mapped_column(
+        ForeignKey("novels.id", ondelete="CASCADE")
+    )
+    translation_project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("translation_projects.id", ondelete="CASCADE")
+    )
+    source_language_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_language_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_term: Mapped[str] = mapped_column(String(256), nullable=False)
+    target_term: Mapped[str] = mapped_column(String(256), nullable=False)
+    term_type: Mapped[GlossaryTermType] = mapped_column(
+        default=GlossaryTermType.proper_noun, nullable=False
+    )
+    status: Mapped[GlossaryTermStatus] = mapped_column(
+        default=GlossaryTermStatus.draft, nullable=False
+    )
+    aliases_json: Mapped[list | None] = mapped_column(JSONB)
+    notes: Mapped[str | None] = mapped_column(Text)
+    context_json: Mapped[dict | None] = mapped_column(JSONB)
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class GlossaryCandidate(Base, StandardColumnsMixin):
+    __tablename__ = "glossary_candidates"
+    __table_args__ = (
+        Index("ix_gc_project_status", "translation_project_id", "status"),
+        Index("ix_gc_source_term", "source_term"),
+        Index("ix_gc_term_type", "term_type"),
+    )
+
+    novel_id: Mapped[str] = mapped_column(
+        ForeignKey("novels.id", ondelete="CASCADE"), nullable=False
+    )
+    translation_project_id: Mapped[str] = mapped_column(
+        ForeignKey("translation_projects.id", ondelete="CASCADE"), nullable=False
+    )
+    source_language_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_language_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_term: Mapped[str] = mapped_column(String(256), nullable=False)
+    suggested_target_term: Mapped[str | None] = mapped_column(String(256))
+    term_type: Mapped[GlossaryTermType] = mapped_column(
+        default=GlossaryTermType.proper_noun, nullable=False
+    )
+    status: Mapped[GlossaryCandidateStatus] = mapped_column(
+        default=GlossaryCandidateStatus.pending_review, nullable=False
+    )
+    confidence_score: Mapped[float | None] = mapped_column(Float)
+    source_excerpt: Mapped[str | None] = mapped_column(Text)
+    source_block_id: Mapped[str | None] = mapped_column(
+        ForeignKey("script_blocks.id", ondelete="SET NULL")
+    )
+    normalized_term: Mapped[str | None] = mapped_column(String(256))
+    candidate_reason: Mapped[str | None] = mapped_column(Text)
+    review_notes: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB)
+    approved_term_id: Mapped[str | None] = mapped_column(
+        ForeignKey("glossary_terms.id", ondelete="SET NULL")
     )

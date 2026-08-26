@@ -4,6 +4,7 @@
       <NSpace>
         <NButton @click="goBack">← 返回列表</NButton>
         <NButton type="primary" @click="onReloadAll">{{ t('common.refresh') }}</NButton>
+        <NButton @click="onOpenEntityPrompts">实体提示词工作台</NButton>
       </NSpace>
     </NCard>
 
@@ -1284,6 +1285,10 @@ function clearNotice(): void {
 
 function goBack(): void {
   void router.push({ name: "studio-novels" });
+}
+
+function onOpenEntityPrompts(): void {
+  void router.push({ name: "studio-entity-prompt-workbench", params: { novelId: props.novelId } });
 }
 
 function openChapterEditor(chapter: ChapterResponse): void {

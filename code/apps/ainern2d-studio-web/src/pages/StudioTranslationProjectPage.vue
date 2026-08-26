@@ -154,7 +154,7 @@
               <NDataTable
                 :columns="planColumns"
                 :data="planItems"
-                :row-key="(row: TranslationPlanItemResponse) => row.id"
+                :row-key="(row) => row.id"
                 :checked-row-keys="selectedPlanItemIds"
                 @update:checked-row-keys="onUpdateSelectedPlanItemIds"
                 :pagination="{ pageSize: 8 }"
@@ -508,6 +508,88 @@
 
               <NAlert v-if="dictMessage" type="success">{{ dictMessage }}</NAlert>
               <NAlert v-if="dictError" type="error">{{ dictError }}</NAlert>
+
+              <NDivider>专有名词主库</NDivider>
+
+              <NSpace wrap align="center">
+                <NInput v-model:value="glossarySourceTerm" placeholder="中文源词" style="width: 180px" />
+                <NInput v-model:value="glossaryTargetTerm" placeholder="目标语言译法" style="width: 220px" />
+                <NSelect v-model:value="glossaryTermType" :options="glossaryTypeOptions" style="width: 140px" />
+                <NSelect v-model:value="glossaryStatus" :options="glossaryStatusOptions" style="width: 120px" />
+                <NButton type="primary" @click="onCreateGlossaryTerm">加入主库</NButton>
+              </NSpace>
+
+              <NSpace wrap align="center">
+                <NSelect
+                  v-model:value="glossaryStatusFilter"
+                  :options="[{ label: '全部状态', value: '' }, ...glossaryStatusOptions]"
+                  clearable
+                  style="width: 140px"
+                  @update:value="onLoadGlossary"
+                />
+                <NSelect
+                  v-model:value="glossaryTypeFilter"
+                  :options="[{ label: '全部类型', value: '' }, ...glossaryTypeOptions]"
+                  clearable
+                  style="width: 140px"
+                  @update:value="onLoadGlossary"
+                />
+                <NButton quaternary @click="onLoadGlossary">刷新主库</NButton>
+              </NSpace>
+
+              <NDataTable
+                :columns="glossaryTermColumns"
+                :data="glossaryTerms"
+                size="small"
+                :pagination="{ pageSize: 8 }"
+              />
+
+              <NDivider>候选审核池</NDivider>
+
+              <NSpace wrap align="center">
+                <NSelect
+                  v-model:value="candidateStatusFilter"
+                  :options="candidateStatusOptions"
+                  style="width: 140px"
+                  @update:value="onLoadGlossary"
+                />
+                <NButton :loading="isExtractingCandidates" @click="onExtractGlossaryCandidates">
+                  抽取候选词
+                </NButton>
+                <NText depth="3" style="font-size: 12px">
+                  当前 {{ glossaryCandidates.length }} 条候选，支持人工批准后入库。
+                </NText>
+              </NSpace>
+
+              <NDataTable
+                :columns="glossaryCandidateColumns"
+                :data="glossaryCandidates"
+                size="small"
+                :pagination="{ pageSize: 8 }"
+                :loading="isLoadingGlossary"
+              />
+
+              <NDivider>术语审核日志</NDivider>
+
+              <NSpace wrap align="center">
+                <NButton quaternary :loading="isLoadingGlossaryAudit" @click="onLoadGlossaryAudit">
+                  刷新日志
+                </NButton>
+                <NText depth="3" style="font-size: 12px">
+                  最近 {{ glossaryAuditLogs.length }} 条 glossary 操作事件
+                </NText>
+              </NSpace>
+
+              <NDataTable
+                :columns="glossaryAuditColumns"
+                :data="glossaryAuditLogs"
+                size="small"
+                :pagination="{ pageSize: 6 }"
+                :loading="isLoadingGlossaryAudit"
+              />
+
+              <NAlert v-if="glossaryMessage" type="success">{{ glossaryMessage }}</NAlert>
+              <NAlert v-if="glossaryError" type="error">{{ glossaryError }}</NAlert>
             </NSpace>
           </NCard>
         </NTabPane>
@@ -547,18 +629,24 @@ import { useI18n } from "@/composables/useI18n";
 
 import {
   checkConsistency,
+  createGlossaryTerm,
   createEntityVariant,
   deleteTranslationBlock,
   executeTranslationPlan,
+  extractGlossaryCandidates,
   batchDeleteTranslationJobs,
   batchRetryTranslationJobs,
   cancelTranslationJob,
   deleteTranslationJob,
+  listGlossaryAuditLogs,
+  listGlossaryCandidates,
+  listGlossaryTerms,
   listConsistencyWarnings,
   listEntityVariants,
   listTranslationPlanItems,
   listProviders,
   previewChapterPlan,
+  reviewGlossaryCandidate,
   getRunTimeline,
   gateTranslationProjectRun,
   createRunFromTranslationProject,
@@ -568,9 +656,13 @@ import {
   segmentChapters,
   translateBlocks,
   updateTranslationBlock,
+  updateGlossaryTerm,
   updateTranslationProject,
   type ConsistencyWarningResponse,
   type EntityNameVariantResponse,
+  type GlossaryAuditLogResponse,
+  type GlossaryCandidateResponse,
+  type GlossaryTermResponse,
   type TranslationPlanItemResponse,
   type ScriptBlockResponse,
   type TranslationProjectResponse,
@@ -657,6 +749,27 @@ const dictMessage = ref("");
 const dictError = ref("");
 let _termKey = 0;
 
+const glossaryTerms = ref<GlossaryTermResponse[]>([]);
+const glossaryCandidates = ref<GlossaryCandidateResponse[]>([]);
+const glossaryAuditLogs = ref<GlossaryAuditLogResponse[]>([]);
+const isLoadingGlossary = ref(false);
+const isLoadingGlossaryAudit = ref(false);
+const isExtractingCandidates = ref(false);
+const glossaryMessage = ref("");
+const glossaryError = ref("");
+const candidateStatusFilter = ref("pending_review");
+const glossaryStatusFilter = ref("");
+const glossaryTypeFilter = ref("");
+const glossarySourceTerm = ref("");
+const glossaryTargetTerm = ref("");
+const glossaryTermType = ref("proper_noun");
+const glossaryStatus = ref("approved");
+const candidateTargetDrafts = ref<Record<string, string>>({});
+const candidateMergeDrafts = ref<Record<string, string | null>>({});
+const glossaryTargetDrafts = ref<Record<string, string>>({});
+const glossaryTypeDrafts = ref<Record<string, string>>({});
+const glossaryStatusDrafts = ref<Record<string, string>>({});
+
 // ─── Options ──────────────────────────────────────────────────────────────────
 const chapterOptions = computed(() => chapters.value);
 
@@ -664,6 +777,30 @@ const warningStatusOptions = [
   { label: "未解决 (open)", value: "open" },
   { label: "已解决 (resolved)", value: "resolved" },
   { label: "已忽略 (ignored)", value: "ignored" },
+];
+
+const glossaryTypeOptions = [
+  { label: "专名", value: "proper_noun" },
+  { label: "器物", value: "artifact" },
+  { label: "生物", value: "creature" },
+  { label: "地点", value: "place" },
+  { label: "势力", value: "faction" },
+  { label: "功法", value: "technique" },
+  { label: "文化", value: "cultural" },
+  { label: "其他", value: "other" },
+];
+
+const glossaryStatusOptions = [
+  { label: "草稿", value: "draft" },
+  { label: "已批准", value: "approved" },
+  { label: "已归档", value: "archived" },
+];
+
+const candidateStatusOptions = [
+  { label: "待审核", value: "pending_review" },
+  { label: "已批准", value: "approved" },
+  { label: "已驳回", value: "rejected" },
+  { label: "已合并", value: "merged" },
 ];
 
 const BLOCK_TYPE_LABELS: Record<string, string> = {
@@ -762,6 +899,16 @@ const filteredBlocks = computed(() => {
   if (!blockTypeFilter.value) return scriptBlocks.value;
   return scriptBlocks.value.filter(b => b.block_type === blockTypeFilter.value);
 });
+
+const glossaryMergeOptions = computed(() =>
+  glossaryTerms.value
+    .filter((term) => term.status !== "archived")
+    .map((term) => ({
+      label: `${term.source_term} -> ${term.target_term}`,
+      value: term.id,
+    })),
+);
+
 const effectiveModelProviderId = computed<string | null>(() =>
   executionProviderId.value || project.value?.model_provider_id || providerOptions.value[0]?.value || null
 );
@@ -777,6 +924,22 @@ function blockTypeTag(blockType: string): "default" | "info" | "success" | "warn
 
 function stringifyError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatGlossaryAuditTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
+}
+
+function buildGlossaryAuditSummary(payload: Record<string, unknown>): string {
+  const sourceTerm = typeof payload.source_term === "string" ? payload.source_term : "-";
+  const targetTerm = typeof payload.target_term === "string" ? payload.target_term : "-";
+  const status = typeof payload.status === "string" ? payload.status : "-";
+  if (typeof payload.created === "number") {
+    const skipped = typeof payload.skipped === "number" ? payload.skipped : 0;
+    return `created ${payload.created} / skipped ${skipped}`;
+  }
+  return `${sourceTerm} -> ${targetTerm} (${status})`;
 }
 
 function pickString(item: Record<string, unknown>, keys: string[]): string {
@@ -818,6 +981,11 @@ function pickDuration(item: Record<string, unknown>): string {
 function clearOp(): void {
   opMessage.value = "";
   opError.value = "";
+}
+
+function clearGlossaryOp(): void {
+  glossaryMessage.value = "";
+  glossaryError.value = "";
 }
 
 function goBack(): void {
@@ -878,8 +1046,57 @@ async function onReload(): Promise<void> {
     await onLoadVariants();
     await onLoadWarnings();
     await onLoadPlanItems();
+    await onLoadGlossary();
   } catch (error) {
     projectError.value = `加载失败: ${stringifyError(error)}`;
+  }
+}
+
+async function onLoadGlossary(): Promise<void> {
+  clearGlossaryOp();
+  isLoadingGlossary.value = true;
+  try {
+    const [terms, candidates, auditLogs] = await Promise.all([
+      listGlossaryTerms(props.projectId, {
+        include_global: true,
+        status: glossaryStatusFilter.value || undefined,
+        term_type: glossaryTypeFilter.value || undefined,
+      }),
+      listGlossaryCandidates(props.projectId, { status: candidateStatusFilter.value || undefined }),
+      listGlossaryAuditLogs(props.projectId, { limit: 30 }),
+    ]);
+    glossaryTerms.value = terms;
+    glossaryCandidates.value = candidates;
+    glossaryAuditLogs.value = auditLogs;
+    candidateTargetDrafts.value = {};
+    candidateMergeDrafts.value = {};
+    glossaryTargetDrafts.value = {};
+    glossaryTypeDrafts.value = {};
+    glossaryStatusDrafts.value = {};
+    for (const term of terms) {
+      glossaryTargetDrafts.value[term.id] = term.target_term;
+      glossaryTypeDrafts.value[term.id] = term.term_type;
+      glossaryStatusDrafts.value[term.id] = term.status;
+    }
+    for (const candidate of candidates) {
+      candidateTargetDrafts.value[candidate.id] = candidate.suggested_target_term ?? "";
+      candidateMergeDrafts.value[candidate.id] = candidate.approved_term_id ?? null;
+    }
+  } catch (error) {
+    glossaryError.value = `加载专有名词库失败: ${stringifyError(error)}`;
+  } finally {
+    isLoadingGlossary.value = false;
+  }
+}
+
+async function onLoadGlossaryAudit(): Promise<void> {
+  isLoadingGlossaryAudit.value = true;
+  try {
+    glossaryAuditLogs.value = await listGlossaryAuditLogs(props.projectId, { limit: 30 });
+  } catch (error) {
+    glossaryError.value = `加载术语审核日志失败: ${stringifyError(error)}`;
+  } finally {
+    isLoadingGlossaryAudit.value = false;
   }
 }
 
@@ -940,6 +1157,178 @@ async function onLoadWarnings(): Promise<void> {
     });
   } catch (error) {
     warningError.value = `加载告警失败: ${stringifyError(error)}`;
+  }
+}
+
+async function onCreateGlossaryTerm(): Promise<void> {
+  clearGlossaryOp();
+  if (!project.value) return;
+  if (!glossarySourceTerm.value.trim() || !glossaryTargetTerm.value.trim()) {
+    glossaryError.value = "请填写源词和目标词";
+    return;
+  }
+  try {
+    const source = glossarySourceTerm.value.trim();
+    const target = glossaryTargetTerm.value.trim();
+    await createGlossaryTerm(props.projectId, {
+      novel_id: project.value.novel_id,
+      translation_project_id: project.value.id,
+      source_language_code: project.value.source_language_code,
+      target_language_code: project.value.target_language_code,
+      source_term: source,
+      target_term: target,
+      term_type: glossaryTermType.value,
+      status: glossaryStatus.value,
+    });
+    glossarySourceTerm.value = "";
+    glossaryTargetTerm.value = "";
+    glossaryMessage.value = "术语已加入主库";
+    if (glossaryStatus.value === "approved") {
+      const existing = termRows.value.find((row) => row.source.trim() === source);
+      if (existing) {
+        existing.target = target;
+      } else if (source && target) {
+        termRows.value.push({ source, target, _key: _termKey++ });
+      }
+      if (project.value && source && target) {
+        project.value.term_dictionary_json = {
+          ...(project.value.term_dictionary_json ?? {}),
+          [source]: target,
+        };
+      }
+    }
+    await onLoadGlossary();
+  } catch (error) {
+    glossaryError.value = `创建术语失败: ${stringifyError(error)}`;
+  }
+}
+
+async function onExtractGlossaryCandidates(): Promise<void> {
+  clearGlossaryOp();
+  isExtractingCandidates.value = true;
+  try {
+    const result = await extractGlossaryCandidates(props.projectId, {
+      chapter_id: scriptChapterId.value ?? undefined,
+      max_candidates: 100,
+    });
+    glossaryMessage.value = `候选抽取完成：新增 ${result.created} 条，跳过 ${result.skipped} 条`;
+    await onLoadGlossary();
+  } catch (error) {
+    glossaryError.value = `抽取候选失败: ${stringifyError(error)}`;
+  } finally {
+    isExtractingCandidates.value = false;
+  }
+}
+
+async function onReviewCandidate(candidate: GlossaryCandidateResponse, action: "approve" | "reject" | "merge"): Promise<void> {
+  clearGlossaryOp();
+  try {
+    const mergeTermId = action === "merge" ? candidateMergeDrafts.value[candidate.id] : null;
+    if (action === "merge" && !mergeTermId) {
+      glossaryError.value = "请先选择一个主库术语用于合并";
+      return;
+    }
+    await reviewGlossaryCandidate(props.projectId, candidate.id, {
+      action,
+      target_term: action === "approve" ? (candidateTargetDrafts.value[candidate.id] || candidate.suggested_target_term || null) : null,
+      term_type: candidate.term_type,
+      notes: action === "reject" ? "manual_reject" : action === "merge" ? "manual_merge" : "manual_approve",
+      merge_term_id: mergeTermId,
+    });
+    glossaryMessage.value = action === "approve" ? "候选已批准并入库" : action === "merge" ? "候选已合并到现有术语" : "候选已驳回";
+    if (action === "approve" && candidateTargetDrafts.value[candidate.id]?.trim()) {
+      const source = candidate.source_term.trim();
+      const target = candidateTargetDrafts.value[candidate.id].trim();
+      const existing = termRows.value.find((row) => row.source.trim() === source);
+      if (existing) {
+        existing.target = target;
+      } else {
+        termRows.value.push({ source, target, _key: _termKey++ });
+      }
+      if (project.value) {
+        project.value.term_dictionary_json = {
+          ...(project.value.term_dictionary_json ?? {}),
+          [source]: target,
+        };
+      }
+    }
+    if (action === "merge" && mergeTermId) {
+      const mergedTerm = glossaryTerms.value.find((term) => term.id === mergeTermId);
+      if (mergedTerm && project.value) {
+        project.value.term_dictionary_json = {
+          ...(project.value.term_dictionary_json ?? {}),
+          [candidate.source_term.trim()]: mergedTerm.target_term,
+        };
+        const existing = termRows.value.find((row) => row.source.trim() === candidate.source_term.trim());
+        if (existing) {
+          existing.target = mergedTerm.target_term;
+        } else {
+          termRows.value.push({ source: candidate.source_term.trim(), target: mergedTerm.target_term, _key: _termKey++ });
+        }
+      }
+    }
+    await onLoadGlossary();
+  } catch (error) {
+    glossaryError.value = `审核候选失败: ${stringifyError(error)}`;
+  }
+}
+
+async function onArchiveGlossaryTerm(term: GlossaryTermResponse): Promise<void> {
+  clearGlossaryOp();
+  try {
+    await updateGlossaryTerm(props.projectId, term.id, { status: "archived" });
+    glossaryMessage.value = "术语已归档";
+    termRows.value = termRows.value.filter((row) => row.source.trim() !== term.source_term.trim());
+    if (project.value?.term_dictionary_json) {
+      const next = { ...project.value.term_dictionary_json };
+      delete next[term.source_term];
+      project.value.term_dictionary_json = next;
+    }
+    await onLoadGlossary();
+  } catch (error) {
+    glossaryError.value = `归档术语失败: ${stringifyError(error)}`;
+  }
+}
+
+async function onSaveGlossaryTerm(term: GlossaryTermResponse): Promise<void> {
+  clearGlossaryOp();
+  const target = (glossaryTargetDrafts.value[term.id] || "").trim();
+  if (!target) {
+    glossaryError.value = "主库译法不能为空";
+    return;
+  }
+  try {
+    await updateGlossaryTerm(props.projectId, term.id, {
+      target_term: target,
+      term_type: glossaryTypeDrafts.value[term.id] || term.term_type,
+      status: glossaryStatusDrafts.value[term.id] || term.status,
+    });
+    const isApproved = (glossaryStatusDrafts.value[term.id] || term.status) === "approved";
+    if (isApproved) {
+      const existing = termRows.value.find((row) => row.source.trim() === term.source_term.trim());
+      if (existing) {
+        existing.target = target;
+      } else {
+        termRows.value.push({ source: term.source_term, target, _key: _termKey++ });
+      }
+      if (project.value) {
+        project.value.term_dictionary_json = {
+          ...(project.value.term_dictionary_json ?? {}),
+          [term.source_term]: target,
+        };
+      }
+    } else {
+      termRows.value = termRows.value.filter((row) => row.source.trim() !== term.source_term.trim());
+      if (project.value?.term_dictionary_json) {
+        const next = { ...project.value.term_dictionary_json };
+        delete next[term.source_term];
+        project.value.term_dictionary_json = next;
+      }
+    }
+    glossaryMessage.value = "主库术语已保存";
+    await onLoadGlossary();
+  } catch (error) {
+    glossaryError.value = `保存主库术语失败: ${stringifyError(error)}`;
   }
 }
 
@@ -1176,6 +1565,7 @@ async function onTranslate(): Promise<void> {
   try {
     let totalTranslated = 0;
     let totalWarnings = 0;
+    let totalGlossaryCandidates = 0;
     for (const chapterId of selectedChapterIds.value) {
       const result = await translateBlocks(props.projectId, {
         chapter_id: chapterId,
@@ -1184,10 +1574,12 @@ async function onTranslate(): Promise<void> {
       });
       totalTranslated += result.translated;
       totalWarnings += result.warnings;
+      totalGlossaryCandidates += result.glossary_candidates_created ?? 0;
     }
-    opMessage.value = `翻译完成：${selectedChapterIds.value.length} 个文章任务，${totalTranslated} 块，${totalWarnings} 条告警`;
+    opMessage.value = `翻译完成：${selectedChapterIds.value.length} 个文章任务，${totalTranslated} 块，${totalWarnings} 条告警，新增 ${totalGlossaryCandidates} 条术语候选`;
     await onLoadAllBlocks();
     await onLoadWarnings();
+    await onLoadGlossary();
     // Refresh project status
     const { data } = await http.get<TranslationProjectResponse>(
       `/api/v1/translations/projects/${props.projectId}`
@@ -1639,6 +2031,182 @@ const dictColumns: DataTableColumns<{ source: string; target: string; _key: numb
         type: "error",
         onClick: () => onRemoveTermRow(row._key),
       }, { default: () => "删除" }),
+  },
+];
+
+const glossaryTermColumns: DataTableColumns<GlossaryTermResponse> = [
+  { title: "源词", key: "source_term", width: 180 },
+  {
+    title: "译法",
+    key: "target_term",
+    width: 220,
+    render: (row) =>
+      h(NInput, {
+        size: "small",
+        value: glossaryTargetDrafts.value[row.id] ?? row.target_term,
+        onUpdateValue: (v: string) => {
+          glossaryTargetDrafts.value[row.id] = v;
+        },
+      }),
+  },
+  {
+    title: "类型",
+    key: "term_type",
+    width: 110,
+    render: (row) =>
+      h(NSelect, {
+        size: "small",
+        value: glossaryTypeDrafts.value[row.id] ?? row.term_type,
+        options: glossaryTypeOptions,
+        onUpdateValue: (v: string) => {
+          glossaryTypeDrafts.value[row.id] = v;
+        },
+      }),
+  },
+  {
+    title: "状态",
+    key: "status",
+    width: 120,
+    render: (row) =>
+      h(NSelect, {
+        size: "small",
+        value: glossaryStatusDrafts.value[row.id] ?? row.status,
+        options: glossaryStatusOptions,
+        onUpdateValue: (v: string) => {
+          glossaryStatusDrafts.value[row.id] = v;
+        },
+      }),
+  },
+  { title: "命中", key: "hit_count", width: 70 },
+  {
+    title: "操作",
+    key: "action",
+    width: 150,
+    render: (row) =>
+      h(NSpace, { size: 4 }, {
+        default: () => [
+          h(NButton, {
+            size: "small",
+            type: "primary",
+            onClick: () => void onSaveGlossaryTerm(row),
+          }, { default: () => "保存" }),
+          h(NButton, {
+            size: "small",
+            type: "warning",
+            ghost: true,
+            disabled: (glossaryStatusDrafts.value[row.id] ?? row.status) === "archived",
+            onClick: () => void onArchiveGlossaryTerm(row),
+          }, { default: () => "归档" }),
+        ],
+      }),
+  },
+];
+
+const glossaryCandidateColumns: DataTableColumns<GlossaryCandidateResponse> = [
+  { title: "候选词", key: "source_term", width: 160 },
+  {
+    title: "建议译法",
+    key: "suggested_target_term",
+    width: 220,
+    render: (row) =>
+      h(NInput, {
+        size: "small",
+        value: candidateTargetDrafts.value[row.id] ?? row.suggested_target_term ?? "",
+        placeholder: "人工确认目标译法",
+        onUpdateValue: (v: string) => {
+          candidateTargetDrafts.value[row.id] = v;
+        },
+      }),
+  },
+  {
+    title: "类型",
+    key: "term_type",
+    width: 110,
+    render: (row) => h(NTag, { size: "small", type: "info" }, { default: () => row.term_type }),
+  },
+  {
+    title: "置信度",
+    key: "confidence_score",
+    width: 80,
+    render: (row) => typeof row.confidence_score === "number" ? row.confidence_score.toFixed(2) : "-",
+  },
+  {
+    title: "上下文",
+    key: "source_excerpt",
+    render: (row) => h("div", { style: "white-space:pre-wrap;font-size:12px;max-height:70px;overflow-y:auto" }, row.source_excerpt ?? "-"),
+  },
+  {
+    title: "状态",
+    key: "status",
+    width: 110,
+    render: (row) => h(NTag, { size: "small", type: statusType(row.status) }, { default: () => row.status }),
+  },
+  {
+    title: "合并目标",
+    key: "merge_target",
+    width: 220,
+    render: (row) =>
+      h(NSelect, {
+        size: "small",
+        value: candidateMergeDrafts.value[row.id],
+        options: glossaryMergeOptions.value,
+        placeholder: "选择已有术语",
+        clearable: true,
+        disabled: row.status !== "pending_review",
+        onUpdateValue: (v: string | null) => {
+          candidateMergeDrafts.value[row.id] = v;
+        },
+      }),
+  },
+  {
+    title: "操作",
+    key: "actions",
+    width: 230,
+    render: (row) =>
+      h(NSpace, { size: 4 }, {
+        default: () => [
+          h(NButton, {
+            size: "tiny",
+            type: "success",
+            disabled: row.status !== "pending_review",
+            onClick: () => void onReviewCandidate(row, "approve"),
+          }, { default: () => "批准" }),
+          h(NButton, {
+            size: "tiny",
+            type: "default",
+            disabled: row.status !== "pending_review",
+            onClick: () => void onReviewCandidate(row, "reject"),
+          }, { default: () => "驳回" }),
+          h(NButton, {
+            size: "tiny",
+            type: "warning",
+            ghost: true,
+            disabled: row.status !== "pending_review" || !candidateMergeDrafts.value[row.id],
+            onClick: () => void onReviewCandidate(row, "merge"),
+          }, { default: () => "合并" }),
+        ],
+      }),
+  },
+];
+
+const glossaryAuditColumns: DataTableColumns<GlossaryAuditLogResponse> = [
+  {
+    title: "时间",
+    key: "occurred_at",
+    width: 180,
+    render: (row) => formatGlossaryAuditTime(row.occurred_at),
+  },
+  {
+    title: "动作",
+    key: "action",
+    width: 220,
+    render: (row) => h(NTag, { size: "small", type: "info" }, { default: () => row.action }),
+  },
+  { title: "Producer", key: "producer", width: 160 },
+  {
+    title: "摘要",
+    key: "summary",
+    render: (row) => buildGlossaryAuditSummary(row.payload),
   },
 ];
 

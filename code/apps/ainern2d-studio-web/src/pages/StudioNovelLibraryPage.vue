@@ -52,6 +52,15 @@
 
     <NAlert v-if="message" type="success" :show-icon="true">{{ message }}</NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+
+    <!-- Force Delete Modal -->
+    <NModal v-model:show="showForceDeleteModal" preset="dialog" type="warning" title="小说有活跃任务"
+      :positive-text="`取消 ${forceDeleteRunCount} 个任务并删除`" negative-text="取消"
+      @positive-click="() => { showForceDeleteModal = false; void onDeleteNovel(forceDeleteNovelId, true); }"
+      @negative-click="showForceDeleteModal = false">
+      <p>该小说有 <strong>{{ forceDeleteRunCount }}</strong> 个正在运行/排队的任务。</p>
+      <p>强制删除将取消所有活跃任务并软删除小说。此操作不可恢复。</p>
+    </NModal>
   </div>
 </template>
 
@@ -70,6 +79,7 @@ import {
   NGrid,
   NGridItem,
   NInput,
+  NModal,
   NPopconfirm,
   NSelect,
   NSpace,
@@ -106,6 +116,11 @@ const languageOptions = ref<SelectOption[]>([
 const novels = ref<NovelResponse[]>([]);
 const message = ref("");
 const errorMessage = ref("");
+
+// Force delete modal state
+const showForceDeleteModal = ref(false);
+const forceDeleteNovelId = ref("");
+const forceDeleteRunCount = ref(0);
 
 // Edit drawer state
 const editDrawerVisible = ref(false);
@@ -236,14 +251,24 @@ async function onUpdateNovel(): Promise<void> {
   }
 }
 
-async function onDeleteNovel(novelId: string): Promise<void> {
+async function onDeleteNovel(novelId: string, force = false): Promise<void> {
   clearNotice();
   try {
-    await deleteNovel(novelId, { tenant_id: tenantId.value, project_id: projectId.value });
+    const result = await deleteNovel(novelId, { tenant_id: tenantId.value, project_id: projectId.value, force });
     await onListNovels();
-    message.value = "novel deleted";
-  } catch (error) {
-    errorMessage.value = `delete novel failed: ${stringifyError(error)}`;
+    message.value = force && result.cancelled_runs
+      ? `novel deleted (cancelled ${result.cancelled_runs} active run(s))`
+      : "novel deleted";
+  } catch (error: any) {
+    const respData = error?.response?.data;
+    const errCode = respData?.error_code || respData?.error?.error_code;
+    if (errCode === "REQ-IDEMPOTENCY-001" && !force) {
+      forceDeleteNovelId.value = novelId;
+      forceDeleteRunCount.value = respData?.details?.active_run_count ?? respData?.error?.details?.active_run_count ?? 0;
+      showForceDeleteModal.value = true;
+    } else {
+      errorMessage.value = `delete novel failed: ${stringifyError(error)}`;
+    }
   }
 }
 

@@ -21,7 +21,8 @@ from .skill_19 import Skill19Input, Skill19Output
 from .skill_20 import Skill20Input, Skill20Output
 from .skill_21 import Skill21Input, Skill21Output
 from .skill_22 import Skill22Input, Skill22Output
+from .skill_33 import Skill33Input, Skill33Output
 
 __all__ = [
     f"Skill{i:02d}{t}" for i in range(1, 23) for t in ("Input", "Output")
-]
+] + ["Skill33Input", "Skill33Output"]

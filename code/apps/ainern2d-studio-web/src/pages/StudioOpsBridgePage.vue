@@ -343,6 +343,71 @@
       />
     </NCard>
 
+    <NCard title="Batch Import (Novels & Chapters)" size="small" style="margin-top: 12px;">
+      <NAlert type="info" :bordered="false" style="margin-bottom: 10px;">
+        通过 Ops Bridge Token 可批量导入小说和章节。下方提供 curl 示例和在线导入面板。
+      </NAlert>
+      <NCollapse>
+        <NCollapseItem title="curl 示例: 批量导入小说" name="curl-novels">
+          <pre class="mapping-detail">curl -X POST {{ opsIngressDomain }}/api/v1/ops-bridge/import/novels \
+  -H "Content-Type: application/json" \
+  -H "X-AinerOps-Token: &lt;YOUR_TOKEN&gt;" \
+  -d '{
+  "tenant_id": "{{ tenantId }}",
+  "project_id": "{{ projectId }}",
+  "novels": [
+    {
+      "title": "示例小说",
+      "summary": "故事简介",
+      "default_language_code": "zh",
+      "chapters": [
+        { "chapter_no": 1, "title": "第一章", "markdown_text": "正文内容..." },
+        { "chapter_no": 2, "title": "第二章", "markdown_text": "正文内容..." }
+      ]
+    }
+  ]
+}'</pre>
+        </NCollapseItem>
+        <NCollapseItem title="curl 示例: 追加章节" name="curl-chapters">
+          <pre class="mapping-detail">curl -X POST {{ opsIngressDomain }}/api/v1/ops-bridge/import/novels/&lt;NOVEL_ID&gt;/chapters \
+  -H "Content-Type: application/json" \
+  -H "X-AinerOps-Token: &lt;YOUR_TOKEN&gt;" \
+  -d '{
+  "tenant_id": "{{ tenantId }}",
+  "project_id": "{{ projectId }}",
+  "chapters": [
+    { "chapter_no": 3, "title": "第三章", "markdown_text": "正文内容..." }
+  ]
+}'</pre>
+        </NCollapseItem>
+        <NCollapseItem title="curl 示例: 列出小说" name="curl-list">
+          <pre class="mapping-detail">curl -X GET "{{ opsIngressDomain }}/api/v1/ops-bridge/novels?tenant_id={{ tenantId }}&amp;project_id={{ projectId }}" \
+  -H "X-AinerOps-Token: &lt;YOUR_TOKEN&gt;"</pre>
+        </NCollapseItem>
+      </NCollapse>
+      <NDivider style="margin: 12px 0;" />
+      <NSpace vertical :size="10">
+        <NForm inline label-placement="left" :show-feedback="false">
+          <NFormItem label="关键词">
+            <NInput v-model:value="importKeyword" placeholder="搜索小说标题" clearable style="width: 180px;" />
+          </NFormItem>
+          <NFormItem>
+            <NButton :loading="importListLoading" @click="onLoadImportedNovels">查询已导入小说</NButton>
+          </NFormItem>
+        </NForm>
+        <NDataTable
+          v-if="importedNovels.length > 0"
+          :columns="importedNovelsColumns"
+          :data="importedNovels"
+          :loading="importListLoading"
+          :pagination="{ pageSize: 8 }"
+          size="small"
+          :bordered="false"
+        />
+        <NText v-else-if="importListQueried" depth="3">暂无已导入小说</NText>
+      </NSpace>
+    </NCard>
+
     <NCard title="Reported Providers (AinerOps)" size="small" style="margin-top: 12px;">
       <template #header-extra>
         <NSpace>
@@ -476,6 +541,7 @@ import {
   revealOpsToken,
   testOpsProvider,
   updateOpsStorageConfig,
+  opsListNovels,
   type AdapterSpecResponse,
   type CapabilityStandardItem,
   type CapabilityRequirementDefinition,
@@ -492,6 +558,7 @@ import {
   type RuntimeCapabilityStatResponse,
   type RequirementSchemaResponse,
   type RequirementTiersResponse,
+  type OpsNovelItem,
 } from "@/api/product";
 
 const message = useMessage();
@@ -521,6 +588,37 @@ const integrationRows = ref<OpsIntegrationVersion[]>([]);
 const runtimeCapabilityStats = ref<RuntimeCapabilityStatResponse[]>([]);
 const quickRunResult = ref<QuickRunResponse | null>(null);
 const quickRunModalVisible = ref(false);
+
+// Batch Import state
+const importKeyword = ref("");
+const importListLoading = ref(false);
+const importListQueried = ref(false);
+const importedNovels = ref<OpsNovelItem[]>([]);
+
+const importedNovelsColumns = [
+  { title: "标题", key: "title", ellipsis: { tooltip: true } },
+  { title: "语言", key: "default_language_code", width: 70 },
+  { title: "章节数", key: "chapter_count", width: 80 },
+  { title: "创建时间", key: "created_at", width: 180, render: (row: OpsNovelItem) => row.created_at ? formatTime(row.created_at) : "-" },
+  { title: "Novel ID", key: "id", ellipsis: { tooltip: true }, width: 220 },
+];
+
+async function onLoadImportedNovels() {
+  importListLoading.value = true;
+  importListQueried.value = true;
+  try {
+    const token = revealedToken.value || tokenInfo.value?.token_masked || "";
+    const res = await opsListNovels(
+      { tenant_id: tenantId.value, project_id: projectId.value, keyword: importKeyword.value || undefined },
+      token,
+    );
+    importedNovels.value = res.novels;
+  } catch (e: any) {
+    message.error(e?.response?.data?.detail || "查询失败");
+  } finally {
+    importListLoading.value = false;
+  }
+}
 const storageForm = reactive<OpsStorageConfigUpdatePayload>({
   endpoint: "",
   internal_endpoint: "",

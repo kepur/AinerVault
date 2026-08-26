@@ -263,7 +263,7 @@
                 </NForm>
                 <NSpace>
                   <NButton @click="resetQuickRunForm">载入能力示例</NButton>
-                  <NButton type="primary" :loading="isQuickRunning" @click="onQuickRun">快速运行 / 试调用</NButton>
+                  <NButton type="primary" :loading="isQuickRunning" @click="() => void onQuickRun()">快速运行 / 试调用</NButton>
                 </NSpace>
               </NCard>
             </NGridItem>

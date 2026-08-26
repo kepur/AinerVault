@@ -36,6 +36,9 @@ const StudioNovelDetailPage = () => import("@/pages/StudioNovelDetailPage.vue");
 const StudioTranslationProjectPage = () => import("@/pages/StudioTranslationProjectPage.vue");
 const StudioTranslationsPage = () => import("@/pages/StudioTranslationsPage.vue");
 const StudioNleTimelinePage = () => import("@/pages/StudioNleTimelinePage.vue");
+const StudioEntityPromptWorkbenchPage = () => import("@/pages/StudioEntityPromptWorkbenchPage.vue");
+const StudioEntityPromptLibraryPage = () => import("@/pages/StudioEntityPromptLibraryPage.vue");
+const StudioPromptAssetsPage = () => import("@/pages/StudioPromptAssetsPage.vue");
 
 const router = createRouter({
   history: createWebHistory(),
@@ -209,6 +212,26 @@ const router = createRouter({
       },
     },
     {
+      path: "/studio/entity-prompt-library",
+      name: "studio-entity-prompt-library",
+      component: StudioEntityPromptLibraryPage,
+      meta: {
+        requiresAuth: true,
+        title: "素材提示词库",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/prompt-assets",
+      name: "studio-prompt-assets",
+      component: StudioPromptAssetsPage,
+      meta: {
+        requiresAuth: true,
+        title: "素材提示词库 & 角色成长",
+        section: "studio",
+      },
+    },
+    {
       path: "/studio/assets",
       name: "studio-asset-library",
       component: StudioAssetLibraryPage,
@@ -319,6 +342,17 @@ const router = createRouter({
       meta: {
         requiresAuth: true,
         title: "小说详情",
+        section: "studio",
+      },
+    },
+    {
+      path: "/studio/novels/:novelId/entity-prompts",
+      name: "studio-entity-prompt-workbench",
+      component: StudioEntityPromptWorkbenchPage,
+      props: true,
+      meta: {
+        requiresAuth: true,
+        title: "实体提示词工作台",
         section: "studio",
       },
     },

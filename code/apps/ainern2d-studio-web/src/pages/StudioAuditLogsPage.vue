@@ -153,7 +153,7 @@ const loadLogs = async () => {
       params.append('project_id', projectId.value)
     }
 
-    const response = await fetch(`/api/v1/audit/logs?${params}`)
+    const response = await fetch(`/api/v1/auth/audit/logs?${params}`)
     if (response.ok) {
       logs.value = await response.json()
     }

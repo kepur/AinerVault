@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ainern2d_shared.ainer_db_models.content_models import (
@@ -23,12 +23,18 @@ from ainern2d_shared.ainer_db_models.content_models import (
     SkillRunStatus,
 )
 from ainern2d_shared.ainer_db_models.governance_models import CreativePolicyStack
+from ainern2d_shared.ainer_db_models.pipeline_models import WorkflowEvent
 from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 from ainern2d_shared.ainer_db_models.translation_models import (
     BlockType,
     ConsistencyMode,
     ConsistencyWarning,
     EntityNameVariant,
+    GlossaryCandidate,
+    GlossaryCandidateStatus,
+    GlossaryTerm,
+    GlossaryTermStatus,
+    GlossaryTermType,
     PlanItemStatus,
     ScriptBlock,
     TranslationBlock,
@@ -184,6 +190,98 @@ class ConsistencyWarningResponse(BaseModel):
     translation_block_id: str | None
 
 
+class GlossaryTermResponse(BaseModel):
+    id: str
+    novel_id: str | None
+    translation_project_id: str | None
+    source_language_code: str
+    target_language_code: str
+    source_term: str
+    target_term: str
+    term_type: str
+    status: str
+    aliases_json: list | None
+    notes: str | None
+    context_json: dict | None
+    metadata_json: dict | None
+    hit_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateGlossaryTermRequest(BaseModel):
+    tenant_id: str = "default"
+    project_id: str = "default"
+    novel_id: str | None = None
+    translation_project_id: str | None = None
+    source_language_code: str = "zh-CN"
+    target_language_code: str = "en-US"
+    source_term: str
+    target_term: str
+    term_type: GlossaryTermType = GlossaryTermType.proper_noun
+    status: GlossaryTermStatus = GlossaryTermStatus.draft
+    aliases_json: list[str] | None = None
+    notes: str | None = None
+    context_json: dict | None = None
+    metadata_json: dict | None = None
+
+
+class UpdateGlossaryTermRequest(BaseModel):
+    target_term: str | None = None
+    term_type: GlossaryTermType | None = None
+    status: GlossaryTermStatus | None = None
+    aliases_json: list[str] | None = None
+    notes: str | None = None
+    context_json: dict | None = None
+    metadata_json: dict | None = None
+
+
+class GlossaryCandidateResponse(BaseModel):
+    id: str
+    translation_project_id: str
+    novel_id: str
+    source_language_code: str
+    target_language_code: str
+    source_term: str
+    suggested_target_term: str | None
+    term_type: str
+    status: str
+    confidence_score: float | None
+    source_excerpt: str | None
+    source_block_id: str | None
+    normalized_term: str | None
+    candidate_reason: str | None
+    review_notes: str | None
+    approved_term_id: str | None
+    metadata_json: dict | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class GlossaryAuditLogResponse(BaseModel):
+    event_id: str
+    event_type: str
+    action: str
+    producer: str
+    occurred_at: datetime
+    payload: dict
+
+
+class ExtractGlossaryCandidatesRequest(BaseModel):
+    tenant_id: str = "default"
+    project_id: str = "default"
+    chapter_id: str | None = None
+    max_candidates: int = Field(default=100, ge=1, le=500)
+
+
+class ReviewGlossaryCandidateRequest(BaseModel):
+    action: str
+    target_term: str | None = None
+    term_type: GlossaryTermType | None = None
+    notes: str | None = None
+    merge_term_id: str | None = None
+
+
 class SegmentRequest(BaseModel):
     tenant_id: str = "default"
     project_id: str = "default"
@@ -293,6 +391,278 @@ def _chunks(lst: list, n: int):
 def _compute_input_hash(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
+def _normalize_term(text: str) -> str:
+    normalized = re.sub(r"\s+", "", str(text or "").strip())
+    normalized = re.sub(r"[，。、“”‘’；：！？,.!?:;\-—（）()\[\]{}<>]", "", normalized)
+    return normalized
+
+
+def _guess_term_type(term: str) -> GlossaryTermType:
+    if re.search(r"(城|山|谷|海|洲|岛|殿|宫|阁|寺|塔|峰|渊)$", term):
+        return GlossaryTermType.place
+    if re.search(r"(宗|门|派|盟|族|朝|国|教|殿)$", term):
+        return GlossaryTermType.faction
+    if re.search(r"(诀|经|功|法|术|阵|咒|印)$", term):
+        return GlossaryTermType.technique
+    if re.search(r"(龙|虎|雀|龟|凤|兽|妖|鲛人)$", term):
+        return GlossaryTermType.creature
+    if re.search(r"(棺|棺椁|灯|剑|刀|鼎|炉|珠|镜|碑|塔|符|幡|印)$", term):
+        return GlossaryTermType.artifact
+    return GlossaryTermType.proper_noun
+
+
+def _to_glossary_term_response(term: GlossaryTerm) -> GlossaryTermResponse:
+    return GlossaryTermResponse(
+        id=term.id,
+        novel_id=term.novel_id,
+        translation_project_id=term.translation_project_id,
+        source_language_code=term.source_language_code,
+        target_language_code=term.target_language_code,
+        source_term=term.source_term,
+        target_term=term.target_term,
+        term_type=term.term_type.value if hasattr(term.term_type, "value") else str(term.term_type),
+        status=term.status.value if hasattr(term.status, "value") else str(term.status),
+        aliases_json=term.aliases_json,
+        notes=term.notes,
+        context_json=term.context_json,
+        metadata_json=term.metadata_json,
+        hit_count=term.hit_count,
+        created_at=term.created_at,
+        updated_at=term.updated_at,
+    )
+
+
+def _to_glossary_candidate_response(candidate: GlossaryCandidate) -> GlossaryCandidateResponse:
+    return GlossaryCandidateResponse(
+        id=candidate.id,
+        translation_project_id=candidate.translation_project_id,
+        novel_id=candidate.novel_id,
+        source_language_code=candidate.source_language_code,
+        target_language_code=candidate.target_language_code,
+        source_term=candidate.source_term,
+        suggested_target_term=candidate.suggested_target_term,
+        term_type=(candidate.term_type.value if hasattr(candidate.term_type, "value") else str(candidate.term_type)),
+        status=(candidate.status.value if hasattr(candidate.status, "value") else str(candidate.status)),
+        confidence_score=candidate.confidence_score,
+        source_excerpt=candidate.source_excerpt,
+        source_block_id=candidate.source_block_id,
+        normalized_term=candidate.normalized_term,
+        candidate_reason=candidate.candidate_reason,
+        review_notes=candidate.review_notes,
+        approved_term_id=candidate.approved_term_id,
+        metadata_json=candidate.metadata_json,
+        created_at=candidate.created_at,
+        updated_at=candidate.updated_at,
+    )
+
+
+def _to_glossary_audit_response(event: WorkflowEvent) -> GlossaryAuditLogResponse:
+    payload = event.payload_json or {}
+    return GlossaryAuditLogResponse(
+        event_id=event.id,
+        event_type=event.event_type,
+        action=str(payload.get("action") or event.event_type),
+        producer=event.producer,
+        occurred_at=event.occurred_at,
+        payload=payload,
+    )
+
+
+def _record_glossary_audit_event(
+    db: Session,
+    *,
+    project: TranslationProject,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    now = _utcnow()
+    event = WorkflowEvent(
+        id=f"evt_{uuid4().hex[:24]}",
+        tenant_id=project.tenant_id,
+        project_id=project.project_id,
+        trace_id=project.trace_id,
+        correlation_id=project.correlation_id,
+        idempotency_key=f"idem_{event_type}_{project.id}_{uuid4().hex[:8]}",
+        run_id=None,
+        job_id=None,
+        stage=None,
+        event_type=event_type,
+        event_version="1.0",
+        producer="studio_translation_api",
+        occurred_at=now,
+        payload_json={
+            "action": event_type,
+            "translation_project_id": project.id,
+            "novel_id": project.novel_id,
+            **payload,
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(event)
+
+
+def _extract_candidate_terms_from_text(text: str) -> list[str]:
+    suffix_pattern = (
+        r"[\u4e00-\u9fff]{1,8}"
+        r"(?:棺椁|油灯|石兽|法阵|符箓|长剑|短刀|宗门|门派|宫殿|楼阁|山脉|海域|禁地|秘境|"
+        r"棺|灯|兽|龙|虎|雀|龟|剑|刀|钟|鼎|炉|珠|镜|印|碑|塔|幡|阵|诀|经|功|法|术|咒|"
+        r"城|山|谷|海|洲|岛|宫|殿|阁|寺|门|宗|派|盟|族|朝|国|教)"
+    )
+    matches = re.findall(suffix_pattern, text or "")
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in matches:
+        term = _normalize_term(raw)
+        if len(term) < 2 or len(term) > 12:
+            continue
+        if term in seen:
+            continue
+        seen.add(term)
+        candidates.append(term)
+    return candidates
+
+
+def _load_approved_glossary_terms(
+    db: Session,
+    *,
+    project: TranslationProject,
+) -> list[GlossaryTerm]:
+    return db.execute(
+        select(GlossaryTerm).where(
+            GlossaryTerm.deleted_at.is_(None),
+            GlossaryTerm.source_language_code == project.source_language_code,
+            GlossaryTerm.target_language_code == project.target_language_code,
+            GlossaryTerm.status == GlossaryTermStatus.approved,
+            or_(
+                GlossaryTerm.translation_project_id == project.id,
+                GlossaryTerm.translation_project_id.is_(None),
+            ),
+            or_(
+                GlossaryTerm.novel_id == project.novel_id,
+                GlossaryTerm.novel_id.is_(None),
+            ),
+        )
+    ).scalars().all()
+
+
+def _build_effective_term_dictionary(
+    db: Session,
+    *,
+    project: TranslationProject,
+    source_texts: list[str] | None = None,
+) -> tuple[dict[str, str], list[GlossaryTerm]]:
+    effective_terms: dict[str, str] = {}
+    approved_terms = _load_approved_glossary_terms(db, project=project)
+    for term in approved_terms:
+        effective_terms[term.source_term] = term.target_term
+    for source_term, target_term in (project.term_dictionary_json or {}).items():
+        effective_terms[str(source_term)] = str(target_term)
+
+    if source_texts:
+        hit_counter: dict[str, int] = {}
+        for text in source_texts:
+            for term in approved_terms:
+                if term.source_term and term.source_term in text:
+                    hit_counter[term.id] = hit_counter.get(term.id, 0) + text.count(term.source_term)
+        if hit_counter:
+            now = _utcnow()
+            for term in approved_terms:
+                hits = hit_counter.get(term.id, 0)
+                if hits <= 0:
+                    continue
+                term.hit_count = int(term.hit_count or 0) + hits
+                term.updated_at = now
+    return effective_terms, approved_terms
+
+
+def _sync_project_term_dictionary(
+    project: TranslationProject,
+    *,
+    source_term: str,
+    target_term: str,
+) -> None:
+    updated = dict(project.term_dictionary_json or {})
+    updated[str(source_term).strip()] = str(target_term).strip()
+    project.term_dictionary_json = updated
+    project.updated_at = _utcnow()
+
+
+def _remove_project_term_dictionary(
+    project: TranslationProject,
+    *,
+    source_term: str,
+) -> None:
+    updated = dict(project.term_dictionary_json or {})
+    updated.pop(str(source_term).strip(), None)
+    project.term_dictionary_json = updated
+    project.updated_at = _utcnow()
+
+
+def _enqueue_glossary_candidates_for_blocks(
+    *,
+    project: TranslationProject,
+    db: Session,
+    script_blocks: list[ScriptBlock],
+    limit: int = 100,
+) -> tuple[int, int]:
+    if not script_blocks:
+        return 0, 0
+
+    existing_terms = {
+        _normalize_term(row.source_term)
+        for row in _load_approved_glossary_terms(db, project=project)
+    }
+    existing_candidates = {
+        row.normalized_term or _normalize_term(row.source_term)
+        for row in db.execute(
+            select(GlossaryCandidate).where(
+                GlossaryCandidate.translation_project_id == project.id,
+                GlossaryCandidate.deleted_at.is_(None),
+                GlossaryCandidate.status == GlossaryCandidateStatus.pending_review,
+            )
+        ).scalars().all()
+    }
+
+    created = 0
+    skipped = 0
+    now = _utcnow()
+    for block in script_blocks:
+        for term in _extract_candidate_terms_from_text(block.source_text):
+            normalized = _normalize_term(term)
+            if normalized in existing_terms or normalized in existing_candidates:
+                skipped += 1
+                continue
+            db.add(
+                GlossaryCandidate(
+                    id=_new_id(),
+                    tenant_id=project.tenant_id,
+                    project_id=project.project_id,
+                    novel_id=project.novel_id,
+                    translation_project_id=project.id,
+                    source_language_code=project.source_language_code,
+                    target_language_code=project.target_language_code,
+                    source_term=term,
+                    suggested_target_term=None,
+                    term_type=_guess_term_type(term),
+                    status=GlossaryCandidateStatus.pending_review,
+                    confidence_score=0.55,
+                    source_excerpt=(block.source_text or "")[:500],
+                    source_block_id=block.id,
+                    normalized_term=normalized,
+                    candidate_reason="translation_auto_extract",
+                    metadata_json={"chapter_id": block.chapter_id, "seq_no": block.seq_no},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            existing_candidates.add(normalized)
+            created += 1
+            if created >= limit:
+                return created, skipped
+    return created, skipped
 
 
 def _entity_placeholder(entity: EntityMapping) -> str:
@@ -788,12 +1158,23 @@ def _run_consistency_check(project: TranslationProject, db: Session) -> int:
             TranslationBlock.translated_text.isnot(None),
         )
     ).scalars().all()
+    script_block_ids = [tb.script_block_id for tb in all_blocks]
+    source_text_by_block_id = {
+        row.id: row.source_text
+        for row in db.execute(
+            select(ScriptBlock).where(
+                ScriptBlock.id.in_(script_block_ids),
+                ScriptBlock.deleted_at.is_(None),
+            )
+        ).scalars().all()
+    } if script_block_ids else {}
 
-    def _warning_exists(tb_id: str, detected_variant: str) -> bool:
+    def _warning_exists(tb_id: str, detected_variant: str, warning_type: WarningType) -> bool:
         existing = db.execute(
             select(ConsistencyWarning).where(
                 ConsistencyWarning.translation_project_id == project.id,
                 ConsistencyWarning.translation_block_id == tb_id,
+                ConsistencyWarning.warning_type == warning_type,
                 ConsistencyWarning.detected_variant == detected_variant,
                 ConsistencyWarning.status == WarningStatus.open,
                 ConsistencyWarning.deleted_at.is_(None),
@@ -817,7 +1198,7 @@ def _run_consistency_check(project: TranslationProject, db: Session) -> int:
                 continue
             for tb in all_blocks:
                 text = tb.translated_text or ""
-                if alias not in text or _warning_exists(tb.id, alias):
+                if alias not in text or _warning_exists(tb.id, alias, WarningType.name_drift):
                     continue
                 now = _utcnow()
                 warning = ConsistencyWarning(
@@ -874,7 +1255,7 @@ def _run_consistency_check(project: TranslationProject, db: Session) -> int:
         for tb in all_blocks:
             text = tb.translated_text or ""
             for variant_name in drift_variants:
-                if variant_name not in text or _warning_exists(tb.id, variant_name):
+                if variant_name not in text or _warning_exists(tb.id, variant_name, WarningType.name_drift):
                     continue
                 now = _utcnow()
                 warning = ConsistencyWarning(
@@ -901,6 +1282,42 @@ def _run_consistency_check(project: TranslationProject, db: Session) -> int:
             else EntityContinuityStatus.locked
         )
         entity.updated_at = _utcnow()
+
+    approved_terms = _load_approved_glossary_terms(db, project=project)
+    for term in approved_terms:
+        normalized_source = _normalize_term(term.source_term)
+        if not normalized_source or not term.target_term:
+            continue
+        for tb in all_blocks:
+            source_text = source_text_by_block_id.get(tb.script_block_id)
+            translated_text = tb.translated_text or ""
+            if not source_text or term.source_term not in source_text or term.target_term in translated_text:
+                continue
+            warning_type = (
+                WarningType.glossary_drift
+                if term.source_term in translated_text
+                else WarningType.glossary_missing
+            )
+            detected_variant = term.source_term if warning_type == WarningType.glossary_drift else (translated_text[:120].strip() or "(missing)")
+            if _warning_exists(tb.id, detected_variant, warning_type):
+                continue
+            now = _utcnow()
+            warning = ConsistencyWarning(
+                id=_new_id(),
+                tenant_id=project.tenant_id,
+                project_id=project.project_id,
+                translation_project_id=project.id,
+                translation_block_id=tb.id,
+                warning_type=warning_type,
+                source_name=term.source_term,
+                detected_variant=detected_variant,
+                expected_canonical=term.target_term,
+                status=WarningStatus.open,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(warning)
+            warnings_created += 1
 
     return warnings_created
 
@@ -1850,7 +2267,11 @@ def translate_blocks(
     }
 
     # Build term dictionary injection
-    term_dict = project.term_dictionary_json or {}
+    term_dict, _ = _build_effective_term_dictionary(
+        db,
+        project=project,
+        source_texts=[sb.source_text for sb in pending_blocks],
+    )
     terms_str = "\n".join(f"  {k} → {v}" for k, v in term_dict.items()) if term_dict else "  (none)"
 
     # Translation input hash for run persistence and cache reuse.
@@ -1885,6 +2306,13 @@ def translate_blocks(
         project.updated_at = _utcnow()
         db.commit()
         return {"translated": 0, "warnings": warnings_count, "run_id": None, "cached": True}
+
+    candidates_created, candidates_skipped = _enqueue_glossary_candidates_for_blocks(
+        project=project,
+        db=db,
+        script_blocks=pending_blocks,
+    )
+    db.flush()
 
     cached_run = _find_cached_translation_run(db, project=project, input_hash=input_hash)
     if cached_run and isinstance(cached_run.output_json, dict):
@@ -1943,6 +2371,8 @@ def translate_blocks(
             "warnings": warnings_count,
             "run_id": cached_run.id,
             "cached": True,
+            "glossary_candidates_created": candidates_created,
+            "glossary_candidates_skipped": candidates_skipped,
         }
 
     translated_count = 0
@@ -2093,7 +2523,14 @@ def translate_blocks(
     run.updated_at = _utcnow()
     db.commit()
 
-    return {"translated": translated_count, "warnings": warnings_count, "run_id": run.id, "cached": False}
+    return {
+        "translated": translated_count,
+        "warnings": warnings_count,
+        "run_id": run.id,
+        "cached": False,
+        "glossary_candidates_created": candidates_created,
+        "glossary_candidates_skipped": candidates_skipped,
+    }
 
 
 @router.get(
@@ -2217,6 +2654,431 @@ def list_entity_variants(
         )
         for v in variants
     ]
+
+
+@router.get(
+    "/translations/projects/{project_id_path}/glossary/terms",
+    response_model=list[GlossaryTermResponse],
+)
+def list_glossary_terms(
+    project_id_path: str,
+    status: str | None = Query(default=None),
+    term_type: str | None = Query(default=None),
+    include_global: bool = Query(default=True),
+    db: Session = Depends(get_db),
+) -> list[GlossaryTermResponse]:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+
+    q = select(GlossaryTerm).where(
+        GlossaryTerm.deleted_at.is_(None),
+        GlossaryTerm.source_language_code == project.source_language_code,
+        GlossaryTerm.target_language_code == project.target_language_code,
+        or_(GlossaryTerm.novel_id == project.novel_id, GlossaryTerm.novel_id.is_(None)),
+    )
+    if include_global:
+        q = q.where(
+            or_(GlossaryTerm.translation_project_id == project.id, GlossaryTerm.translation_project_id.is_(None))
+        )
+    else:
+        q = q.where(GlossaryTerm.translation_project_id == project.id)
+    if status:
+        try:
+            q = q.where(GlossaryTerm.status == GlossaryTermStatus(status))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid glossary status: {status}") from exc
+    if term_type:
+        try:
+            q = q.where(GlossaryTerm.term_type == GlossaryTermType(term_type))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid term type: {term_type}") from exc
+    rows = db.execute(q.order_by(GlossaryTerm.hit_count.desc(), GlossaryTerm.created_at.desc())).scalars().all()
+    return [_to_glossary_term_response(row) for row in rows]
+
+
+@router.post(
+    "/translations/projects/{project_id_path}/glossary/terms",
+    response_model=GlossaryTermResponse,
+)
+def create_glossary_term(
+    project_id_path: str,
+    body: CreateGlossaryTermRequest,
+    db: Session = Depends(get_db),
+) -> GlossaryTermResponse:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+
+    source_term = _normalize_term(body.source_term)
+    target_term = str(body.target_term or "").strip()
+    if not source_term or not target_term:
+        raise HTTPException(status_code=400, detail="source_term and target_term are required")
+
+    existing = db.execute(
+        select(GlossaryTerm).where(
+            GlossaryTerm.deleted_at.is_(None),
+            GlossaryTerm.translation_project_id == project.id,
+            GlossaryTerm.source_language_code == body.source_language_code,
+            GlossaryTerm.target_language_code == body.target_language_code,
+            GlossaryTerm.source_term == source_term,
+        )
+    ).scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail="glossary term already exists for this project")
+
+    now = _utcnow()
+    term = GlossaryTerm(
+        id=_new_id(),
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        novel_id=body.novel_id or project.novel_id,
+        translation_project_id=body.translation_project_id or project.id,
+        source_language_code=body.source_language_code,
+        target_language_code=body.target_language_code,
+        source_term=source_term,
+        target_term=target_term,
+        term_type=body.term_type,
+        status=body.status,
+        aliases_json=body.aliases_json or [],
+        notes=body.notes,
+        context_json=body.context_json,
+        metadata_json=body.metadata_json,
+        hit_count=0,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(term)
+    if term.status == GlossaryTermStatus.approved:
+        _sync_project_term_dictionary(
+            project,
+            source_term=term.source_term,
+            target_term=term.target_term,
+        )
+    _record_glossary_audit_event(
+        db,
+        project=project,
+        event_type="translation.glossary.term.created",
+        payload={
+            "term_id": term.id,
+            "source_term": term.source_term,
+            "target_term": term.target_term,
+            "term_type": term.term_type.value if hasattr(term.term_type, "value") else str(term.term_type),
+            "status": term.status.value if hasattr(term.status, "value") else str(term.status),
+        },
+    )
+    db.commit()
+    db.refresh(term)
+    return _to_glossary_term_response(term)
+
+
+@router.patch(
+    "/translations/projects/{project_id_path}/glossary/terms/{term_id}",
+    response_model=GlossaryTermResponse,
+)
+def update_glossary_term(
+    project_id_path: str,
+    term_id: str,
+    body: UpdateGlossaryTermRequest,
+    db: Session = Depends(get_db),
+) -> GlossaryTermResponse:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+    term = db.get(GlossaryTerm, term_id)
+    if term is None or term.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="glossary term not found")
+    if term.translation_project_id not in {None, project.id}:
+        raise HTTPException(status_code=403, detail="glossary term does not belong to this project scope")
+
+    if body.target_term is not None:
+        cleaned = str(body.target_term).strip()
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="target_term cannot be empty")
+        term.target_term = cleaned
+    if body.term_type is not None:
+        term.term_type = body.term_type
+    if body.status is not None:
+        term.status = body.status
+    if body.aliases_json is not None:
+        term.aliases_json = body.aliases_json
+    if body.notes is not None:
+        term.notes = body.notes
+    if body.context_json is not None:
+        term.context_json = body.context_json
+    if body.metadata_json is not None:
+        term.metadata_json = body.metadata_json
+    term.updated_at = _utcnow()
+    if term.status == GlossaryTermStatus.approved:
+        _sync_project_term_dictionary(
+            project,
+            source_term=term.source_term,
+            target_term=term.target_term,
+        )
+    elif term.status == GlossaryTermStatus.archived:
+        _remove_project_term_dictionary(project, source_term=term.source_term)
+    _record_glossary_audit_event(
+        db,
+        project=project,
+        event_type="translation.glossary.term.updated",
+        payload={
+            "term_id": term.id,
+            "source_term": term.source_term,
+            "target_term": term.target_term,
+            "term_type": term.term_type.value if hasattr(term.term_type, "value") else str(term.term_type),
+            "status": term.status.value if hasattr(term.status, "value") else str(term.status),
+        },
+    )
+    db.commit()
+    db.refresh(term)
+    return _to_glossary_term_response(term)
+
+
+@router.get(
+    "/translations/projects/{project_id_path}/glossary/candidates",
+    response_model=list[GlossaryCandidateResponse],
+)
+def list_glossary_candidates(
+    project_id_path: str,
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[GlossaryCandidateResponse]:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+
+    q = select(GlossaryCandidate).where(
+        GlossaryCandidate.translation_project_id == project.id,
+        GlossaryCandidate.deleted_at.is_(None),
+    )
+    if status:
+        try:
+            q = q.where(GlossaryCandidate.status == GlossaryCandidateStatus(status))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid candidate status: {status}") from exc
+    rows = db.execute(q.order_by(GlossaryCandidate.created_at.desc())).scalars().all()
+    return [_to_glossary_candidate_response(row) for row in rows]
+
+
+@router.post(
+    "/translations/projects/{project_id_path}/glossary/candidates/extract",
+    response_model=dict,
+)
+def extract_glossary_candidates(
+    project_id_path: str,
+    body: ExtractGlossaryCandidatesRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+
+    q = select(ScriptBlock).where(
+        ScriptBlock.translation_project_id == project.id,
+        ScriptBlock.deleted_at.is_(None),
+    )
+    if body.chapter_id:
+        q = q.where(ScriptBlock.chapter_id == body.chapter_id)
+    blocks = db.execute(q.order_by(ScriptBlock.seq_no)).scalars().all()
+    if not blocks:
+        return {"created": 0, "skipped": 0}
+
+    existing_terms = {
+        _normalize_term(row.source_term)
+        for row in _load_approved_glossary_terms(db, project=project)
+    }
+    existing_candidates = {
+        row.normalized_term or _normalize_term(row.source_term)
+        for row in db.execute(
+            select(GlossaryCandidate).where(
+                GlossaryCandidate.translation_project_id == project.id,
+                GlossaryCandidate.deleted_at.is_(None),
+                GlossaryCandidate.status == GlossaryCandidateStatus.pending_review,
+            )
+        ).scalars().all()
+    }
+
+    created = 0
+    skipped = 0
+    now = _utcnow()
+    for block in blocks:
+        for term in _extract_candidate_terms_from_text(block.source_text):
+            normalized = _normalize_term(term)
+            if normalized in existing_terms or normalized in existing_candidates:
+                skipped += 1
+                continue
+            candidate = GlossaryCandidate(
+                id=_new_id(),
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                novel_id=project.novel_id,
+                translation_project_id=project.id,
+                source_language_code=project.source_language_code,
+                target_language_code=project.target_language_code,
+                source_term=term,
+                suggested_target_term=None,
+                term_type=_guess_term_type(term),
+                status=GlossaryCandidateStatus.pending_review,
+                confidence_score=0.55,
+                source_excerpt=(block.source_text or "")[:500],
+                source_block_id=block.id,
+                normalized_term=normalized,
+                candidate_reason="pattern_extractor",
+                metadata_json={"chapter_id": block.chapter_id, "seq_no": block.seq_no},
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(candidate)
+            existing_candidates.add(normalized)
+            created += 1
+            if created >= body.max_candidates:
+                break
+        if created >= body.max_candidates:
+            break
+
+    _record_glossary_audit_event(
+        db,
+        project=project,
+        event_type="translation.glossary.candidates.extracted",
+        payload={
+            "chapter_id": body.chapter_id,
+            "created": created,
+            "skipped": skipped,
+        },
+    )
+    db.commit()
+    return {"created": created, "skipped": skipped}
+
+
+@router.patch(
+    "/translations/projects/{project_id_path}/glossary/candidates/{candidate_id}/review",
+    response_model=GlossaryCandidateResponse,
+)
+def review_glossary_candidate(
+    project_id_path: str,
+    candidate_id: str,
+    body: ReviewGlossaryCandidateRequest,
+    db: Session = Depends(get_db),
+) -> GlossaryCandidateResponse:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+    candidate = db.get(GlossaryCandidate, candidate_id)
+    if candidate is None or candidate.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="glossary candidate not found")
+    if candidate.translation_project_id != project.id:
+        raise HTTPException(status_code=403, detail="glossary candidate does not belong to this project")
+
+    action = str(body.action or "").strip().lower()
+    if action not in {"approve", "reject", "merge"}:
+        raise HTTPException(status_code=400, detail="invalid action")
+
+    now = _utcnow()
+    if action == "reject":
+        candidate.status = GlossaryCandidateStatus.rejected
+        candidate.review_notes = body.notes
+    else:
+        term: GlossaryTerm | None = None
+        if action == "merge":
+            if not body.merge_term_id:
+                raise HTTPException(status_code=400, detail="merge_term_id is required for merge")
+            term = db.get(GlossaryTerm, body.merge_term_id)
+            if term is None or term.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="merge target glossary term not found")
+        else:
+            target_term = str(body.target_term or candidate.suggested_target_term or "").strip()
+            if not target_term:
+                raise HTTPException(status_code=400, detail="target_term is required for approve")
+            term = db.execute(
+                select(GlossaryTerm).where(
+                    GlossaryTerm.deleted_at.is_(None),
+                    GlossaryTerm.translation_project_id == project.id,
+                    GlossaryTerm.source_language_code == candidate.source_language_code,
+                    GlossaryTerm.target_language_code == candidate.target_language_code,
+                    GlossaryTerm.source_term == candidate.source_term,
+                )
+            ).scalars().first()
+            if term is None:
+                term = GlossaryTerm(
+                    id=_new_id(),
+                    tenant_id=project.tenant_id,
+                    project_id=project.project_id,
+                    novel_id=project.novel_id,
+                    translation_project_id=project.id,
+                    source_language_code=candidate.source_language_code,
+                    target_language_code=candidate.target_language_code,
+                    source_term=candidate.source_term,
+                    target_term=target_term,
+                    term_type=body.term_type or candidate.term_type,
+                    status=GlossaryTermStatus.approved,
+                    aliases_json=[],
+                    notes=body.notes,
+                    context_json={"approved_from_candidate_id": candidate.id},
+                    metadata_json=candidate.metadata_json,
+                    hit_count=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(term)
+            else:
+                term.target_term = target_term
+                term.term_type = body.term_type or term.term_type
+                term.status = GlossaryTermStatus.approved
+                term.notes = body.notes or term.notes
+                term.updated_at = now
+        candidate.status = GlossaryCandidateStatus.merged if action == "merge" else GlossaryCandidateStatus.approved
+        candidate.approved_term_id = term.id if term else None
+        candidate.review_notes = body.notes
+        if term is not None:
+            _sync_project_term_dictionary(
+                project,
+                source_term=candidate.source_term,
+                target_term=term.target_term,
+            )
+
+    candidate.updated_at = now
+    _record_glossary_audit_event(
+        db,
+        project=project,
+        event_type=f"translation.glossary.candidate.{action}",
+        payload={
+            "candidate_id": candidate.id,
+            "source_term": candidate.source_term,
+            "status": candidate.status.value if hasattr(candidate.status, "value") else str(candidate.status),
+            "approved_term_id": candidate.approved_term_id,
+            "target_term": body.target_term or candidate.suggested_target_term,
+            "notes": body.notes,
+            "merge_term_id": body.merge_term_id,
+        },
+    )
+    db.commit()
+    db.refresh(candidate)
+    return _to_glossary_candidate_response(candidate)
+
+
+@router.get(
+    "/translations/projects/{project_id_path}/glossary/audit-logs",
+    response_model=list[GlossaryAuditLogResponse],
+)
+def list_glossary_audit_logs(
+    project_id_path: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> list[GlossaryAuditLogResponse]:
+    project = db.get(TranslationProject, project_id_path)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="translation project not found")
+
+    rows = db.execute(
+        select(WorkflowEvent).where(
+            WorkflowEvent.tenant_id == project.tenant_id,
+            WorkflowEvent.project_id == project.project_id,
+            WorkflowEvent.deleted_at.is_(None),
+            WorkflowEvent.event_type.like("translation.glossary.%"),
+            WorkflowEvent.payload_json["translation_project_id"].astext == project.id,
+        ).order_by(WorkflowEvent.occurred_at.desc()).limit(limit)
+    ).scalars().all()
+    return [_to_glossary_audit_response(row) for row in rows]
 
 
 @router.post(

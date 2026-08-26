@@ -1,0 +1,607 @@
+openapi: 3.1.0
+info:
+  title: AinerN2D Capability API
+  version: "1.0"
+  description: |
+    AinerN2D Core 与「能力中间层」之间的契约。
+    Core = Client，中间层 = Server。中间层负责把能力映射到具体厂商。
+    完整说明见 docs/v2/03_CAPABILITY_API_SPEC.md
+servers:
+  - url: https://your-gateway.local/cap/v1
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: 存活与版本
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string, example: "1.0" }
+                  upstreams:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider: { type: string }
+                        ok: { type: boolean }
+                        latency_ms: { type: integer }
+
+  /capabilities:
+    get:
+      summary: 能力自描述（Discovery）— 后台据此自动渲染参数表单
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CapabilityCatalog" }
+
+  /voices:
+    get:
+      summary: 可用音色列表
+      parameters:
+        - { name: language, in: query, schema: { type: string } }
+        - { name: gender,   in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items: { $ref: "#/components/schemas/Voice" }
+
+  /invoke:
+    post:
+      summary: 同步调用（仅 text.* 能力，≤60s）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRequest" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /tasks:
+    post:
+      summary: 提交异步任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRequest" }
+      responses:
+        "202":
+          description: 新任务已受理
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskAccepted" }
+        "200":
+          description: 幂等命中，返回既有任务
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskAccepted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /tasks:batch:
+    post:
+      summary: 批量提交（≤50）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                tasks:
+                  type: array
+                  maxItems: 50
+                  items: { $ref: "#/components/schemas/TaskRequest" }
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: "#/components/schemas/TaskAccepted"
+                        - $ref: "#/components/schemas/ErrorBody"
+
+  /tasks/{task_id}:
+    get:
+      summary: 查询任务
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /tasks/{task_id}:cancel:
+    post:
+      summary: 取消任务（尽力而为）
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "409": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+
+  responses:
+    Error:
+      description: 错误
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+
+  schemas:
+
+    Capability:
+      type: string
+      enum:
+        - text.chat
+        - text.translate
+        - image.text_to_image
+        - image.image_to_image
+        - image.edit
+        - image.upscale
+        - audio.tts
+        - audio.voice_list
+        - audio.music
+        - audio.sfx
+        - video.image_to_video
+
+    AssetRefIn:
+      type: object
+      description: 输入媒体引用，三选一
+      properties:
+        url:      { type: string, format: uri }
+        asset_id: { type: string }
+        b64:      { type: string, description: "仅限 <2MB" }
+        mime:     { type: string }
+      anyOf:
+        - { required: [url] }
+        - { required: [asset_id] }
+        - { required: [b64, mime] }
+
+    AssetOut:
+      type: object
+      required: [url, mime]
+      properties:
+        url:    { type: string, format: uri, description: "需保证 ≥30 分钟可下载" }
+        mime:   { type: string }
+        bytes:  { type: integer }
+        sha256: { type: string }
+        meta:
+          type: object
+          additionalProperties: true
+          description: "图: width/height/seed；音: duration_ms/sample_rate；视频: fps/duration_ms"
+
+    ReferenceImage:
+      type: object
+      required: [ref, role]
+      properties:
+        ref:    { $ref: "#/components/schemas/AssetRefIn" }
+        role:
+          type: string
+          enum: [character, style, composition, scene]
+          description: |
+            character  = 人物长相一致性 (IP-Adapter FaceID / subject ref)
+            style      = 画风一致性 (style ref / LoRA)
+            composition= 构图姿势 (ControlNet pose/depth)
+            scene      = 场景空间一致性 (低强度 i2i)
+            不支持的 role 应忽略并在 output.warnings 记录，不得报错
+        weight: { type: number, minimum: 0, maximum: 1, default: 0.8 }
+        tag:    { type: string, description: "实体标识，便于中间层做缓存/LoRA 选择" }
+
+    TaskOptions:
+      type: object
+      properties:
+        priority:        { type: string, enum: [low, normal, high], default: normal }
+        timeout_ms:      { type: integer, default: 300000 }
+        callback_url:    { type: string, format: uri }
+        callback_secret: { type: string, description: "HMAC-SHA256 签名密钥" }
+        max_cost:        { type: number, description: "预估超过则直接失败" }
+        trace_id:        { type: string }
+
+    TaskRequest:
+      type: object
+      required: [capability, idempotency_key, input]
+      properties:
+        capability:      { $ref: "#/components/schemas/Capability" }
+        idempotency_key: { type: string, description: "同 key 必须返回同一 task_id，不重复计费" }
+        model:           { type: [string, "null"], description: "null = 中间层自行决定" }
+        input:
+          oneOf:
+            - $ref: "#/components/schemas/ChatInput"
+            - $ref: "#/components/schemas/TranslateInput"
+            - $ref: "#/components/schemas/T2IInput"
+            - $ref: "#/components/schemas/I2IInput"
+            - $ref: "#/components/schemas/EditInput"
+            - $ref: "#/components/schemas/TTSInput"
+            - $ref: "#/components/schemas/MusicInput"
+            - $ref: "#/components/schemas/I2VInput"
+        options: { $ref: "#/components/schemas/TaskOptions" }
+
+    TaskAccepted:
+      type: object
+      required: [task_id, status]
+      properties:
+        task_id:       { type: string }
+        status:        { type: string, enum: [queued, running, succeeded, failed] }
+        capability:    { $ref: "#/components/schemas/Capability" }
+        estimated_ms:  { type: integer }
+        accepted_at:   { type: string, format: date-time }
+
+    Task:
+      type: object
+      required: [task_id, status]
+      properties:
+        task_id:    { type: string }
+        status:     { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        capability: { $ref: "#/components/schemas/Capability" }
+        progress:   { type: number, minimum: 0, maximum: 1 }
+        output:
+          oneOf:
+            - $ref: "#/components/schemas/ChatOutput"
+            - $ref: "#/components/schemas/TranslateOutput"
+            - $ref: "#/components/schemas/ImageOutput"
+            - $ref: "#/components/schemas/AudioOutput"
+            - $ref: "#/components/schemas/VideoOutput"
+            - type: "null"
+        usage:    { $ref: "#/components/schemas/Usage" }
+        provider: { type: [string, "null"], description: "实际执行厂商，仅供审计" }
+        model:    { type: [string, "null"] }
+        error:
+          oneOf:
+            - $ref: "#/components/schemas/ErrorBody"
+            - type: "null"
+        submitted_at: { type: string, format: date-time }
+        finished_at:  { type: [string, "null"], format: date-time }
+
+    Usage:
+      type: object
+      properties:
+        cost:        { type: number }
+        currency:    { type: string, default: USD }
+        duration_ms: { type: integer }
+        tokens:
+          type: [object, "null"]
+          properties:
+            prompt:     { type: integer }
+            completion: { type: integer }
+            total:      { type: integer }
+        units:
+          type: object
+          additionalProperties: { type: number }
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_REQUEST, CAPABILITY_UNSUPPORTED, MODEL_NOT_FOUND, UNAUTHORIZED,
+                 QUOTA_EXCEEDED, COST_LIMIT_EXCEEDED, RATE_LIMITED, CONTENT_POLICY_BLOCKED,
+                 UPSTREAM_ERROR, UPSTREAM_TIMEOUT, TASK_FAILED, INTERNAL_ERROR]
+        message:      { type: string }
+        retryable:    { type: boolean }
+        provider_raw: { type: object, additionalProperties: true }
+
+    # ── Discovery ───────────────────────────────────────────
+    CapabilityCatalog:
+      type: object
+      required: [capability_version, capabilities]
+      properties:
+        capability_version: { type: string, example: "1.0" }
+        capabilities:
+          type: array
+          items:
+            type: object
+            required: [capability, models]
+            properties:
+              capability: { $ref: "#/components/schemas/Capability" }
+              models:
+                type: array
+                items: { $ref: "#/components/schemas/ModelDescriptor" }
+
+    ModelDescriptor:
+      type: object
+      required: [id, display_name]
+      properties:
+        id:           { type: string }
+        display_name: { type: string }
+        default:      { type: boolean }
+        async_only:   { type: boolean }
+        estimated_ms: { type: integer }
+        pricing:
+          type: object
+          properties:
+            unit:     { type: string, example: image }
+            cost:     { type: number }
+            currency: { type: string }
+        limits:
+          type: object
+          additionalProperties: true
+        param_schema:
+          type: object
+          description: "★ JSON Schema。后台据此自动渲染参数表单，加模型无需改前端。"
+          additionalProperties: true
+
+    Voice:
+      type: object
+      required: [voice_id, display_name]
+      properties:
+        voice_id:     { type: string }
+        display_name: { type: string }
+        languages:    { type: array, items: { type: string } }
+        gender:       { type: string }
+        age:          { type: string }
+        tags:         { type: array, items: { type: string } }
+        preview_url:  { type: string, format: uri }
+        supports:
+          type: object
+          properties:
+            clone:      { type: boolean }
+            emotion:    { type: boolean }
+            timestamps: { type: boolean }
+
+    # ── Inputs ──────────────────────────────────────────────
+    ChatInput:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:    { type: string, enum: [system, user, assistant] }
+              content: { type: string }
+        temperature: { type: number, default: 0.7 }
+        max_tokens:  { type: integer, default: 8192 }
+        response_format:
+          type: object
+          properties:
+            type:   { type: string, enum: [text, json_object, json_schema] }
+            schema: { type: object, additionalProperties: true }
+          description: "json_schema 时必须保证输出可解析，中间层内部负责重试/修复"
+        stream: { type: boolean, default: false }
+
+    TranslateInput:
+      type: object
+      required: [source_language, target_language, segments]
+      properties:
+        source_language: { type: string, example: zh-CN }
+        target_language: { type: string, example: en-US }
+        segments:
+          type: array
+          items:
+            type: object
+            required: [id, text]
+            properties:
+              id:      { type: string }
+              text:    { type: string }
+              kind:    { type: string, enum: [narration, dialogue, signage, title, inner_monolog, heading] }
+              speaker: { type: string }
+        glossary:
+          type: array
+          items:
+            type: object
+            properties:
+              source: { type: string }
+              target: { type: string }
+              note:   { type: string }
+        style_prompt:   { type: string }
+        context_before: { type: string }
+        context_after:  { type: string }
+
+    T2IInput:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:          { type: string }
+        negative_prompt: { type: string }
+        width:           { type: integer, default: 1280 }
+        height:          { type: integer, default: 720 }
+        n:               { type: integer, default: 1 }
+        reference_images:
+          type: array
+          items: { $ref: "#/components/schemas/ReferenceImage" }
+        params: { type: object, additionalProperties: true }
+
+    I2IInput:
+      type: object
+      required: [image, prompt]
+      description: "尾帧（后针）主用。以首帧为基底做动作/位移变化。"
+      properties:
+        image:  { $ref: "#/components/schemas/AssetRefIn" }
+        prompt: { type: string }
+        negative_prompt: { type: string }
+        strength:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.35
+          description: |
+            ★ 统一语义：改动幅度。0=保持原图，1=完全重绘。尾帧推荐 0.25–0.45。
+            厂商语义相反的（如 image_strength 表示"保留强度"），由中间层做 1-x 转换。
+        reference_images:
+          type: array
+          items: { $ref: "#/components/schemas/ReferenceImage" }
+        params: { type: object, additionalProperties: true }
+
+    EditInput:
+      type: object
+      required: [image, prompt, mode]
+      properties:
+        image:  { $ref: "#/components/schemas/AssetRefIn" }
+        mask:   { $ref: "#/components/schemas/AssetRefIn" }
+        prompt: { type: string }
+        mode:   { type: string, enum: [inpaint, outpaint, remove] }
+        outpaint:
+          type: object
+          properties:
+            left: { type: integer }
+            right: { type: integer }
+            top: { type: integer }
+            bottom: { type: integer }
+
+    TTSInput:
+      type: object
+      required: [text, language]
+      properties:
+        text:     { type: string }
+        language: { type: string }
+        voice_id: { type: string }
+        params:
+          type: object
+          properties:
+            speed:        { type: number, default: 1.0, minimum: 0.5, maximum: 2.0 }
+            pitch:        { type: number, default: 0, minimum: -12, maximum: 12 }
+            volume_db:    { type: number, default: 0 }
+            emotion:      { type: string }
+            style_prompt: { type: string }
+        reference_audio: { $ref: "#/components/schemas/AssetRefIn" }
+        output_format:   { type: string, enum: [wav, mp3, ogg], default: wav }
+        sample_rate:     { type: integer, default: 44100 }
+        with_timestamps: { type: boolean, default: true }
+
+    MusicInput:
+      type: object
+      required: [prompt, duration_ms]
+      properties:
+        prompt:       { type: string }
+        duration_ms:  { type: integer }
+        loopable:     { type: boolean, default: false }
+        instrumental: { type: boolean, default: true }
+
+    I2VInput:
+      type: object
+      required: [first_frame, duration_ms]
+      properties:
+        first_frame: { $ref: "#/components/schemas/AssetRefIn" }
+        last_frame:
+          oneOf:
+            - $ref: "#/components/schemas/AssetRefIn"
+            - type: "null"
+          description: "省略则为单帧驱动"
+        prompt:      { type: string }
+        duration_ms: { type: integer }
+        fps:         { type: integer, default: 24 }
+        width:       { type: integer }
+        height:      { type: integer }
+        camera:
+          type: object
+          properties:
+            move:
+              type: string
+              enum: [static, push_in, pull_out, pan_left, pan_right,
+                     tilt_up, tilt_down, orbit_left, orbit_right, handheld]
+            speed: { type: number, minimum: 0, maximum: 1 }
+        params: { type: object, additionalProperties: true }
+
+    # ── Outputs ─────────────────────────────────────────────
+    ChatOutput:
+      type: object
+      properties:
+        text:          { type: string }
+        json:          { type: object, additionalProperties: true }
+        finish_reason: { type: string, enum: [stop, length, content_filter] }
+        warnings:      { type: array, items: { type: string } }
+
+    TranslateOutput:
+      type: object
+      required: [segments]
+      properties:
+        segments:
+          type: array
+          description: "★ 必须与 input.segments 逐段对齐，id 一一对应，不得合并或漏段"
+          items:
+            type: object
+            required: [id, text]
+            properties:
+              id:            { type: string }
+              text:          { type: string }
+              glossary_hits: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+
+    ImageOutput:
+      type: object
+      required: [images]
+      properties:
+        images:   { type: array, items: { $ref: "#/components/schemas/AssetOut" } }
+        warnings: { type: array, items: { type: string } }
+
+    AudioOutput:
+      type: object
+      required: [audio]
+      properties:
+        audio:
+          allOf:
+            - $ref: "#/components/schemas/AssetOut"
+          description: "meta.duration_ms 为硬要求，Core 用它回填镜头时长"
+        timestamps:
+          type: array
+          items:
+            type: object
+            properties:
+              text:     { type: string }
+              start_ms: { type: integer }
+              end_ms:   { type: integer }
+        warnings: { type: array, items: { type: string } }
+
+    VideoOutput:
+      type: object
+      required: [video]
+      properties:
+        video: { $ref: "#/components/schemas/AssetOut" }
+        last_frame:
+          allOf:
+            - $ref: "#/components/schemas/AssetOut"
+          description: "★ 实际末帧，用作下一镜头首帧，实现长镜头接续"
+        warnings: { type: array, items: { type: string } }
+
+  # ── Webhook ───────────────────────────────────────────────
+webhooks:
+  taskCompleted:
+    post:
+      summary: 任务终态回调（Core 侧接收）
+      description: |
+        Header:
+          X-Cap-Signature: sha256=<hex(hmac_sha256(callback_secret, raw_body))>
+          X-Cap-Task-Id:   <task_id>
+        Core 返回 2xx 视为送达；否则按 1s/5s/30s/5min/30min 重试 5 次。
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Task" }
+      responses:
+        "200": { description: 已接收 }

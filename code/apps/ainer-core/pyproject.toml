@@ -1,0 +1,29 @@
+[project]
+name = "ainer-core"
+version = "0.1.0"
+description = "AinerN2D Core — 小说 → 多语言剧本 → 视频素材清单"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.4.0",
+  "sqlalchemy>=2.0.0",
+  "alembic>=1.13.0",
+  "psycopg2-binary>=2.9.0",
+  "httpx>=0.27.0",
+  "redis>=5.0.0",
+  "python-multipart>=0.0.12",
+  "pyahocorasick>=2.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "respx>=0.21.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

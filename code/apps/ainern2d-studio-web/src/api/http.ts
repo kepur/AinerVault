@@ -53,7 +53,8 @@ http.interceptors.response.use(
       }
     }
     if (status) {
-      const wrapped = new Error(parseApiErrorMessage(error?.response?.data, status));
+      const wrapped = new Error(parseApiErrorMessage(error?.response?.data, status)) as any;
+      wrapped.response = error.response;
       return Promise.reject(wrapped);
     }
     return Promise.reject(error instanceof Error ? error : new Error(String(error)));

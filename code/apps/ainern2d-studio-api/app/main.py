@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import re
 import threading
+from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from ainern2d_shared.queue.topics import SYSTEM_TOPICS
@@ -37,6 +39,7 @@ from app.api.v1.kb_assets import router as kb_assets_router
 from app.api.v1.nle_projects import router as nle_projects_router
 from app.api.v1.run_tracks import router as run_tracks_router
 from app.api.v1.ops_bridge import router as ops_bridge_router
+from app.api.v1.prompt_assets import router as prompt_assets_router
 from app.security.auth_token import decode_access_token, extract_bearer_token
 from ainern2d_shared.db.session import SessionLocal
 
@@ -65,6 +68,12 @@ app.include_router(kb_assets_router)
 app.include_router(nle_projects_router)
 app.include_router(run_tracks_router)
 app.include_router(ops_bridge_router)
+app.include_router(prompt_assets_router)
+
+# ── Static files: uploaded reference images ──
+_UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_UPLOAD_DIR)), name="uploads")
 
 _PUBLIC_PATHS = {
 	"/healthz",
@@ -78,6 +87,7 @@ _PUBLIC_PREFIXES = (
 	"/docs",
 	"/redoc",
 	"/openapi.json",
+	"/uploads",
 )
 
 _ADMIN_PREFIXES = (

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ainern2d_shared.ainer_db_models.content_models import Chapter, Novel
 from ainern2d_shared.ainer_db_models.ops_bridge_models import OpsBridgeToken, OpsProviderReport
 from ainern2d_shared.ainer_db_models.provider_models import ModelProvider
 from ainern2d_shared.config.setting import settings
@@ -1858,3 +1859,310 @@ def test_reported_provider(
         checked_url=checked_url,
         connectivity_status=status,
     )
+
+
+# ---------------------------------------------------------------------------
+# Batch Import: Novels & Chapters
+# ---------------------------------------------------------------------------
+
+_IMPORT_MAX_NOVELS = 50
+_IMPORT_MAX_CHAPTERS_PER_NOVEL = 200
+
+
+class _ImportChapterItem(BaseModel):
+    chapter_no: int = Field(..., ge=1)
+    title: str | None = None
+    language_code: str = "zh"
+    markdown_text: str = Field(..., min_length=1)
+
+
+class _ImportNovelItem(BaseModel):
+    title: str = Field(..., min_length=1, max_length=256)
+    summary: str | None = None
+    default_language_code: str = "zh"
+    chapters: list[_ImportChapterItem] = Field(default_factory=list)
+
+
+class ImportNovelsRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    novels: list[_ImportNovelItem] = Field(..., min_length=1)
+
+
+class _ImportedNovelResult(BaseModel):
+    title: str
+    novel_id: str
+    created: bool
+    chapter_count: int
+
+
+class ImportNovelsResponse(BaseModel):
+    imported: int
+    skipped: int
+    results: list[_ImportedNovelResult]
+
+
+@router.post("/import/novels", response_model=ImportNovelsResponse)
+def import_novels(
+    body: ImportNovelsRequest,
+    db: Session = Depends(get_db),
+    x_ainerops_token: str = Header(..., alias=TOKEN_HEADER),
+) -> ImportNovelsResponse:
+    """Batch import novels with chapters. Idempotent by (tenant, project, title)."""
+    _verify_ingress_token(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        raw_token=x_ainerops_token,
+    )
+    if len(body.novels) > _IMPORT_MAX_NOVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max {_IMPORT_MAX_NOVELS} novels per request",
+        )
+
+    results: list[_ImportedNovelResult] = []
+    imported = 0
+    skipped = 0
+
+    for item in body.novels:
+        if len(item.chapters) > _IMPORT_MAX_CHAPTERS_PER_NOVEL:
+            raise HTTPException(
+                status_code=400,
+                detail=f"novel '{item.title}': max {_IMPORT_MAX_CHAPTERS_PER_NOVEL} chapters",
+            )
+
+        existing = db.execute(
+            select(Novel).where(
+                Novel.tenant_id == body.tenant_id,
+                Novel.project_id == body.project_id,
+                Novel.title == item.title,
+                Novel.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            skipped += 1
+            results.append(_ImportedNovelResult(
+                title=item.title,
+                novel_id=existing.id,
+                created=False,
+                chapter_count=0,
+            ))
+            continue
+
+        novel = Novel(
+            id=f"novel_{uuid4().hex}",
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            trace_id=f"tr_opsimport_{uuid4().hex[:12]}",
+            correlation_id=f"cr_opsimport_{uuid4().hex[:12]}",
+            idempotency_key=f"idem_opsimport_{body.project_id}_{uuid4().hex[:8]}",
+            title=item.title,
+            summary=item.summary,
+            default_language_code=item.default_language_code,
+            created_by="ops-bridge",
+        )
+        db.add(novel)
+        db.flush()
+
+        ch_count = 0
+        for ch in item.chapters:
+            chapter = Chapter(
+                id=f"chapter_{uuid4().hex}",
+                tenant_id=body.tenant_id,
+                project_id=body.project_id,
+                trace_id=novel.trace_id,
+                correlation_id=novel.correlation_id,
+                idempotency_key=f"idem_ch_{novel.id}_{ch.chapter_no}_{uuid4().hex[:8]}",
+                novel_id=novel.id,
+                chapter_no=ch.chapter_no,
+                language_code=ch.language_code,
+                title=ch.title,
+                raw_text=ch.markdown_text,
+                created_by="ops-bridge",
+            )
+            db.add(chapter)
+            ch_count += 1
+
+        imported += 1
+        results.append(_ImportedNovelResult(
+            title=item.title,
+            novel_id=novel.id,
+            created=True,
+            chapter_count=ch_count,
+        ))
+
+    db.commit()
+    return ImportNovelsResponse(imported=imported, skipped=skipped, results=results)
+
+
+class ImportChaptersRequest(BaseModel):
+    tenant_id: str
+    project_id: str
+    chapters: list[_ImportChapterItem] = Field(..., min_length=1)
+
+
+class _ImportedChapterResult(BaseModel):
+    chapter_id: str
+    chapter_no: int
+    created: bool
+
+
+class ImportChaptersResponse(BaseModel):
+    novel_id: str
+    imported: int
+    skipped: int
+    results: list[_ImportedChapterResult]
+
+
+@router.post("/import/novels/{novel_id}/chapters", response_model=ImportChaptersResponse)
+def import_chapters(
+    novel_id: str,
+    body: ImportChaptersRequest,
+    db: Session = Depends(get_db),
+    x_ainerops_token: str = Header(..., alias=TOKEN_HEADER),
+) -> ImportChaptersResponse:
+    """Append chapters to an existing novel. Idempotent by (novel_id, chapter_no, language_code)."""
+    _verify_ingress_token(
+        db=db,
+        tenant_id=body.tenant_id,
+        project_id=body.project_id,
+        raw_token=x_ainerops_token,
+    )
+    if len(body.chapters) > _IMPORT_MAX_CHAPTERS_PER_NOVEL:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max {_IMPORT_MAX_CHAPTERS_PER_NOVEL} chapters per request",
+        )
+
+    novel = db.execute(
+        select(Novel).where(
+            Novel.id == novel_id,
+            Novel.tenant_id == body.tenant_id,
+            Novel.project_id == body.project_id,
+            Novel.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+
+    existing_chapters = db.execute(
+        select(Chapter.chapter_no, Chapter.language_code, Chapter.id).where(
+            Chapter.novel_id == novel_id,
+            Chapter.deleted_at.is_(None),
+        )
+    ).all()
+    existing_set = {(r.chapter_no, r.language_code): r.id for r in existing_chapters}
+
+    results: list[_ImportedChapterResult] = []
+    imported = 0
+    skipped = 0
+
+    for ch in body.chapters:
+        key = (ch.chapter_no, ch.language_code)
+        if key in existing_set:
+            skipped += 1
+            results.append(_ImportedChapterResult(
+                chapter_id=existing_set[key],
+                chapter_no=ch.chapter_no,
+                created=False,
+            ))
+            continue
+
+        chapter = Chapter(
+            id=f"chapter_{uuid4().hex}",
+            tenant_id=body.tenant_id,
+            project_id=body.project_id,
+            trace_id=f"tr_opsimport_{uuid4().hex[:12]}",
+            correlation_id=f"cr_opsimport_{uuid4().hex[:12]}",
+            idempotency_key=f"idem_ch_{novel_id}_{ch.chapter_no}_{uuid4().hex[:8]}",
+            novel_id=novel_id,
+            chapter_no=ch.chapter_no,
+            language_code=ch.language_code,
+            title=ch.title,
+            raw_text=ch.markdown_text,
+            created_by="ops-bridge",
+        )
+        db.add(chapter)
+        imported += 1
+        results.append(_ImportedChapterResult(
+            chapter_id=chapter.id,
+            chapter_no=ch.chapter_no,
+            created=True,
+        ))
+
+    db.commit()
+    return ImportChaptersResponse(
+        novel_id=novel_id,
+        imported=imported,
+        skipped=skipped,
+        results=results,
+    )
+
+
+class _OpsNovelItem(BaseModel):
+    id: str
+    title: str
+    summary: str | None
+    default_language_code: str
+    chapter_count: int
+    created_at: datetime
+
+
+class OpsNovelsListResponse(BaseModel):
+    total: int
+    novels: list[_OpsNovelItem]
+
+
+@router.get("/novels", response_model=OpsNovelsListResponse)
+def ops_list_novels(
+    tenant_id: str = Query(...),
+    project_id: str = Query(...),
+    keyword: str | None = Query(None),
+    language: str | None = Query(None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    x_ainerops_token: str = Header(..., alias=TOKEN_HEADER),
+) -> OpsNovelsListResponse:
+    """List novels visible via Ops Bridge with optional keyword / language filter."""
+    _verify_ingress_token(
+        db=db, tenant_id=tenant_id, project_id=project_id, raw_token=x_ainerops_token,
+    )
+    q = select(Novel).where(
+        Novel.tenant_id == tenant_id,
+        Novel.project_id == project_id,
+        Novel.deleted_at.is_(None),
+    )
+    if keyword:
+        q = q.where(Novel.title.ilike(f"%{keyword}%"))
+    if language:
+        q = q.where(Novel.default_language_code == language)
+
+    total = db.execute(
+        select(func.count()).select_from(q.subquery())
+    ).scalar_one()
+
+    rows = db.execute(
+        q.order_by(Novel.created_at.desc()).offset(offset).limit(limit)
+    ).scalars().all()
+
+    items: list[_OpsNovelItem] = []
+    for r in rows:
+        ch_count = db.execute(
+            select(func.count()).where(
+                Chapter.novel_id == r.id,
+                Chapter.deleted_at.is_(None),
+            )
+        ).scalar_one()
+        items.append(_OpsNovelItem(
+            id=r.id,
+            title=r.title,
+            summary=r.summary,
+            default_language_code=r.default_language_code,
+            chapter_count=ch_count,
+            created_at=r.created_at,
+        ))
+
+    return OpsNovelsListResponse(total=total, novels=items)
