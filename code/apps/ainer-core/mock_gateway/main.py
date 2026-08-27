@@ -209,7 +209,35 @@ def _extract_source_text(user_text: str) -> str:
 
 
 _DIALOGUE_RE = re.compile(r"^[「『\"“](.+?)[」』\"”]\s*$")
-_SPEAKER_RE = re.compile(r"^(.{1,8}?)[:：]\s*[「『\"“](.+?)[」』\"”]\s*$")
+#: 说话人只能是句首的短称呼（2–8 个汉字），不能是整句 ——
+#: 「李格非从里屋走出：…」里的说话人是「李格非」，不是前半句。
+_SPEAKER_RE = re.compile(
+    r"^[\s\u201c\u300c]*(?P<who>[\u4e00-\u9fa5]{2,8}?)\s*[:：]\s*"
+    r"[\u300c\u300e\u201c\"]?(?P<line>.+?)[\u300d\u300f\u201d\"]?\s*$"
+)
+
+
+#: 出现这些字说明这段是叙述而非称呼
+_NARRATION_MARKERS = ("走", "推", "站", "坐", "说道", "低声", "抬头", "转身",
+                      "从", "在", "了", "道")
+
+
+def _looks_like_narration(who: str) -> bool:
+    """说话人位置上出现动词，说明正则吃进了半句叙述。"""
+    return len(who) > 5 or any(m in who for m in _NARRATION_MARKERS)
+
+
+def _trim_speaker(who: str) -> str:
+    """把「李格非从里屋走出」裁成「李格非」。
+
+    取**最早出现**的动词位置，而不是按 marker 列表顺序 ——
+    按列表顺序会先命中靠后的「走」，裁出「李格非从里屋」。
+    """
+    w = (who or "").strip()
+    cuts = [w.find(m) for m in _NARRATION_MARKERS if w.find(m) >= 2]
+    if cuts:
+        return w[: min(cuts)]
+    return w or "未知"
 
 
 def _synth_script(user_text: str) -> dict:
@@ -240,10 +268,14 @@ def _synth_script(user_text: str) -> dict:
             scenes.append(cur)
 
         sm = _SPEAKER_RE.match(para)
+        # 说话人位置吃进了叙述时先裁剪；裁不出人名就当旁白
+        if sm and _looks_like_narration(_trim_speaker(sm.group("who"))):
+            sm = None
         dm = _DIALOGUE_RE.match(para)
         if sm:
             cur["blocks"].append(
-                {"type": "dialogue", "text": sm.group(2), "speaker": sm.group(1)}
+                {"type": "dialogue", "text": sm.group("line"),
+                 "speaker": _trim_speaker(sm.group("who"))}
             )
         elif dm:
             cur["blocks"].append(
@@ -256,24 +288,82 @@ def _synth_script(user_text: str) -> dict:
     return {"scenes": scenes}
 
 
-def _synth_entities(user_text: str) -> dict:
-    """从原文里挑出疑似人名（2–3 字、重复出现）作为实体。"""
-    source = _extract_source_text(user_text)
+#: 常见姓氏。mock 要模拟「懂中文的模型」，识别人名靠这个而非纯频次。
+_MOCK_SURNAMES_2 = ("欧阳", "司马", "上官", "诸葛", "东方", "南宫", "西门", "慕容")
+_MOCK_SURNAMES_1 = set(
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾萧"
+    "田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢崔钟谭陆汪范金石廖贾夏韦方白邹孟"
+)
+#: 说话人标记：句子边界之后、冒号之前的短称呼
+_SPEAKER_HINT = re.compile(
+    r"(?:^|[。！？；\n\u201d\u300d\uff09])\s*([\u4e00-\u9fa5]{2,4})\s*[：:]"
+)
+_CJK_ONLY = re.compile(r"^[\u4e00-\u9fa5]+$")
+
+
+def _name_candidates(source: str) -> dict[str, int]:
+    """按中文人名的实际构成生成候选，而不是盲目滑窗。
+
+    姓(1–2字) + 名(1–2字)。单姓只取 2–3 字，复姓只取 3–4 字 ——
+    盲目滑窗会把动词带进来，「李清照推开」会切出「李清照推」这种垃圾。
+    """
     counts: dict[str, int] = {}
-    for name in re.findall(r"[\u4e00-\u9fa5]{2,3}", source):
-        counts[name] = counts.get(name, 0) + 1
-    picks = [n for n, c in sorted(counts.items(), key=lambda x: -x[1]) if c >= 2][:5]
+    n = len(source)
+    for i, ch in enumerate(source):
+        if not ("\u4e00" <= ch <= "\u9fa5"):
+            continue
+        surname_lens = []
+        if source[i : i + 2] in _MOCK_SURNAMES_2:
+            surname_lens.append(2)
+        if ch in _MOCK_SURNAMES_1:
+            surname_lens.append(1)
+        for sl in surname_lens:
+            for given in (1, 2):
+                token = source[i : i + sl + given]
+                if len(token) != sl + given or not _CJK_ONLY.match(token):
+                    continue
+                counts[token] = counts.get(token, 0) + 1
+    return counts
+
+
+def _synth_entities(user_text: str) -> dict:
+    """从原文里挑人名作为实体。
+
+    真实模型靠语义理解，mock 只能靠启发式，但两条线索足够可靠：
+      1 姓氏起头、按人名构成生成的候选
+      2 句子边界后、冒号前的说话人标记
+    """
+    source = _extract_source_text(user_text)
+    counts = _name_candidates(source)
+
+    for m in _SPEAKER_HINT.finditer(source):
+        tag = m.group(1)
+        counts[tag] = counts.get(tag, 0) + 5
+
+    # 同姓氏的多个候选只留最长的：「李清」被「李清照」吸收
+    picks: list[str] = []
+    for name in sorted(counts, key=lambda x: (-counts[x], -len(x))):
+        if any(name != k and (name in k or k in name) for k in picks):
+            continue
+        picks.append(name)
+        if len(picks) >= 6:
+            break
+
     return {
         "entities": [
             {
                 "kind": "character",
-                "canonical_key": f"entity_{i}",
+                "canonical_key": f"character.{name}",
                 "display_name": name,
                 "aliases": [],
-                "family_key": "",
+                "family_hint": (
+                    name[:2] if name[:2] in _MOCK_SURNAMES_2
+                    else (name[0] if name[0] in _MOCK_SURNAMES_1 else "")
+                ),
+                "importance": min(5, 2 + counts[name] // 3),
                 "summary": f"mock 实体：{name}",
             }
-            for i, name in enumerate(picks, start=1)
+            for name in picks
         ]
     }
 

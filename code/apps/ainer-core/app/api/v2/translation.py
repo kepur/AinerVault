@@ -17,6 +17,7 @@ from app.models.script import TRANSLATABLE_TYPES
 from app.models.world import TransformStatus
 from app.pipelines import entities as ent_pipe
 from app.pipelines import naming as name_pipe
+from app.pipelines import speakers as speaker_pipe
 from app.pipelines import translate as tr_pipe
 from app.pipelines.base import PipelineError
 
@@ -67,6 +68,41 @@ def extract_entities(
         return ent_pipe.extract_entities(db, c, min_importance=min_importance).as_dict()
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ResolveIn(BaseModel):
+    use_llm: bool = True
+    overwrite: bool = False
+    min_confidence: float = 0.6
+
+
+@router.post("/chapters/{chapter_id}/speakers:resolve")
+def resolve_speakers(chapter_id: str, body: ResolveIn,
+                     db: Session = Depends(get_db)) -> dict:
+    """把对白的 speaker_tag 解析到实体。
+
+    不做这一步，对白就绑不到角色的 voice 素材，全部落到旁白音色兜底 ——
+    一屋子人说话都是同一个嗓子。
+    """
+    c = _chapter(db, chapter_id)
+    try:
+        return speaker_pipe.resolve_speakers(
+            db, c, use_llm=body.use_llm, overwrite=body.overwrite,
+            min_confidence=body.min_confidence,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/novels/{novel_id}/speakers:resolve")
+def resolve_speakers_novel(novel_id: str, body: ResolveIn,
+                           db: Session = Depends(get_db)) -> dict:
+    """整本书逐章解析说话人。"""
+    if db.get(Novel, novel_id) is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    return speaker_pipe.resolve_novel(
+        db, novel_id, use_llm=body.use_llm, overwrite=body.overwrite
+    )
 
 
 @router.get("/novels/{novel_id}/entities")
