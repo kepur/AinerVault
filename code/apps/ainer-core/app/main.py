@@ -54,8 +54,8 @@ async def capability_error_handler(_: Request, exc: CapabilityError) -> JSONResp
 
 
 from app.api.v2 import (  # noqa: E402
-    asset_pack, gen_tasks, library, script, settings_api, shots, translation,
-    worldview,
+    asset_pack, audio, gen_tasks, library, script, settings_api, shots,
+    translation, worldview,
 )
 
 app.include_router(library.router)
@@ -64,6 +64,7 @@ app.include_router(worldview.router)
 app.include_router(translation.router)
 app.include_router(asset_pack.router)
 app.include_router(shots.router)
+app.include_router(audio.router)
 app.include_router(gen_tasks.router)
 app.include_router(settings_api.router)
 

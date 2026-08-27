@@ -58,7 +58,43 @@ BASE_REQUIREMENTS: dict[str, dict[str, str]] = {
         "size": "体型",
         "markings": "标记/毛色",
     },
+    # ── 音频素材 ──
+    AssetKindSpec.voice.value: {
+        "timbre": "音色质地（清亮/沙哑/低沉）",
+        "age_range": "听感年龄",
+        "pace": "语速与节奏",
+        "register": "语体（正式/市井/文雅）",
+        "emotional_baseline": "常态情绪基调",
+    },
+    AssetKindSpec.sfx.value: {
+        "source": "发声物",
+        "texture": "质感（干脆/闷响/绵长）",
+        "duration_hint": "典型时长",
+    },
+    AssetKindSpec.bgm.value: {
+        "instrumentation": "配器",
+        "tempo": "速度",
+        "mood": "情绪",
+        "era_marker": "时代记号（乐器与和声要属于该年代）",
+    },
+    AssetKindSpec.room_tone.value: {
+        "space": "空间类型（室内/街巷/旷野）",
+        "layers": "构成层次（雨声/人语/器物声）",
+        "loudness": "响度基准",
+    },
 }
+
+#: 音频类素材。参考物是音频而非图片，生成走 TTS / music / sfx 而非 t2i。
+AUDIO_KINDS: frozenset[str] = frozenset({
+    AssetKindSpec.voice.value,
+    AssetKindSpec.sfx.value,
+    AssetKindSpec.bgm.value,
+    AssetKindSpec.room_tone.value,
+})
+
+
+def is_audio_kind(kind: str) -> bool:
+    return kind in AUDIO_KINDS
 
 
 def requirements_for(kind: str, world_profile: Any | None = None) -> dict[str, str]:

@@ -207,6 +207,12 @@ class ModelDescriptor(BaseModel):
     estimated_ms: int | None = None
     pricing: Pricing | None = None
     limits: dict[str, Any] = Field(default_factory=dict)
+    #: 模型的能力开关。目前 Core 关心的是 video.image_to_video 的：
+    #:   native_audio       模型自己生成音频（Veo 3 这类）
+    #:   voice_reference    接受音色参考音频，用于与素材包保持一致
+    #:   audio_track_input  接受现成音轨
+    #: 未声明一律按不支持处理 —— 保守假设不会出错。
+    supports: dict[str, bool] = Field(default_factory=dict)
     #: JSON Schema —— 后台据此自动渲染参数表单，加模型无需改前端
     param_schema: dict[str, Any] = Field(default_factory=dict)
 

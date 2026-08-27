@@ -16,7 +16,9 @@ from app.capability.errors import (
     MAX_ATTEMPTS, RETRY_BACKOFF_SEC, CapabilityError, CapErrorCode,
 )
 from app.capability.router import ResolvedRoute, resolve_one, resolve_routes
-from app.capability.schemas import Capability, Task, TaskOptions, TaskState
+from app.capability.schemas import (
+    TERMINAL_STATES, Capability, Task, TaskOptions, TaskState,
+)
 from app.config import settings
 from app.ids import new_id
 from app.models import Asset, AssetKind, AssetSource, GenTask, TaskStatus, utcnow
@@ -141,10 +143,23 @@ def submit_task(
             return task
 
     task.provider_task_id = accepted.task_id
-    task.status = _STATE_MAP.get(accepted.status, TaskStatus.submitted)
     task.submitted_at = utcnow()
     if accepted.estimated_ms:
         task.estimated_ms = accepted.estimated_ms
+
+    if accepted.status in TERMINAL_STATES:
+        # 中间层幂等命中已完成的任务时，只回 {task_id, status}，不带 output。
+        # 直接照抄状态会得到「succeeded 但没有产物」的僵尸任务 ——
+        # 必须再查一次拿完整结果。
+        with CapabilityClient.from_route(route) as client:
+            try:
+                result = client.get_task(accepted.task_id)
+                apply_task_result(db, task, result)
+                return task
+            except CapabilityError as exc:
+                log.warning("终态任务回查失败 task=%s: %s", accepted.task_id, exc)
+
+    task.status = _STATE_MAP.get(accepted.status, TaskStatus.submitted)
     task.poll_after = _next_poll_at(task)
     db.flush()
     return task

@@ -124,10 +124,33 @@ CATALOG = {
         {
             "capability": "video.image_to_video",
             "models": [{
-                "id": "mock-video-1", "display_name": "Mock Video", "default": True,
+                "id": "mock-video-1", "display_name": "Mock Video（无音频）",
+                "default": True,
                 "async_only": True, "estimated_ms": 9000,
                 "pricing": {"unit": "second", "cost": 0.12, "currency": "USD"},
                 "limits": {"max_duration_ms": 10000, "fps": [24, 30]},
+                # 未声明 supports 即视为不支持音频，Core 会走 silent 投影
+                "param_schema": {
+                    "type": "object",
+                    "properties": {
+                        "motion_strength": {"type": "number", "minimum": 0,
+                                            "maximum": 1, "default": 0.5,
+                                            "title": "运动强度"},
+                        "seed": {"type": "integer", "title": "随机种子"},
+                    },
+                },
+            }, {
+                "id": "mock-video-audio", "display_name": "Mock Video（原生音频）",
+                "async_only": True, "estimated_ms": 14000,
+                "pricing": {"unit": "second", "cost": 0.30, "currency": "USD"},
+                "limits": {"max_duration_ms": 8000, "fps": [24]},
+                # 自带音频的模型：Core 改走 native_audio 投影，
+                # 对白以指令交付，音色参考仍来自素材包
+                "supports": {
+                    "native_audio": True,
+                    "voice_reference": True,
+                    "audio_track_input": False,
+                },
                 "param_schema": {
                     "type": "object",
                     "properties": {

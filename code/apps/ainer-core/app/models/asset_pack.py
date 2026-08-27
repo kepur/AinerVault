@@ -41,9 +41,16 @@ class AssetKindSpec(str, Enum):
     location = "location"        # 场景/环境
     expression = "expression"    # 表情
     action = "action"            # 动作/姿态
-    ambience = "ambience"        # 氛围/光线
+    ambience = "ambience"        # 视觉氛围/光线
     style = "style"              # 画风基调
     creature = "creature"        # 非人角色/坐骑
+    # ── 音频素材：与视觉素材完全对称，走同一条流水线 ──
+    # ref_asset_ids 存的是参考音频（音色样本），而非参考图。
+    # 音色一致性的根 = 参考音频 + voice_id，正如视觉一致性的根 = 参考图 + seed。
+    voice = "voice"              # 角色音色
+    sfx = "sfx"                  # 音效
+    bgm = "bgm"                  # 配乐
+    room_tone = "room_tone"      # 环境底噪（听觉版 ambience）
 
 
 class AssetOrigin(str, Enum):
