@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import random
+import re
 import threading
 import time
 import uuid
@@ -96,8 +97,16 @@ def _run_text_chat(inp: dict) -> tuple[dict, dict]:
     fmt = inp.get("response_format") or {}
     out: dict[str, Any] = {"finish_reason": "stop"}
     if fmt.get("type") == "json_schema":
-        # 契约要求保证可解析 —— 按 schema 造一个最小合法对象
-        out["json"] = _synth_from_schema(fmt.get("schema") or {})
+        schema = fmt.get("schema") or {}
+        props = schema.get("properties") or {}
+        # 契约要求保证可解析。对已知的业务 schema 合成贴近真实的结构，
+        # 好让前端和 pipeline 拿到能用的数据；其余按 schema 造最小合法对象。
+        if "scenes" in props:
+            out["json"] = _synth_script(user_text)
+        elif "entities" in props:
+            out["json"] = _synth_entities(user_text)
+        else:
+            out["json"] = _synth_from_schema(schema)
         out["text"] = json.dumps(out["json"], ensure_ascii=False)
     else:
         out["text"] = f"[mock reply] {user_text[:200]}"
@@ -123,6 +132,82 @@ def _synth_from_schema(schema: dict) -> Any:
     if enum := schema.get("enum"):
         return enum[0]
     return "mock"
+
+
+def _extract_source_text(user_text: str) -> str:
+    """从 user 消息里取出 --- 包裹的原文段。"""
+    m = re.search(r"---\n(.*?)\n---", user_text, re.S)
+    return (m.group(1) if m else user_text).strip()
+
+
+_DIALOGUE_RE = re.compile(r"^[「『\"“](.+?)[」』\"”]\s*$")
+_SPEAKER_RE = re.compile(r"^(.{1,8}?)[:：]\s*[「『\"“](.+?)[」』\"”]\s*$")
+
+
+def _synth_script(user_text: str) -> dict:
+    """按段落切块，识别对白，每 4 块开一个新场景。
+
+    不是真的理解剧情，但结构真实：块数、类型分布、说话人归属都跟原文对得上，
+    足以驱动前端开发与 pipeline 回归。
+    """
+    source = _extract_source_text(user_text)
+    paras = [p.strip() for p in re.split(r"\n+", source) if p.strip()]
+    if not paras:
+        paras = ["（空）"]
+
+    scenes: list[dict] = []
+    cur: dict[str, Any] = {}
+    for i, para in enumerate(paras):
+        if i % 4 == 0:
+            cur = {
+                "order": len(scenes) + 1,
+                "title": f"场景 {len(scenes) + 1}",
+                "time_of_day": ["日", "夜", "黄昏", "晨"][len(scenes) % 4],
+                "location_text": "",
+                "weather": "",
+                "mood": ["平静", "紧张", "压抑", "明快"][len(scenes) % 4],
+                "summary": para[:40],
+                "blocks": [],
+            }
+            scenes.append(cur)
+
+        sm = _SPEAKER_RE.match(para)
+        dm = _DIALOGUE_RE.match(para)
+        if sm:
+            cur["blocks"].append(
+                {"type": "dialogue", "text": sm.group(2), "speaker": sm.group(1)}
+            )
+        elif dm:
+            cur["blocks"].append(
+                {"type": "dialogue", "text": dm.group(1), "speaker": "未知"}
+            )
+        elif re.search(r"[他她]\s*(推开|走|跑|站|坐|抬|拿|转身|伸手)", para):
+            cur["blocks"].append({"type": "action", "text": para})
+        else:
+            cur["blocks"].append({"type": "narration", "text": para})
+    return {"scenes": scenes}
+
+
+def _synth_entities(user_text: str) -> dict:
+    """从原文里挑出疑似人名（2–3 字、重复出现）作为实体。"""
+    source = _extract_source_text(user_text)
+    counts: dict[str, int] = {}
+    for name in re.findall(r"[\u4e00-\u9fa5]{2,3}", source):
+        counts[name] = counts.get(name, 0) + 1
+    picks = [n for n, c in sorted(counts.items(), key=lambda x: -x[1]) if c >= 2][:5]
+    return {
+        "entities": [
+            {
+                "kind": "character",
+                "canonical_key": f"entity_{i}",
+                "display_name": name,
+                "aliases": [],
+                "family_key": "",
+                "summary": f"mock 实体：{name}",
+            }
+            for i, name in enumerate(picks, start=1)
+        ]
+    }
 
 
 def _run_translate(inp: dict) -> tuple[dict, dict]:
