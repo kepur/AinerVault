@@ -60,7 +60,9 @@ class ChapterIn(BaseModel):
 
 class ImportIn(BaseModel):
     text: str
-    min_chapter_words: int = 15
+    source_format: str = "plain"        # plain | markdown
+    min_chars: int = 200                # 低于此长度不单独成章，并入前一章
+    fallback_chars: int = 3000          # 识别不到章节标记时的按长切分粒度
     dry_run: bool = False
     replace: bool = False
 
@@ -167,7 +169,12 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
     dry_run=True 只返回预览不落库 —— 分章错了后面全错，值得先看一眼。
     """
     _get_novel(db, novel_id)
-    result = split_chapters(body.text, min_chapter_words=body.min_chapter_words)
+    result = split_chapters(
+        body.text,
+        source_format=body.source_format,
+        min_chars=body.min_chars,
+        fallback_chars=body.fallback_chars,
+    )
 
     preview = [
         {
@@ -179,9 +186,10 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
     ]
     if body.dry_run:
         return {
-            "dry_run": True, "pattern": result.pattern,
+            "dry_run": True, "strategy": result.strategy,
+            "detected_headings": result.detected_headings,
             "chapter_count": len(result.chapters), "total_words": result.total_words,
-            "warnings": result.warnings, "chapters": preview,
+            "chapters": preview,
         }
 
     if body.replace:
@@ -199,13 +207,14 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
             id=new_id("ch"), novel_id=novel_id, order_no=base + c.order_no,
             title=c.title, content=c.content, word_count=c.word_count,
             source_format=SourceFormat.plain,
-            ingest_meta_json={"detected_by": c.detected_by, "pattern": result.pattern},
+            ingest_meta_json={"detected_by": c.detected_by, "strategy": result.strategy},
         ))
     db.flush()
     return {
-        "dry_run": False, "pattern": result.pattern,
+        "dry_run": False, "strategy": result.strategy,
+        "detected_headings": result.detected_headings,
         "chapter_count": len(result.chapters), "total_words": result.total_words,
-        "warnings": result.warnings, "chapters": preview,
+        "chapters": preview,
     }
 
 

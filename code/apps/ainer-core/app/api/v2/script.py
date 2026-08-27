@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.ids import new_id
 from app.models import BlockType, Chapter, DocStatus, Scene, ScriptBlock, ScriptDoc
-from app.pipelines.script_build import ScriptConfig, build_script, count_human_edits
+from app.pipelines.base import PipelineError
+from app.pipelines.script_build import build_script, count_human_edits
 
 router = APIRouter(prefix="/api/v2", tags=["script"])
 
@@ -120,16 +121,15 @@ def generate_script(
                 },
             )
     try:
-        doc = build_script(db, chapter, ScriptConfig(
-            mode=body.mode,
+        doc = build_script(
+            db, chapter,
+            granularity=body.scene_granularity,
             keep_human_edits=body.keep_human_edits,
-            scene_granularity=body.scene_granularity,
-            model=body.model,
-        ))
+        )
+    except PipelineError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _doc_payload(db, doc)
 
 

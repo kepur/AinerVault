@@ -53,10 +53,13 @@ async def capability_error_handler(_: Request, exc: CapabilityError) -> JSONResp
     return JSONResponse(status_code=status, content=exc.to_json())
 
 
-from app.api.v2 import gen_tasks, library, script, settings_api  # noqa: E402
+from app.api.v2 import (  # noqa: E402
+    gen_tasks, library, script, settings_api, worldview,
+)
 
 app.include_router(library.router)
 app.include_router(script.router)
+app.include_router(worldview.router)
 app.include_router(gen_tasks.router)
 app.include_router(settings_api.router)
 

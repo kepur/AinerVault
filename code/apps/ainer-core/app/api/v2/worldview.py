@@ -1,0 +1,517 @@
+"""世界观转译 API：档案 / 映射 / 名物词表 / 人名 / 违规 / 门禁。"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.ids import new_id
+from app.models import (
+    EntityWorldName, LexiconCategory, LexiconSource, Novel, ReviewStatus, Severity,
+    ViolationStatus, WorldEntity, WorldLexicon, WorldLexiconTemplate, WorldProfile,
+    WorldTransform, WorldViolation,
+)
+from app.models.world import NamingPolicy, ProfileRole, ProfileStatus, TransformStatus
+from app.worldview import naming, preflight as pf, survey
+
+router = APIRouter(prefix="/api/v2", tags=["worldview"])
+
+
+# ── 档案 ──────────────────────────────────────────────────────────────────────
+
+class ProfileIn(BaseModel):
+    code: str
+    display_name: str
+    role: ProfileRole = ProfileRole.both
+    novel_id: str | None = None
+    parent_id: str | None = None
+    axes: dict = Field(default_factory=dict)
+    visual: dict = Field(default_factory=dict)
+    language: dict = Field(default_factory=dict)
+    description: str | None = None
+
+
+def _profile_out(p: WorldProfile) -> dict:
+    return {
+        "id": p.id, "code": p.code, "display_name": p.display_name,
+        "role": p.role.value, "novel_id": p.novel_id, "parent_id": p.parent_id,
+        "axes": p.axes_json or {}, "visual": p.visual_json or {},
+        "language": p.language_json or {}, "version": p.version,
+        "status": p.status.value, "description": p.description,
+    }
+
+
+@router.post("/worldview:seed")
+def seed_assets(db: Session = Depends(get_db)) -> dict:
+    """幂等写入内置世界观档案与三对预置词表，解决冷启动。"""
+    return survey.seed_defaults(db)
+
+
+@router.get("/world-profiles")
+def list_profiles(role: str | None = Query(None), novel_id: str | None = Query(None),
+                  db: Session = Depends(get_db)) -> list[dict]:
+    q = select(WorldProfile).where(WorldProfile.status != ProfileStatus.archived)
+    if role:
+        q = q.where(WorldProfile.role.in_([ProfileRole(role), ProfileRole.both]))
+    if novel_id:
+        q = q.where((WorldProfile.novel_id == novel_id) | (WorldProfile.novel_id.is_(None)))
+    return [_profile_out(p) for p in db.execute(q.order_by(WorldProfile.code)).scalars()]
+
+
+@router.post("/world-profiles", status_code=201)
+def create_profile(body: ProfileIn, db: Session = Depends(get_db)) -> dict:
+    p = WorldProfile(
+        id=new_id("wp"), code=body.code, display_name=body.display_name, role=body.role,
+        novel_id=body.novel_id, parent_id=body.parent_id, axes_json=body.axes,
+        visual_json=body.visual, language_json=body.language, version=1,
+        status=ProfileStatus.active, description=body.description,
+    )
+    db.add(p)
+    db.flush()
+    return _profile_out(p)
+
+
+@router.post("/world-profiles/{profile_id}:fork", status_code=201)
+def fork_profile(profile_id: str, code: str = Query(...), display_name: str = Query(...),
+                 db: Session = Depends(get_db)) -> dict:
+    """基于父档案派生。昭和·乡村只需覆写差异项，其余继承昭和。"""
+    parent = db.get(WorldProfile, profile_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    p = WorldProfile(
+        id=new_id("wp"), code=code, display_name=display_name, role=parent.role,
+        novel_id=parent.novel_id, parent_id=parent.id,
+        axes_json=dict(parent.axes_json or {}), visual_json=dict(parent.visual_json or {}),
+        language_json=dict(parent.language_json or {}), version=1,
+        status=ProfileStatus.draft, description=f"派生自 {parent.display_name}",
+    )
+    db.add(p)
+    db.flush()
+    return _profile_out(p)
+
+
+@router.patch("/world-profiles/{profile_id}")
+def update_profile(profile_id: str, body: ProfileIn, db: Session = Depends(get_db)) -> dict:
+    p = db.get(WorldProfile, profile_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="profile not found")
+    p.display_name = body.display_name
+    p.role = body.role
+    p.axes_json = body.axes
+    p.visual_json = body.visual
+    p.language_json = body.language
+    p.description = body.description
+    db.flush()
+    return _profile_out(p)
+
+
+# ── 映射 ──────────────────────────────────────────────────────────────────────
+
+class TransformIn(BaseModel):
+    target_language_code: str
+    source_profile_id: str
+    target_profile_id: str
+    policy: dict = Field(default_factory=lambda: {
+        "naming_policy": "cultural_equivalent",
+        "honorific_policy": "map",
+        "lexicon_policy": "strict",
+        "preserve_original_for": [],
+        "strictness": "strict",
+    })
+
+
+def _transform_out(t: WorldTransform, db: Session) -> dict:
+    src = db.get(WorldProfile, t.source_profile_id)
+    tgt = db.get(WorldProfile, t.target_profile_id)
+    return {
+        "id": t.id, "novel_id": t.novel_id,
+        "target_language_code": t.target_language_code,
+        "source": {"id": src.id, "code": src.code, "display_name": src.display_name},
+        "target": {"id": tgt.id, "code": tgt.code, "display_name": tgt.display_name,
+                   "axes": tgt.axes_json or {}},
+        "version": t.version, "status": t.status.value, "policy": t.policy_json or {},
+    }
+
+
+@router.get("/novels/{novel_id}/transforms")
+def list_transforms(novel_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.execute(
+        select(WorldTransform).where(WorldTransform.novel_id == novel_id)
+        .order_by(WorldTransform.target_language_code, WorldTransform.version.desc())
+    ).scalars()
+    return [_transform_out(t, db) for t in rows]
+
+
+@router.post("/novels/{novel_id}/transforms", status_code=201)
+def create_transform(novel_id: str, body: TransformIn, db: Session = Depends(get_db)) -> dict:
+    if db.get(Novel, novel_id) is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    for pid in (body.source_profile_id, body.target_profile_id):
+        if db.get(WorldProfile, pid) is None:
+            raise HTTPException(status_code=400, detail=f"world profile {pid} not found")
+
+    version = int(db.execute(
+        select(func.coalesce(func.max(WorldTransform.version), 0)).where(
+            WorldTransform.novel_id == novel_id,
+            WorldTransform.target_language_code == body.target_language_code,
+        )
+    ).scalar_one()) + 1
+
+    t = WorldTransform(
+        id=new_id("tf"), novel_id=novel_id,
+        target_language_code=body.target_language_code,
+        source_profile_id=body.source_profile_id,
+        target_profile_id=body.target_profile_id,
+        version=version, status=TransformStatus.draft, policy_json=body.policy,
+    )
+    db.add(t)
+    db.flush()
+    return _transform_out(t, db)
+
+
+def _get_transform(db: Session, transform_id: str) -> WorldTransform:
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    return t
+
+
+@router.post("/transforms/{transform_id}:activate")
+def activate_transform(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    t = _get_transform(db, transform_id)
+    for other in db.execute(
+        select(WorldTransform).where(
+            WorldTransform.novel_id == t.novel_id,
+            WorldTransform.target_language_code == t.target_language_code,
+            WorldTransform.status == TransformStatus.active,
+        )
+    ).scalars():
+        other.status = TransformStatus.archived
+    t.status = TransformStatus.active
+    db.flush()
+    return _transform_out(t, db)
+
+
+@router.get("/transforms/{transform_id}/coverage")
+def get_coverage(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    return pf.coverage_report(db, _get_transform(db, transform_id))
+
+
+@router.get("/transforms/{transform_id}/preflight")
+def get_preflight(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """起飞前门禁。ready=false 时不应放行批量翻译。"""
+    return pf.preflight(db, _get_transform(db, transform_id))
+
+
+# ── 名物词表 ──────────────────────────────────────────────────────────────────
+
+class LexiconIn(BaseModel):
+    canonical_key: str
+    category: LexiconCategory = LexiconCategory.other
+    source_term: str
+    source_aliases: list[str] = Field(default_factory=list)
+    target_term: str
+    target_reading: str | None = None
+    forbidden_targets: list[str] = Field(default_factory=list)
+    rationale: str | None = None
+
+
+def _lex_out(r: WorldLexicon) -> dict:
+    return {
+        "id": r.id, "canonical_key": r.canonical_key, "category": r.category.value,
+        "source_term": r.source_term, "source_aliases": r.source_aliases or [],
+        "target_term": r.target_term, "target_reading": r.target_reading,
+        "forbidden_targets": r.forbidden_targets or [],
+        "status": r.status.value, "confidence": r.confidence,
+        "rationale": r.rationale, "evidence": r.evidence_json or {},
+        "source": r.source.value, "hit_count": r.hit_count,
+    }
+
+
+@router.get("/lexicon-templates")
+def list_templates(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.execute(select(WorldLexiconTemplate).order_by(WorldLexiconTemplate.pair_code)).scalars()
+    return [
+        {"id": t.id, "pair_code": t.pair_code, "display_name": t.display_name,
+         "source_profile_code": t.source_profile_code,
+         "target_profile_code": t.target_profile_code,
+         "entry_count": len(t.entries_json or []), "description": t.description}
+        for t in rows
+    ]
+
+
+@router.get("/transforms/{transform_id}/lexicon")
+def list_lexicon(
+    transform_id: str,
+    category: str | None = Query(None), status: str | None = Query(None),
+    q: str | None = Query(None), missing_target: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    stmt = select(WorldLexicon).where(WorldLexicon.transform_id == transform_id)
+    if category:
+        stmt = stmt.where(WorldLexicon.category == LexiconCategory(category))
+    if status:
+        stmt = stmt.where(WorldLexicon.status == ReviewStatus(status))
+    if missing_target:
+        stmt = stmt.where(WorldLexicon.target_term == "")
+    if q:
+        stmt = stmt.where(
+            WorldLexicon.source_term.ilike(f"%{q}%") | WorldLexicon.target_term.ilike(f"%{q}%")
+        )
+    rows = db.execute(
+        stmt.order_by(WorldLexicon.hit_count.desc(), WorldLexicon.source_term)
+    ).scalars()
+    return [_lex_out(r) for r in rows]
+
+
+@router.post("/transforms/{transform_id}/lexicon", status_code=201)
+def create_lexicon(transform_id: str, body: LexiconIn, db: Session = Depends(get_db)) -> dict:
+    _get_transform(db, transform_id)
+    r = WorldLexicon(
+        id=new_id("wl"), transform_id=transform_id, **body.model_dump(),
+        status=ReviewStatus.approved, source=LexiconSource.manual, confidence=1.0,
+    )
+    db.add(r)
+    db.flush()
+    return _lex_out(r)
+
+
+@router.post("/transforms/{transform_id}/lexicon:import-template")
+def import_lexicon_template(transform_id: str, pair_code: str = Query(...),
+                            overwrite: bool = Query(False),
+                            db: Session = Depends(get_db)) -> dict:
+    t = _get_transform(db, transform_id)
+    from app.pipelines.base import PipelineError
+
+    try:
+        res = survey.import_template(db, t, pair_code)
+    except PipelineError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"pair_code": res.pair_code, "created": res.created,
+            "skipped": res.skipped, "entries": res.entries[:20]}
+
+
+@router.post("/transforms/{transform_id}/lexicon:survey")
+def survey_lexicon(
+    transform_id: str,
+    chapter_id: str = Query(..., description="要勘探的章节"),
+    mine: bool = Query(True, description="false 则只做模板扫描，不调 LLM 不花钱"),
+    max_candidates: int = Query(40, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """勘探一章：模板扫描 → 统计新词发现 → LLM 判定译法。
+
+    产出待审核的候选词条。审核发生在这一层的产物上 ——
+    审几百条词表，管全书几十万字。
+    """
+    from app.models import Chapter
+    from app.pipelines.base import PipelineError
+
+    t = _get_transform(db, transform_id)
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    try:
+        res = survey.survey_chapter(db, t, chapter, mine=mine,
+                                    max_candidates=max_candidates)
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return res.as_dict()
+
+
+@router.patch("/lexicon/{lex_id}")
+def update_lexicon(lex_id: str, body: LexiconIn, db: Session = Depends(get_db)) -> dict:
+    r = db.get(WorldLexicon, lex_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="lexicon entry not found")
+    if r.status == ReviewStatus.locked:
+        raise HTTPException(status_code=409, detail="条目已锁定，请先解锁再修改")
+    for k, v in body.model_dump().items():
+        setattr(r, k, v)
+    db.flush()
+    return _lex_out(r)
+
+
+@router.post("/lexicon/{lex_id}:approve")
+def approve_lexicon(lex_id: str, db: Session = Depends(get_db)) -> dict:
+    r = db.get(WorldLexicon, lex_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="lexicon entry not found")
+    if not r.target_term:
+        raise HTTPException(status_code=422, detail="没有译法的条目不能通过审核")
+    r.status = ReviewStatus.approved
+    db.flush()
+    return _lex_out(r)
+
+
+@router.post("/lexicon/{lex_id}:lock")
+def lock_lexicon(lex_id: str, db: Session = Depends(get_db)) -> dict:
+    r = db.get(WorldLexicon, lex_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="lexicon entry not found")
+    if not r.target_term:
+        raise HTTPException(status_code=422, detail="没有译法的条目不能锁定")
+    r.status = ReviewStatus.locked
+    db.flush()
+    return _lex_out(r)
+
+
+class BatchIds(BaseModel):
+    ids: list[str]
+
+
+@router.post("/transforms/{transform_id}/lexicon:batch-approve")
+def batch_approve(transform_id: str, body: BatchIds, db: Session = Depends(get_db)) -> dict:
+    rows = db.execute(
+        select(WorldLexicon).where(
+            WorldLexicon.transform_id == transform_id, WorldLexicon.id.in_(body.ids)
+        )
+    ).scalars().all()
+    ok = skipped = 0
+    for r in rows:
+        if not r.target_term or r.status == ReviewStatus.locked:
+            skipped += 1
+            continue
+        r.status = ReviewStatus.approved
+        ok += 1
+    db.flush()
+    return {"approved": ok, "skipped": skipped}
+
+
+@router.delete("/lexicon/{lex_id}", status_code=204)
+def delete_lexicon(lex_id: str, db: Session = Depends(get_db)) -> None:
+    r = db.get(WorldLexicon, lex_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="lexicon entry not found")
+    if r.status == ReviewStatus.locked:
+        raise HTTPException(status_code=409, detail="条目已锁定，不能删除")
+    db.delete(r)
+
+
+# ── 人名 ──────────────────────────────────────────────────────────────────────
+
+class NameIn(BaseModel):
+    target_name: str
+    target_reading: str | None = None
+    naming_policy: NamingPolicy = NamingPolicy.cultural_equivalent
+    rationale: str | None = None
+
+
+def _name_out(n: EntityWorldName, e: WorldEntity | None = None) -> dict:
+    return {
+        "id": n.id, "entity_id": n.entity_id,
+        "entity_name": e.display_name if e else None,
+        "entity_kind": e.kind.value if e else None,
+        "target_name": n.target_name, "target_reading": n.target_reading,
+        "family_key": n.family_key, "family_surname": n.family_surname,
+        "naming_policy": n.naming_policy.value,
+        "candidates": n.candidates_json or [], "rationale": n.rationale,
+        "status": n.status.value, "locked": n.locked,
+    }
+
+
+@router.get("/transforms/{transform_id}/names")
+def list_names(transform_id: str, family_key: str | None = Query(None),
+               db: Session = Depends(get_db)) -> list[dict]:
+    stmt = (
+        select(EntityWorldName, WorldEntity)
+        .join(WorldEntity, WorldEntity.id == EntityWorldName.entity_id)
+        .where(EntityWorldName.transform_id == transform_id)
+    )
+    if family_key:
+        stmt = stmt.where(EntityWorldName.family_key == family_key)
+    rows = db.execute(stmt.order_by(EntityWorldName.family_key, WorldEntity.display_name)).all()
+    return [_name_out(n, e) for n, e in rows]
+
+
+@router.patch("/names/{name_id}")
+def update_name(name_id: str, body: NameIn, db: Session = Depends(get_db)) -> dict:
+    n = db.get(EntityWorldName, name_id)
+    if n is None:
+        raise HTTPException(status_code=404, detail="name not found")
+    if n.locked:
+        raise HTTPException(status_code=409, detail="译名已锁定，请先解锁")
+
+    t = db.get(WorldTransform, n.transform_id)
+    ok, why = naming.validate_localized_name(body.target_name, t.target_language_code)
+    if not ok:
+        raise HTTPException(status_code=422, detail=why)
+
+    tgt = db.get(WorldProfile, t.target_profile_id)
+    pattern = str((tgt.language_json or {}).get("name_pattern") or "family_given")
+    n.target_name = body.target_name
+    n.target_reading = body.target_reading
+    n.naming_policy = body.naming_policy
+    n.rationale = body.rationale
+    n.family_surname = naming.split_surname(body.target_name, pattern)[0]
+    n.status = ReviewStatus.approved
+    db.flush()
+    return _name_out(n, db.get(WorldEntity, n.entity_id))
+
+
+@router.post("/names/{name_id}:lock")
+def lock_name(name_id: str, db: Session = Depends(get_db)) -> dict:
+    n = db.get(EntityWorldName, name_id)
+    if n is None:
+        raise HTTPException(status_code=404, detail="name not found")
+    n.locked = True
+    n.status = ReviewStatus.locked
+    db.flush()
+    return _name_out(n, db.get(WorldEntity, n.entity_id))
+
+
+@router.post("/transforms/{transform_id}/names:check-family")
+def check_family(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """家族姓氏一致性检查。李清照与李格非若被映射成两个姓，在这里被抓住。"""
+    t = _get_transform(db, transform_id)
+    tgt = db.get(WorldProfile, t.target_profile_id)
+    pattern = str((tgt.language_json or {}).get("name_pattern") or "family_given")
+    rows = db.execute(
+        select(WorldEntity.id, WorldEntity.family_key, EntityWorldName.target_name,
+               WorldEntity.display_name)
+        .join(EntityWorldName, EntityWorldName.entity_id == WorldEntity.id)
+        .where(EntityWorldName.transform_id == transform_id,
+               WorldEntity.family_key.is_not(None))
+    ).all()
+    conflicts = naming.check_family_consistency([(r[0], r[1], r[2]) for r in rows], pattern)
+    labels = {r[0]: r[3] for r in rows}
+    for c in conflicts:
+        c["source_name"] = labels.get(c["entity_id"])
+    return {"conflicts": conflicts, "checked": len(rows)}
+
+
+# ── 违规 ──────────────────────────────────────────────────────────────────────
+
+@router.get("/transforms/{transform_id}/violations")
+def list_violations(transform_id: str, kind: str | None = Query(None),
+                    severity: str | None = Query(None),
+                    status: str = Query("open"),
+                    db: Session = Depends(get_db)) -> list[dict]:
+    stmt = select(WorldViolation).where(WorldViolation.transform_id == transform_id)
+    if status:
+        stmt = stmt.where(WorldViolation.status == ViolationStatus(status))
+    if kind:
+        stmt = stmt.where(WorldViolation.kind == kind)
+    if severity:
+        stmt = stmt.where(WorldViolation.severity == Severity(severity))
+    rows = db.execute(stmt.order_by(WorldViolation.severity, WorldViolation.created_at.desc())).scalars()
+    return [
+        {"id": v.id, "kind": v.kind.value, "severity": v.severity.value,
+         "scope": v.scope.value, "ref_id": v.ref_id, "detected": v.detected,
+         "expected": v.expected, "suggested_fix": v.suggested_fix,
+         "evidence": v.evidence_json or {}, "status": v.status.value}
+        for v in rows
+    ]
+
+
+@router.post("/violations/{violation_id}:resolve")
+def resolve_violation(violation_id: str, action: str = Query("resolved"),
+                      db: Session = Depends(get_db)) -> dict:
+    v = db.get(WorldViolation, violation_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="violation not found")
+    v.status = ViolationStatus.ignored if action == "ignore" else ViolationStatus.resolved
+    db.flush()
+    return {"id": v.id, "status": v.status.value}
