@@ -161,7 +161,23 @@ def _synth_from_schema(schema: dict, echo: list[dict] | None = None) -> Any:
     if t == "object":
         props = schema.get("properties") or {}
         required = schema.get("required") or list(props.keys())
-        obj = {k: _synth_from_schema(props[k], echo) for k in required if k in props}
+        obj = {}
+        for k in required:
+            if k not in props:
+                continue
+            spec = props[k]
+            # xxx_ids 这类字符串数组回填输入条目的 id ——
+            # 分镜的 block_ids 若填 "mock"，调用方会判定所有块都未被覆盖
+            if (
+                echo
+                and k.endswith("_ids")
+                and spec.get("type") == "array"
+                and (spec.get("items") or {}).get("type") == "string"
+            ):
+                ids = [str(e["id"]) for e in echo if isinstance(e, dict) and "id" in e]
+                obj[k] = ids or [_synth_from_schema(spec.get("items") or {}, None)]
+                continue
+            obj[k] = _synth_from_schema(spec, echo)
         # 回填输入里带来的标识
         if echo:
             src = echo[0]

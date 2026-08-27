@@ -22,27 +22,44 @@ def _seeded_rgb(seed: str) -> tuple[int, int, int]:
     return (60 + h[0] % 140, 60 + h[1] % 140, 60 + h[2] % 140)
 
 
+#: 占位图的实际生成上限。纯 Python 逐像素编码 1280x720 要 600ms，
+#: 一批 20 张就是 12 秒，会把整条链路卡住。占位图不需要真实分辨率 ——
+#: 缩到长边 320 生成，meta 里仍报告调用方请求的尺寸。
+MAX_RENDER_EDGE = 320
+
+
 def make_png(width: int, height: int, seed: str = "") -> bytes:
-    """渐变 + 网格的占位图。尺寸真实，便于前端布局验证。"""
+    """渐变 + 网格的占位图。"""
     width = max(16, min(width, 4096))
     height = max(16, min(height, 4096))
+
+    # 等比缩到可接受的渲染尺寸
+    scale = max(width, height) / MAX_RENDER_EDGE
+    if scale > 1:
+        width = max(8, int(width / scale))
+        height = max(8, int(height / scale))
+
     r0, g0, b0 = _seeded_rgb(seed)
     r1, g1, b1 = _seeded_rgb(seed + "|2")
+    grid = max(8, MAX_RENDER_EDGE // 5)
 
+    # 预算每列的插值分量，逐行只做一次加法，避免逐像素三次乘法
+    xs = [x / max(width - 1, 1) for x in range(width)]
     rows = bytearray()
     for y in range(height):
         rows.append(0)  # filter type: None
         fy = y / max(height - 1, 1)
-        for x in range(width):
-            fx = x / max(width - 1, 1)
-            t = (fx + fy) / 2
+        on_hline = y % grid == 0
+        line = bytearray()
+        for x, fx in enumerate(xs):
+            t = (fx + fy) * 0.5
             r = int(r0 + (r1 - r0) * t)
             g = int(g0 + (g1 - g0) * t)
             b = int(b0 + (b1 - b0) * t)
-            # 每 64px 画一条网格线，一眼看出这是占位图
-            if x % 64 == 0 or y % 64 == 0:
+            if on_hline or x % grid == 0:
                 r, g, b = min(r + 45, 255), min(g + 45, 255), min(b + 45, 255)
-            rows += bytes((r, g, b))
+            line += bytes((r, g, b))
+        rows += line
 
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8bit truecolor
     return (

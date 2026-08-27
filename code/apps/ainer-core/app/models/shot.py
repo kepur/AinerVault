@@ -53,6 +53,8 @@ class ShotPlan(Base, StdMixin):
     status: Mapped[DocStatus] = mapped_column(default=DocStatus.draft, nullable=False)
     target_language_code: Mapped[str | None] = mapped_column(String(16))
     transform_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    #: 导演包决定「怎么拍」：景别分布、运镜偏好、切分密度
+    director_profile_id: Mapped[str | None] = mapped_column(String(32), index=True)
     # {target_duration_ms, aspect_ratio, style_profile_id, shot_density}
     config_json: Mapped[dict | None] = mapped_column(JSONB)
     stats_json: Mapped[dict | None] = mapped_column(JSONB)
@@ -75,6 +77,8 @@ class Shot(Base, StdMixin):
     duration_ms: Mapped[int] = mapped_column(Integer, default=4000, nullable=False)
     # {move, speed, fov, transition_in, transition_out}
     camera_json: Mapped[dict | None] = mapped_column(JSONB)
+    #: ecu | cu | ms | fs | ws | els —— 由导演包的 shot_sizes 分布分配
+    shot_size: Mapped[str | None] = mapped_column(String(8))
     description: Mapped[str | None] = mapped_column(Text)
     spec_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     edited_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -147,6 +147,28 @@ def task_summary(
     }
 
 
+@router.post(":poll-due")
+def poll_due(limit: int = Query(50, ge=1, le=200),
+             db: Session = Depends(get_db)) -> dict:
+    """轮询所有到期未终结的任务。
+
+    回调是首选通知方式，但会丢——上游重试耗尽、网络抖动、本服务重启。
+    这个入口是契约里说的轮询兜底，应由定时任务每分钟调一次。
+    """
+    from app.capability.service import due_for_poll
+
+    tasks = due_for_poll(db, limit=limit)
+    settled = 0
+    for t in tasks:
+        before = t.status
+        poll_task(db, t)
+        if t.status != before and t.status in {
+            TaskStatus.succeeded, TaskStatus.failed, TaskStatus.cancelled
+        }:
+            settled += 1
+    return {"checked": len(tasks), "settled": settled}
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, db: Session = Depends(get_db)) -> dict:
     t = db.get(GenTask, task_id)

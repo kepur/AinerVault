@@ -86,6 +86,17 @@ def submit_task(
         select(GenTask).where(GenTask.idempotency_key == idem)
     ).scalars().first()
     if existing is not None and existing.status not in {TaskStatus.failed, TaskStatus.cancelled}:
+        # 幂等命中已完成的任务时，产物仍挂在当初那个引用对象上。
+        # 重新编译分镜会造出新的 FrameSpec，若不在这里补挂，
+        # 新帧永远等不到图 —— 任务不会再跑第二次，回调也不会重来。
+        if existing.status == TaskStatus.succeeded and ref_id and (
+            existing.ref_kind != ref_kind or existing.ref_id != ref_id
+        ):
+            done = list(db.execute(
+                select(Asset).where(Asset.gen_task_id == existing.id)
+            ).scalars())
+            _attach_to_ref(db, existing, done, ref_kind=ref_kind, ref_id=ref_id)
+            db.flush()
         return existing
 
     task = existing or GenTask(id=new_id("gt"), idempotency_key=idem)
@@ -177,7 +188,8 @@ def apply_task_result(db: Session, task: GenTask, result: Task) -> GenTask:
         task.poll_after = _next_poll_at(task)
 
     if task.status == TaskStatus.succeeded:
-        _materialize_assets(db, task)
+        created = _materialize_assets(db, task)
+        _attach_to_ref(db, task, created)
 
     db.flush()
     return task
@@ -224,6 +236,53 @@ def _materialize_assets(db: Session, task: GenTask) -> list[Asset]:
 
     db.flush()
     return created
+
+
+def _attach_to_ref(
+    db: Session, task: GenTask, assets: list[Asset],
+    *, ref_kind: str | None = None, ref_id: str | None = None,
+) -> None:
+    """产物落地后自动挂回引用它的对象。
+
+    回调是产物落地的自然时机 —— 让前端在 :generate 之后再手工调一次 :sync，
+    既容易忘，也必然撞上回调还没到的时序窗口。
+    """
+    ref_kind = ref_kind or task.ref_kind
+    ref_id = ref_id or task.ref_id
+    if not assets or not ref_id:
+        return
+    try:
+        if ref_kind == "asset_variant":
+            from app.models import AssetVariant
+
+            variant = db.get(AssetVariant, ref_id)
+            if variant is not None:
+                merged = list(dict.fromkeys(
+                    [*(variant.ref_asset_ids or []), *(a.id for a in assets)]
+                ))
+                variant.ref_asset_ids = merged
+        elif ref_kind == "frame_spec":
+            from app.models import FrameSpec, SpecStatus
+
+            frame = db.get(FrameSpec, ref_id)
+            if frame is not None and not frame.asset_id:
+                frame.asset_id = assets[0].id
+                frame.status = SpecStatus.ready
+        elif ref_kind == "audio_spec":
+            from app.models import AudioSpec, SpecStatus
+
+            spec = db.get(AudioSpec, ref_id)
+            if spec is not None and not spec.asset_id:
+                spec.asset_id = assets[0].id
+                spec.status = SpecStatus.ready
+                meta = assets[0].meta_json or {}
+                if meta.get("duration_ms"):
+                    spec.duration_ms = int(meta["duration_ms"])
+                ts = (task.result_json or {}).get("timestamps")
+                if ts:
+                    spec.timestamps_json = ts
+    except Exception:  # noqa: BLE001 - 回挂失败不应让回调整体失败
+        log.exception("产物回挂失败 task=%s ref=%s/%s", task.id, ref_kind, ref_id)
 
 
 def poll_task(db: Session, task: GenTask) -> GenTask:
