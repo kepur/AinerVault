@@ -344,11 +344,12 @@ def _first_context(texts: list[str], term: str, width: int = 40) -> str | None:
 
 def seed_defaults(db: Session) -> dict[str, int]:
     """把预置世界观档案与词表模板灌进库。幂等，可反复调用。"""
+    from app.seed.director_profiles import DIRECTOR_PROFILES
     from app.seed.lexicon_templates import TEMPLATES
     from app.seed.world_profiles import PROFILES
-    from app.models import ProfileRole, ProfileStatus
+    from app.models import DirectorProfile, ProfileRole, ProfileStatus
 
-    created_p = created_t = 0
+    created_p = created_t = created_d = 0
 
     for p in PROFILES:
         exists = db.execute(
@@ -393,5 +394,23 @@ def seed_defaults(db: Session) -> dict[str, int]:
         ))
         created_t += 1
 
+    for d in DIRECTOR_PROFILES:
+        exists = db.execute(
+            select(DirectorProfile).where(
+                DirectorProfile.code == d["code"], DirectorProfile.version == 1
+            )
+        ).scalars().first()
+        if exists:
+            continue
+        db.add(DirectorProfile(
+            id=new_id("dp"), code=d["code"], display_name=d["display_name"],
+            summary=d.get("summary"), camera_json=d.get("camera"),
+            editing_json=d.get("editing"), composition_json=d.get("composition"),
+            lighting_json=d.get("lighting"), avoid_json=d.get("avoid"),
+            version=1, status="active",
+        ))
+        created_d += 1
+
     db.flush()
-    return {"profiles": created_p, "templates": created_t}
+    return {"profiles": created_p, "templates": created_t,
+            "director_profiles": created_d}

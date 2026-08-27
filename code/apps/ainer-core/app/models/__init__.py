@@ -1,5 +1,9 @@
 """全部 ORM 模型。导入此模块即注册所有表到 Base.metadata。"""
 from app.models.base import Base, StdMixin, TimestampMixin, utcnow
+from app.models.asset_pack import (
+    AssetKindSpec, AssetOrigin, AssetSpec, AssetVariant, DirectorProfile,
+    ShotAssetBinding,
+)
 from app.models.content import Chapter, Novel, SourceFormat
 from app.models.entity import EntityChapterState, EntityKind, WorldEntity
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
@@ -27,6 +31,8 @@ from app.models.world import (
 __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
     "Novel", "Chapter", "SourceFormat",
+    "AssetSpec", "AssetVariant", "ShotAssetBinding", "DirectorProfile",
+    "AssetKindSpec", "AssetOrigin",
     "ScriptDoc", "Scene", "ScriptBlock", "BlockType", "DocStatus", "TRANSLATABLE_TYPES",
     "NovelTranslationSettings", "TranslationRun", "TranslationBlock",
     "TranslationBlockStatus", "ConsistencyMode", "RunStatus",

@@ -106,7 +106,10 @@ def _run_text_chat(inp: dict) -> tuple[dict, dict]:
         elif "entities" in props:
             out["json"] = _synth_entities(user_text)
         else:
-            out["json"] = _synth_from_schema(schema)
+            # 批量处理类调用（素材变体、家族命名）的输入带标识，
+            # 真实模型会逐条回填；mock 若只返回一条 name="mock"，
+            # 调用方按 id 对不上任何一条，链路就测不出来。
+            out["json"] = _synth_from_schema(schema, _echo_items(user_text))
         out["text"] = json.dumps(out["json"], ensure_ascii=False)
     else:
         out["text"] = f"[mock reply] {user_text[:200]}"
@@ -114,15 +117,64 @@ def _run_text_chat(inp: dict) -> tuple[dict, dict]:
     return out, {"tokens": {"prompt": tokens, "completion": 32, "total": tokens + 32}}
 
 
-def _synth_from_schema(schema: dict) -> Any:
+#: 输入条目里可能出现的标识字段，回显时按此顺序匹配
+_ECHO_KEYS = ("canonical_key", "entity_id", "id", "source_term", "family_key")
+
+
+def _echo_items(user_text: str) -> list[dict]:
+    """从 user content 里找出批量输入的条目，供回显。
+
+    真实模型会为输入的每一条给出对应输出并回填标识；
+    mock 若只返回一条 name="mock" 的记录，调用方按 id 对不上任何一条，
+    整条链路就测不出来。
+    """
+    items: list[dict] = []
+    for match in re.finditer(r"[\[{]", user_text):
+        chunk = user_text[match.start():]
+        for end in range(len(chunk), max(len(chunk) - 60000, 0), -1):
+            try:
+                parsed = json.loads(chunk[:end])
+            except Exception:
+                continue
+            _collect_items(parsed, items)
+            break
+        if items:
+            break
+    return items
+
+
+def _collect_items(node: Any, out: list[dict], depth: int = 0) -> None:
+    if depth > 4 or len(out) > 200:
+        return
+    if isinstance(node, dict):
+        if any(k in node for k in _ECHO_KEYS):
+            out.append(node)
+        for v in node.values():
+            _collect_items(v, out, depth + 1)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_items(v, out, depth + 1)
+
+
+def _synth_from_schema(schema: dict, echo: list[dict] | None = None) -> Any:
     t = schema.get("type")
     if t == "object":
         props = schema.get("properties") or {}
         required = schema.get("required") or list(props.keys())
-        return {k: _synth_from_schema(props[k]) for k in required if k in props}
+        obj = {k: _synth_from_schema(props[k], echo) for k in required if k in props}
+        # 回填输入里带来的标识
+        if echo:
+            src = echo[0]
+            for key in _ECHO_KEYS:
+                if key in obj and key in src:
+                    obj[key] = src[key]
+        return obj
     if t == "array":
         item = schema.get("items") or {"type": "string"}
-        return [_synth_from_schema(item)]
+        if echo:
+            # 逐条回填：输入几条就产出几条
+            return [_synth_from_schema(item, [e]) for e in echo]
+        return [_synth_from_schema(item, None)]
     if t == "integer":
         return 1
     if t == "number":
