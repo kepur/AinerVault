@@ -46,8 +46,23 @@ _PINYIN_FINALS = (
 _TONE_RE = re.compile(r"[1-5]$")
 _TONED_CHARS = "āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ"
 
-# 目标语言里合法、但形似拼音的常见词 —— 避免误伤
+# 目标语言里合法、但形似拼音的常见词 —— 避免误伤。
+# 英文虚词与拼音姓氏大量撞车：he=何/贺, she=佘, you=尤, an=安, long=龙…
 _ALLOW = {
+    # 英文高频虚词与代词
+    "he", "she", "it", "you", "we", "they", "him", "her", "his", "hers",
+    "the", "a", "an", "and", "or", "but", "if", "so", "as", "at", "by",
+    "for", "from", "in", "into", "of", "on", "to", "up", "out", "off",
+    "was", "were", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "shall", "should", "can", "could", "may",
+    "might", "must", "not", "no", "yes", "all", "any", "some", "who",
+    "what", "when", "where", "why", "how", "then", "than", "there", "here",
+    "this", "that", "these", "those", "one", "two", "ten", "men", "sun",
+    "son", "run", "ran", "sit", "set", "see", "saw", "say", "said", "hand",
+    "wind", "mind", "find", "kind", "band", "land", "sand", "send", "bend",
+    "dan", "don", "din", "den", "din", "bin", "ban", "bun", "gun", "fun",
+    "pin", "pen", "pan", "pun", "tin", "ton", "tan", "tone", "lane", "line",
+    "mine", "nine", "wine", "dine", "fine", "pine", "vine", "shine",
     "man", "men", "can", "cane", "ban", "bane", "dan", "dane", "fan", "fane",
     "pan", "pane", "tan", "wang", "hang", "sang", "long", "song", "gong",
     "king", "sing", "ring", "wing", "ding", "bing", "ping", "ting", "mine",
@@ -71,10 +86,12 @@ def looks_like_pinyin(token: str) -> bool:
     t = _TONE_RE.sub("", t)
     if not t or not t.isalpha():
         return False
-    if t in _SURNAMES:
-        return True
+    # 白名单优先于姓氏表：he/she/you/an 这些英文虚词与拼音姓氏（何/佘/尤/安）
+    # 大量撞车，先判姓氏会把整篇英文都标成音译。
     if t in _ALLOW:
         return False
+    if t in _SURNAMES:
+        return True
     has_initial = t.startswith(_PINYIN_INITIALS)
     has_final = any(t.endswith(f) for f in _PINYIN_FINALS)
     # zh/x/q/c/z 起头 + 拼音韵尾，两个条件同时成立才判定，压低假阳性

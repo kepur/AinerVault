@@ -19,6 +19,21 @@ class DocStatus(str, Enum):
     archived = "archived"
 
 
+class DocMode(str, Enum):
+    """剧本文档的两种形态。
+
+    prose      译本模式：按段落切块，不调 LLM、不切场景。
+               产出的是可读的译本小说，不是分镜脚本。
+    screenplay 剧本模式：LLM 拆场景与镜头单元，供分镜编译消费。
+
+    先做 prose 再升级到 screenplay 是有意的顺序 ——
+    译本的人名、名物、身份称谓都校对锁定之后，剧本才有可信的地基。
+    """
+
+    prose = "prose"
+    screenplay = "screenplay"
+
+
 class BlockType(str, Enum):
     """v1 的 5 种扩到 8 种。
 
@@ -60,6 +75,7 @@ class ScriptDoc(Base, StdMixin):
     )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[DocStatus] = mapped_column(default=DocStatus.draft, nullable=False)
+    doc_mode: Mapped[DocMode] = mapped_column(default=DocMode.screenplay, nullable=False)
     language_source: Mapped[str] = mapped_column(String(16), default="zh-CN", nullable=False)
     input_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     generator_meta: Mapped[dict | None] = mapped_column(JSONB)

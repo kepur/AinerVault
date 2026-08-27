@@ -8,7 +8,8 @@ from app.models.content import Chapter, Novel, SourceFormat
 from app.models.entity import EntityChapterState, EntityKind, WorldEntity
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
 from app.models.script import (
-    TRANSLATABLE_TYPES, BlockType, DocStatus, Scene, ScriptBlock, ScriptDoc,
+    TRANSLATABLE_TYPES, BlockType, DocMode, DocStatus, Scene, ScriptBlock,
+    ScriptDoc,
 )
 from app.models.settings import (
     CapabilityEndpoint, CapabilityRoute, PromptTemplate, User,
@@ -33,7 +34,8 @@ __all__ = [
     "Novel", "Chapter", "SourceFormat",
     "AssetSpec", "AssetVariant", "ShotAssetBinding", "DirectorProfile",
     "AssetKindSpec", "AssetOrigin",
-    "ScriptDoc", "Scene", "ScriptBlock", "BlockType", "DocStatus", "TRANSLATABLE_TYPES",
+    "ScriptDoc", "Scene", "ScriptBlock", "BlockType", "DocStatus", "DocMode",
+    "TRANSLATABLE_TYPES",
     "NovelTranslationSettings", "TranslationRun", "TranslationBlock",
     "TranslationBlockStatus", "ConsistencyMode", "RunStatus",
     "GlossaryTerm", "GlossaryCandidate", "TermStatus", "TermType", "CandidateStatus",
