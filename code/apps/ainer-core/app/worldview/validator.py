@@ -63,14 +63,28 @@ def check_translation(
                     suggested_fix=f"「{token}」不属于该世界观，应使用「{r.target_term}」",
                     evidence={"block_id": block_id, "source_term": r.source_term},
                 ))
+    # profile 级禁用词。若该词恰好是某条词条的源词，顺带给出正确译法 ——
+    # 「衙门」既是禁用词（译文不该留中文原词），也是「衙门→役所」的源词。
+    by_surface: dict[str, str] = {}
+    for r in hits:
+        if not r.target_term:
+            continue
+        for surface in list(getattr(r, "surfaces", None) or [r.source_term]):
+            by_surface.setdefault(surface, r.target_term)
+
     for token in profile_forbidden:
         if token in checked:
             continue
         checked.add(token)
         if contains_token(translated_text, token):
+            expected = by_surface.get(token)
+            fix = (
+                f"「{token}」不属于该世界观，应使用「{expected}」" if expected
+                else f"「{token}」被目标世界观列为禁用词"
+            )
             out.append(Violation(
                 kind="forbidden_token", severity="high", detected=token,
-                suggested_fix=f"「{token}」被目标世界观列为禁用词",
+                expected=expected, suggested_fix=fix,
                 evidence={"block_id": block_id, "source": "profile"},
             ))
 
@@ -82,11 +96,13 @@ def check_translation(
             continue
         if r.target_reading and contains_token(translated_text, r.target_reading):
             continue
+        surfaces = list(getattr(r, "surfaces", None) or [r.source_term])
+        shown = "/".join(surfaces)
         out.append(Violation(
-            kind="lexicon_miss", severity="medium", detected=r.source_term,
+            kind="lexicon_miss", severity="medium", detected=shown,
             expected=r.target_term,
-            suggested_fix=f"原文含「{r.source_term}」，译文应出现「{r.target_term}」",
-            evidence={"block_id": block_id},
+            suggested_fix=f"原文含「{shown}」，译文应出现「{r.target_term}」",
+            evidence={"block_id": block_id, "surfaces": surfaces},
         ))
 
     # ③ 人名漂移

@@ -67,17 +67,55 @@ def build_matcher(db: Session, transform_id: str,
     return matcher, {r.source_term: r for r in rows}
 
 
+@dataclass(slots=True)
+class LexHit:
+    """一条词条在某段文本中的命中情况。
+
+    surfaces 记的是**实际出现的字面**，可能是别名 —— 原文写「差役」而词条主名是
+    「捕快」时，注入 prompt 必须显示「差役 → 巡査」，
+    否则模型看着对照表里没出现过的词，根本对不上。
+    """
+
+    row: WorldLexicon
+    surfaces: list[str]
+    count: int
+
+    # 让 LexHit 直接满足 injector / validator 的鸭子类型
+    @property
+    def source_term(self) -> str:
+        return self.surfaces[0] if self.surfaces else self.row.source_term
+
+    @property
+    def target_term(self) -> str:
+        return self.row.target_term
+
+    @property
+    def target_reading(self) -> str | None:
+        return self.row.target_reading
+
+    @property
+    def forbidden_targets(self) -> list[str]:
+        return list(self.row.forbidden_targets or [])
+
+
 def hits_for_text(db: Session, transform_id: str, text: str,
-                  *, only_usable: bool = True) -> list[WorldLexicon]:
+                  *, only_usable: bool = True) -> list[LexHit]:
     """本段文本命中的词条，按命中次数降序。注入 prompt 与反向校验共用。"""
     matcher, index = build_matcher(db, transform_id, only_usable=only_usable)
     if not matcher:
         return []
     counts: dict[str, int] = {}
+    surfaces: dict[str, list[str]] = {}
     for hit in matcher.find(text):
         counts[hit.key] = counts.get(hit.key, 0) + 1
+        bucket = surfaces.setdefault(hit.key, [])
+        if hit.term not in bucket:
+            bucket.append(hit.term)
     ordered = sorted(counts.items(), key=lambda kv: -kv[1])
-    return [index[k] for k, _ in ordered if k in index]
+    return [
+        LexHit(row=index[k], surfaces=surfaces.get(k, []), count=n)
+        for k, n in ordered if k in index
+    ]
 
 
 def coverage_report(db: Session, transform: WorldTransform,

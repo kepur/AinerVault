@@ -56,14 +56,28 @@ def build_honorific_section(honorifics: dict[str, str] | None, *, limit: int = 3
 
 
 def build_lexicon_section(rows: Sequence[LexRow], *, max_entries: int = 60) -> str:
-    """④ 名物对照。"""
+    """④ 名物对照。
+
+    左列用**原文实际出现的字面**，而不是词条主名 ——
+    原文写「差役」而词条主名是「捕快」时，写「捕快→巡査」等于没写，
+    模型在正文里找不到「捕快」，自然不会替换。
+    """
     usable = [r for r in rows if r.target_term]
     if not usable:
         return ""
     lines = ["【名物对照】以下词语必须使用右列译法："]
-    for r in usable[:max_entries]:
+    emitted: set[str] = set()
+    for r in usable:
         reading = f"（{r.target_reading}）" if r.target_reading else ""
-        lines.append(f"  {r.source_term} → {r.target_term}{reading}")
+        # LexHit 带 surfaces（实际命中的字面）；普通词条退回主名
+        surfaces = list(getattr(r, "surfaces", None) or [r.source_term])
+        for surface in surfaces:
+            if surface in emitted:
+                continue
+            emitted.add(surface)
+            lines.append(f"  {surface} → {r.target_term}{reading}")
+            if len(emitted) >= max_entries:
+                return "\n".join(lines)
     return "\n".join(lines)
 
 

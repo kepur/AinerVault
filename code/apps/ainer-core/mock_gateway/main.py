@@ -210,11 +210,35 @@ def _synth_entities(user_text: str) -> dict:
     }
 
 
+_LEXICON_LINE = re.compile(r"^\s{2}(?P<src>\S+)\s*→\s*(?P<tgt>[^（(]+)", re.MULTILINE)
+
+
+def _parse_injected_lexicon(style_prompt: str) -> dict[str, str]:
+    """从 system prompt 的【名物对照】段解析出替换表。
+
+    一个合规的中间层会遵守调用方注入的对照表。这里照做，
+    以便 Core 的闸二校验能测出「遵守」与「不遵守」两条路径。
+    设 MOCK_IGNORE_LEXICON=1 可模拟不合规的上游。
+    """
+    if not style_prompt or os.getenv("MOCK_IGNORE_LEXICON") == "1":
+        return {}
+    start = style_prompt.find("【名物对照】")
+    if start < 0:
+        return {}
+    end = style_prompt.find("【", start + 6)
+    section = style_prompt[start : end if end > 0 else len(style_prompt)]
+    return {
+        m.group("src").strip(): m.group("tgt").strip()
+        for m in _LEXICON_LINE.finditer(section)
+    }
+
+
 def _run_translate(inp: dict) -> tuple[dict, dict]:
     """逐段对齐返回 —— 契约的生死线：id 一一对应，不合并不漏段。"""
     segments = inp.get("segments") or []
     glossary = {g["source"]: g["target"] for g in (inp.get("glossary") or []) if g.get("source")}
     target = inp.get("target_language", "en-US")
+    lexicon = _parse_injected_lexicon(str(inp.get("style_prompt") or ""))
     out_segs = []
     for seg in segments:
         text = str(seg.get("text") or "")
@@ -223,6 +247,11 @@ def _run_translate(inp: dict) -> tuple[dict, dict]:
         for src, tgt in glossary.items():
             if src and src in translated:
                 translated = translated.replace(src, tgt)
+                hits.append(src)
+        # 遵守注入的名物对照（长词优先，避免「县」抢在「县令」前）
+        for src in sorted(lexicon, key=len, reverse=True):
+            if src in translated:
+                translated = translated.replace(src, lexicon[src])
                 hits.append(src)
         out_segs.append({
             "id": seg.get("id"),
