@@ -44,6 +44,9 @@ EXTRACT_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": ["character", "location", "prop", "faction"],
                     },
+                    #: 这一条其实是前面某章已建实体的另一种叫法时，
+                    #: 填那条的 display_name。跨章归并靠它。
+                    "same_as": {"type": "string"},
                     # 靠什么指认它。与 kind 正交，但决定转译路径
                     "name_type": {
                         "type": "string",
@@ -154,6 +157,16 @@ style_hints — 风格提示
    **generic 的一律不要收**。「那个人」「一把剑」不是实体，
    收进来只会占着位置、拿到一个不存在的名字。
 
+0b. **看【已建实体】清单。** 这一章出现的东西如果前面章节已经建过，
+   填 same_as 指向那一条，不要新建。判断按「是不是同一个东西」，
+   不是按字面是否相同：
+     三娘 / 柳三娘              同一个人
+     三娘客栈 / 柳三娘的客栈      同一个地方
+     三簧锁 / 三簧铜锁           同一件物
+   不归并的后果：同一个人被建成两条实体，各自拿一个译名，
+   译文里她前半本叫一个名字、后半本叫另一个。
+   拿不准就不填 same_as —— 错并比不并更难修。
+
 1. display_name 用原文中最正式的称呼。「李清照」而不是「清照」。
 2. aliases 收全同一实体的其他叫法：小名、尊称、绰号、单用的名。
    「李清照 / 易安居士 / 清照 / 李娘子」是同一人，必须并成一条。
@@ -197,6 +210,8 @@ class ExtractResult:
     names: list[str] = field(default_factory=list)
     families: dict[str, list[str]] = field(default_factory=dict)
     by_name_type: dict[str, int] = field(default_factory=dict)
+    #: 归并进已有实体的（跨章的另一种叫法）
+    merged: list[dict] = field(default_factory=list)
     #: 被判为泛指、未建实体的（「那个人」「一把剑」）
     dropped_generic: list[str] = field(default_factory=list)
 
@@ -207,9 +222,30 @@ class ExtractResult:
             "appellations": self.appellations,
             "by_kind": self.by_kind,
             "names": self.names, "families": self.families,
-            "by_name_type": self.by_name_type,
+            "by_name_type": self.by_name_type, "merged": self.merged,
             "dropped_generic": self.dropped_generic,
         }
+
+
+def _resolve_same_as(
+    same_as: Any, name: str, kind: "EntityKind",
+    existing: dict[str, "WorldEntity"],
+) -> "WorldEntity | None":
+    """把 same_as 解析成已建实体。解析不了就当没填。
+
+    只认同 kind 的 —— 模型偶尔会把「三娘」（人）指向「三娘客栈」（地点）。
+    并错比不并更难修：两个不同的东西合成一条之后，
+    要拆开得先发现它们本来是两个，而译文里只会看到一个名字。
+    """
+    target = str(same_as or "").strip()
+    if not target or target == name:
+        return None
+    for row in existing.values():
+        if row.kind is not kind:
+            continue
+        if target == row.display_name or target in (row.aliases_json or []):
+            return row
+    return None
 
 
 def _canonical_key(name: str, kind: str) -> str:
@@ -255,6 +291,18 @@ def extract_entities(
         raise PipelineError("章节没有正文，无法抽取实体")
 
     hint = f"\n\n【已识别的说话人】{', '.join(speakers)}" if speakers else ""
+    known = list(db.execute(
+        select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
+        .order_by(WorldEntity.kind, WorldEntity.display_name)
+    ).scalars())
+    if known:
+        lines = [
+            f"  {e.display_name}（{e.kind.value}）"
+            + (f" 别名：{'、'.join(e.aliases_json)}" if e.aliases_json else "")
+            for e in known[:60]
+        ]
+        hint += "\n\n【已建实体】前面章节建过这些。同一个东西请填 same_as 指向它，不要新建：\n"
+        hint += "\n".join(lines)
     data, _task = chat_json(
         db,
         [
@@ -330,6 +378,25 @@ def extract_entities(
         ]
         if appellations:
             pending_appellations.append((key, appellations))
+
+        # same_as 指向已建实体时，把这次的名字并成它的别名，不建新条
+        merged_into = _resolve_same_as(item.get("same_as"), name, kind, existing)
+        if merged_into is not None:
+            if not merged_into.locked:
+                # 括号不能省：`-` 的优先级高于 `|`，写成
+                # `a | b | c - d` 实际是 `a | b | (c - d)`，
+                # 主名只从 aliases 里被排除，仍会从 name 混进别名列表
+                merged = sorted(
+                    (set(merged_into.aliases_json or []) | {name} | set(aliases))
+                    - {merged_into.display_name}
+                )
+                if merged != (merged_into.aliases_json or []):
+                    merged_into.aliases_json = merged
+                    result.updated += 1
+            result.merged.append({"name": name, "into": merged_into.display_name})
+            if appellations:
+                pending_appellations.append((merged_into.canonical_key, appellations))
+            continue
 
         row = existing.get(key)
         if row is not None:
