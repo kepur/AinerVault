@@ -27,6 +27,34 @@ class EntityKind(str, Enum):
     style = "style"
 
 
+class NameType(str, Enum):
+    """这个实体**是靠什么被指认的**。决定它该走哪条转译路径。
+
+    kind 回答「它是什么」（人／地／物／组织），name_type 回答
+    「原文怎么称呼它」—— 两者正交，而后者才决定转译方式：
+
+        proper   有专属名字：沈砚、柳树坳、漕帮
+                 → 走 L1 名字映射，要在目标文化里造一个等效的专名
+        role     以职务或身份指代：总镖头、掌柜、小二、师父
+                 → 走名物词表。给它生成人名是错的 ——
+                   端到端跑出过「总镖头」变成 Дарья Ивановна Орлова
+                   的事故，一个职务凭空成了女角色
+        epithet  描述性名号：北地剑客、三簧锁
+                 → 意译，按目标文化的名号习惯重铸，不音译
+        generic  泛指：那个人、店家、一把剑
+                 → 根本不该建实体，抽取时就该滤掉
+
+    **这个判断只能在抽取时做**，因为只有那一刻模型看着原文。
+    之前靠「名字在不在名物词表里」反推，是权宜之计：
+    词表还没挖时反推不出来，而抽取恰恰跑在词表之前。
+    """
+
+    proper = "proper"
+    role = "role"
+    epithet = "epithet"
+    generic = "generic"
+
+
 class WorldEntity(Base, StdMixin):
     __tablename__ = "world_entities"
     __table_args__ = (
@@ -38,6 +66,10 @@ class WorldEntity(Base, StdMixin):
         ForeignKey("novels.id", ondelete="CASCADE"), nullable=False
     )
     kind: Mapped[EntityKind] = mapped_column(default=EntityKind.character, nullable=False)
+    #: 靠什么指认它 —— 决定走名字映射还是名物词表
+    name_type: Mapped[NameType] = mapped_column(
+        default=NameType.proper, nullable=False
+    )
     canonical_key: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(256), nullable=False)
     aliases_json: Mapped[list | None] = mapped_column(JSONB)

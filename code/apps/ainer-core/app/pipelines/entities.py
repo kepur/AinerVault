@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
+    NameType,
     Chapter, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.pipelines.base import PipelineError, chat_json
@@ -42,6 +43,11 @@ EXTRACT_SCHEMA: dict[str, Any] = {
                     "kind": {
                         "type": "string",
                         "enum": ["character", "location", "prop", "faction"],
+                    },
+                    # 靠什么指认它。与 kind 正交，但决定转译路径
+                    "name_type": {
+                        "type": "string",
+                        "enum": ["proper", "role", "epithet", "generic"],
                     },
                     "aliases": {"type": "array", "items": {"type": "string"}},
                     # 称呼变体：谁这么叫、属于哪种语域。
@@ -132,6 +138,22 @@ style_hints — 风格提示
   这一章的光影、色调、情绪、镜头感。通常一条，最多两条。
 
 关键要求：
+0. **name_type 决定这条实体后面怎么转译，判错的代价最大。**
+   proper   有专属名字：沈砚、柳树坳、漕帮、青莲剑
+   role     以职务或身份指代：总镖头、掌柜、小二、师父、县令
+   epithet  描述性名号：北地剑客、三簧锁、独臂老人
+   generic  泛指，不是特定的谁／什么：那个人、店家、一把剑、几个汉子
+
+   判据是**「换一个人／一件物，这个称呼还成立吗」**：
+   「掌柜」换个人还是掌柜 → role；「沈砚」换个人就不是沈砚了 → proper。
+
+   为什么要紧：proper 会去目标文化里造一个专名，
+   role 走名物词表。给「总镖头」造专名，它就变成了一个凭空出现的角色，
+   而译文里「总镖头把镖单推过来」从此由那个人来做。
+
+   **generic 的一律不要收**。「那个人」「一把剑」不是实体，
+   收进来只会占着位置、拿到一个不存在的名字。
+
 1. display_name 用原文中最正式的称呼。「李清照」而不是「清照」。
 2. aliases 收全同一实体的其他叫法：小名、尊称、绰号、单用的名。
    「李清照 / 易安居士 / 清照 / 李娘子」是同一人，必须并成一条。
@@ -174,6 +196,9 @@ class ExtractResult:
     by_kind: dict[str, int] = field(default_factory=dict)
     names: list[str] = field(default_factory=list)
     families: dict[str, list[str]] = field(default_factory=dict)
+    by_name_type: dict[str, int] = field(default_factory=dict)
+    #: 被判为泛指、未建实体的（「那个人」「一把剑」）
+    dropped_generic: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -182,6 +207,8 @@ class ExtractResult:
             "appellations": self.appellations,
             "by_kind": self.by_kind,
             "names": self.names, "families": self.families,
+            "by_name_type": self.by_name_type,
+            "dropped_generic": self.dropped_generic,
         }
 
 
@@ -261,6 +288,14 @@ def extract_entities(
             kind = EntityKind(item.get("kind") or "character")
         except ValueError:
             kind = EntityKind.character
+        try:
+            name_type = NameType(item.get("name_type") or "proper")
+        except ValueError:
+            name_type = NameType.proper
+        # 泛指不是实体。收进来只会占位置，然后拿到一个不存在的名字
+        if name_type is NameType.generic:
+            result.dropped_generic.append(name)
+            continue
 
         key = _canonical_key(name, kind.value)
         aliases = [
@@ -312,6 +347,11 @@ def extract_entities(
             if family_key and not row.family_key:
                 row.family_key = family_key
                 changed = True
+            # 老数据一律是默认的 proper。抽取给出非 proper 时以它为准 ——
+            # 那是看着原文做的判断，比默认值可信
+            if name_type is not NameType.proper and row.name_type is NameType.proper:
+                row.name_type = name_type
+                changed = True
             if not row.summary and item.get("summary"):
                 row.summary = item["summary"]
                 changed = True
@@ -326,6 +366,7 @@ def extract_entities(
 
         row = WorldEntity(
             id=new_id("we"), novel_id=chapter.novel_id, kind=kind,
+            name_type=name_type,
             canonical_key=key, display_name=name, aliases_json=aliases,
             summary=item.get("summary") or None, family_key=family_key,
             first_seen_chapter_order=chapter.order_no,
@@ -337,6 +378,9 @@ def extract_entities(
         result.created += 1
         result.names.append(name)
         result.by_kind[kind.value] = result.by_kind.get(kind.value, 0) + 1
+        result.by_name_type[name_type.value] = (
+            result.by_name_type.get(name_type.value, 0) + 1
+        )
 
     db.flush()  # 新建实体先拿到 id，称呼才挂得上
     result.appellations = _save_appellations(db, chapter, existing, pending_appellations)
@@ -556,7 +600,10 @@ def placeholder_map(
             # 不需要占位符隔离（占位符是为了防人名被音译）。
             # 不区分的话，每次翻译都会报一串「缺译名」，
             # 而那串永远不会消失 —— 报警变成噪声，真正缺译名的角色就被淹掉了。
-            if e.kind in _NEEDS_PROPER_NAME:
+            # 职务与名号不走专名映射：前者由名物词表转（掌柜 → innkeeper），
+            # 后者意译（北地剑客 → the Swordsman of the North）。
+            # 把它们算进「缺译名」会得到一串永远消不掉的警告。
+            if e.kind in _NEEDS_PROPER_NAME and e.name_type is NameType.proper:
                 missing.append(e.display_name)
             continue
         ph_to_target[ph] = mapped.target_name

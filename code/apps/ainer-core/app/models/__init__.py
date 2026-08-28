@@ -9,7 +9,9 @@ from app.models.content import Chapter, Novel, SourceFormat
 from app.models.culture_review import (
     CultureFinding, CultureReview, GapKind, ReviewRunStatus, Verdict,
 )
-from app.models.entity import EntityChapterState, EntityKind, WorldEntity
+from app.models.entity import (
+    EntityChapterState, EntityKind, NameType, WorldEntity,
+)
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
 from app.models.meme import MemeEntry, MemeRegister, MemeRendering
 from app.models.narrative import StoryBeat, StyleHint
@@ -50,6 +52,7 @@ __all__ = [
     "MemeEntry", "MemeRendering", "MemeRegister",
     "CultureReview", "CultureFinding", "GapKind", "Verdict", "ReviewRunStatus",
     "ShotPerformance", "SpeechRole", "StagePosition", "Facing",
+    "NameType",
     "QualityTier", "DEFAULT_TIER",
     "PlotLoad", "Volatility", "choose_strategy",
     "STRATEGY_BRIEF", "strategy_brief",

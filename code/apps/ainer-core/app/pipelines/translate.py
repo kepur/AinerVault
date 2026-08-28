@@ -215,18 +215,31 @@ def translate_chapter(
             memes = _meme_brief(db, transform, [b.source_text or "" for b in chunk])
             if memes:
                 parts.append(memes)
+            kinds = _kind_brief({b.block_type.value for b in chunk})
+            if kinds:
+                parts.append(kinds)
             system_prompt = "\n\n".join(parts)
         else:
-            memes = _meme_brief(db, transform, [b.source_text or "" for b in chunk])
-            if memes:
-                system_prompt = f"{system_prompt}\n\n{memes}"
+            extra = [
+                x for x in (
+                    _meme_brief(db, transform, [b.source_text or "" for b in chunk]),
+                    _kind_brief({b.block_type.value for b in chunk}),
+                ) if x
+            ]
+            if extra:
+                system_prompt = "\n\n".join([system_prompt, *extra])
 
+        # addressee 与 present 是 dialogue:resolve 标的。带上它们，
+        # 「贴住说话人与听话人的关系」才不是一句空话 ——
+        # 只给 speaker，模型知道谁在说，仍不知道该用哪种语气。
         segments = [
             {
                 "id": b.id,
                 "text": masked[b.id],
                 "kind": b.block_type.value,
                 "speaker": b.speaker_tag or None,
+                **({"addressees": b.addressee_tags} if b.addressee_tags else {}),
+                **({"present": b.present_tags} if b.present_tags else {}),
             }
             for b in chunk
         ]
@@ -303,6 +316,45 @@ def translate_chapter(
 
     db.flush()
     return result
+
+
+#: 各块类型的翻译要求。`kind` 一直传给模型，却从没告诉它那意味着什么 ——
+#: 于是六种要求完全不同的文本走同一套处理。
+_KIND_RULES: dict[str, str] = {
+    "narration": (
+        "旁白／叙述。第三人称，可以文学化，但不要比原文更华丽 —— "
+        "原文冷峻的地方译文也要冷峻。"
+    ),
+    "dialogue": (
+        "对白。**只译话语本身**，不要补「他说」这类引导语（那在原文里是单独的块）。"
+        "口语化，并且要贴住说话人的身份与他跟听话人的关系 —— "
+        "同一句话，师父对徒弟说和仇家对仇家说，用词完全不同。"
+        "段里若带 addressees（对谁说）与 present（在场还有谁），据此定语气："
+        "当着外人说的话和私下说的话，措辞不一样。"
+    ),
+    "inner_monolog": (
+        "内心独白。比对白更碎、更直接，允许不完整的句子。"
+        "不要加「他想」「他心里说」—— 独白本身就是想的内容，加了等于翻译两遍。"
+    ),
+    "signage": (
+        "**画面中出现的文字**：招牌、信件、告示、匾额。这不是翻译一句话，"
+        "是要写出目标世界观里那块牌子上真会写的东西 —— "
+        "用该文化的书写系统、格式与套话，长度也要像块牌子（会被画进画面）。"
+        "「醉仙楼」到帝俄不是「醉酒的仙人楼」，是一块俄国招牌该有的样子。"
+    ),
+    "title": "标题。极简，是短语不是句子，不要加标点。",
+    "heading": "章节标题。保持原文的编号体例，标题部分按目标语言的习惯写。",
+}
+
+
+def _kind_brief(kinds: set[str]) -> str:
+    """只注入本批实际出现的类型。全量注入会让真正相关的那两条被淹掉。"""
+    hit = [(k, v) for k, v in _KIND_RULES.items() if k in kinds]
+    if not hit:
+        return ""
+    lines = ["【按类型处理】每段带 kind 字段，不同类型的要求不同："]
+    lines += [f"  {k} —— {v}" for k, v in hit]
+    return "\n".join(lines)
 
 
 def _meme_brief(db: Session, transform: WorldTransform, texts: list[str]) -> str:

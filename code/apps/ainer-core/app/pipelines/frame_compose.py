@@ -139,6 +139,50 @@ _FACING_EN = {
 }
 
 
+def _signage_prompt(db: Session, shot: Shot, profile: WorldProfile) -> str:
+    """这一镜里出现的画面文字，连同该世界观的招牌规则。
+
+    取译文而非原文 —— 画面属于目标世界观，招牌上该是目标语言。
+    没有译文时退回原文并降级为「不要在画面上写字」：
+    宁可留白，也不要把源语言的字画进目标世界观的街道。
+    """
+    from app.models import BlockType, ScriptBlock, TranslationBlock
+
+    block_ids = list(shot.block_ids_json or [])
+    if not block_ids:
+        return ""
+    rows = list(db.execute(
+        select(ScriptBlock).where(
+            ScriptBlock.id.in_(block_ids),
+            ScriptBlock.block_type == BlockType.signage,
+        )
+    ).scalars())
+    if not rows:
+        return ""
+
+    texts = {
+        t.script_block_id: (t.translated_text or "").strip()
+        for t in db.execute(
+            select(TranslationBlock).where(
+                TranslationBlock.script_block_id.in_([r.id for r in rows])
+            )
+        ).scalars()
+    }
+    done = [texts[r.id] for r in rows if texts.get(r.id)]
+    rules = (profile.visual_json or {}).get("signage_rules") or {}
+    if not done:
+        return "no legible text on signage"
+
+    bits = ["signage reads: " + " / ".join(f'"{t}"' for t in done[:3])]
+    for key, label in (("script", "script"), ("style", "lettering"),
+                       ("material", "sign material")):
+        if rules.get(key):
+            bits.append(f"{label}: {rules[key]}")
+    if rules.get("avoid"):
+        bits.append(f"avoid {rules['avoid']}")
+    return ", ".join(bits)
+
+
 def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
     """把这一镜的人物调度写成提示词。
 
@@ -247,6 +291,16 @@ def compose_frame_prompt(
             role = "character" if spec.kind == AssetKindSpec.costume else "scene"
             refs.append({"ref": {"url": url}, "role": role, "weight": 0.6,
                          "tag": spec.canonical_key})
+
+    # ── 4.4 画面文字 ──
+    # signage 块既进译本也进画面。不带进提示词的话，
+    # 生成出来的招牌要么是空白、要么是模型自己编的字 ——
+    # 而档案里的 signage_rules（书写系统、字体、材质、避免什么）
+    # 从建库那天起就没被用过，又是一处「存了不用」。
+    # 招牌写错字体或写成源语言，是一眼可见的穿帮。
+    sign = _signage_prompt(db, shot, profile)
+    if sign:
+        positive.append(sign)
 
     # ── 4.5 人物调度 ──
     # 素材包给的是**恒定属性**（长什么样、穿什么），这里给**瞬时状态**

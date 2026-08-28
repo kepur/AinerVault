@@ -115,18 +115,26 @@ NAME_SYSTEM = """你是跨文化影视本地化的命名顾问，专长是【文
 
 
 def role_term_hit(
-    names: set[str], family_key: str | None, lex_terms: set[str]
+    names: set[str], family_key: str | None, lex_terms: set[str],
+    name_type: "NameType | None" = None,
 ) -> str | None:
-    """这个实体是不是「职务／身份」而非人名。返回命中的词条，否则 None。
+    """这个实体是不是「职务／身份」而非人名。返回判定依据，否则 None。
 
-    判据两条：名字在名物词表里，且没有家族键。
-    有 family_key 说明它确实是个有姓的人 —— 「柳三娘」既是称呼也带姓氏，
-    那种仍要生成人名；纯职务词（总镖头、掌柜、小二）才跳过。
+    **优先看 name_type** —— 那是抽取时看着原文做的判断，
+    比事后反推可信。反推靠「名字在不在名物词表里」，
+    可名物勘探跑在命名之前也可能没跑，那时反推不出任何东西。
+
+    name_type 缺失（老数据一律是默认的 proper）时才回落到词表反推。
+    有 family_key 的一律当人：「柳三娘」既是称呼也带姓氏，仍要生成人名。
     """
+    from app.models import NameType
+
+    if family_key:
+        return None
+    if name_type is NameType.role:
+        return "name_type=role"
     hit = {n for n in names if n} & lex_terms
-    if hit and not family_key:
-        return sorted(hit)[0]
-    return None
+    return sorted(hit)[0] if hit else None
 
 
 def _pending_appellations(
@@ -235,7 +243,7 @@ def suggest_names(
             result.skipped_locked += 1
             continue
         names = {e.display_name, *(e.aliases_json or [])}
-        hit = role_term_hit(names, e.family_key, lex_terms)
+        hit = role_term_hit(names, e.family_key, lex_terms, e.name_type)
         if hit:
             result.as_role_term.append({
                 "entity": e.display_name,

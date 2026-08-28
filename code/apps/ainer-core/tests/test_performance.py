@@ -247,3 +247,82 @@ class TestTransportRetry:
             self._caller(_Bad())([{"role": "user", "content": "hi"}],
                                  temperature=0, max_tokens=16, json_mode=False)
         assert _Bad.calls == 1
+
+
+# ── 画面文字与块类型规则 ──────────────────────────────────────────────────────
+
+from app.pipelines.frame_compose import _signage_prompt
+from app.pipelines.translate import _KIND_RULES, _kind_brief
+from app.models import BlockType, TRANSLATABLE_TYPES
+
+
+class TestKindRules:
+    def test_every_translatable_type_has_a_rule(self):
+        """每种可翻译的块类型都要有处理说明。
+
+        kind 一直传给模型，却从没告诉它那意味着什么 ——
+        于是六种要求完全不同的文本走同一套处理：
+        招牌被当成句子翻译、内心独白被加上「他想」、
+        对白被补上原文里另起一块的引导语。
+        """
+        for t in TRANSLATABLE_TYPES:
+            assert t.value in _KIND_RULES, f"{t.value} 没有处理说明"
+
+    def test_only_present_kinds_injected(self):
+        """只注入本批出现的类型 —— 全量注入会淹掉真正相关的那两条。"""
+        out = _kind_brief({"dialogue"})
+        assert "dialogue" in out
+        assert "signage" not in out
+
+    def test_non_translatable_kind_yields_nothing(self):
+        assert _kind_brief({"action"}) == ""
+        assert _kind_brief(set()) == ""
+
+
+class _SignDB:
+    """按查询顺序返回：先 ScriptBlock，再 TranslationBlock。"""
+
+    def __init__(self, blocks, trans):
+        self._queue = [blocks, trans]
+
+    def execute(self, _stmt):
+        return SimpleNamespace(scalars=lambda: self._queue.pop(0))
+
+
+class TestSignagePrompt:
+    def _profile(self, **rules):
+        return SimpleNamespace(visual_json={"signage_rules": rules})
+
+    def test_uses_translation_not_source(self):
+        """画面属于目标世界观，招牌上该是目标语言。"""
+        blk = SimpleNamespace(id="b1", block_type=BlockType.signage)
+        tr = SimpleNamespace(script_block_id="b1",
+                             translated_text='трактиръ «Пьяный ангелъ»')
+        out = _signage_prompt(
+            _SignDB([blk], [tr]),
+            SimpleNamespace(block_ids_json=["b1"]),
+            self._profile(script="cyrillic", style="旧俄花体", material="漆木"),
+        )
+        assert "Пьяный" in out
+        assert "cyrillic" in out and "漆木" in out
+
+    def test_blank_rather_than_source_language(self):
+        """没有译文时宁可留白 ——
+        把源语言的字画进目标世界观的街道是一眼可见的穿帮。
+        """
+        blk = SimpleNamespace(id="b1", block_type=BlockType.signage)
+        out = _signage_prompt(
+            _SignDB([blk], []),
+            SimpleNamespace(block_ids_json=["b1"]),
+            self._profile(script="cyrillic"),
+        )
+        assert out == "no legible text on signage"
+        assert "醉仙楼" not in out
+
+    def test_no_signage_blocks_yields_nothing(self):
+        out = _signage_prompt(
+            _SignDB([], []),
+            SimpleNamespace(block_ids_json=["b1"]),
+            self._profile(),
+        )
+        assert out == ""

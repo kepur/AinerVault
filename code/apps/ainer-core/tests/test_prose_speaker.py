@@ -270,6 +270,25 @@ class TestRoleTermSplit:
     def test_pure_role_term_skipped(self):
         assert role_term_hit({"总镖头"}, None, self.LEX) == "总镖头"
 
+    def test_name_type_beats_lexicon_inference(self):
+        """抽取时判的 name_type 优先于事后反推。
+
+        反推靠「名字在不在名物词表里」，可名物勘探跑在命名之前也可能没跑 ——
+        那时反推不出任何东西，而 name_type 是看着原文做的判断。
+        """
+        from app.models import NameType
+
+        # 词表里没有「总镖头」，但抽取判了 role —— 仍应跳过
+        assert role_term_hit({"总镖头"}, None, set(), NameType.role)
+        # 反过来：判了 proper 的，即使词表命中也回落到反推
+        assert role_term_hit({"掌柜"}, None, self.LEX, NameType.proper) == "掌柜"
+
+    def test_family_key_always_wins(self):
+        """有姓氏的一律当人 —— 「柳三娘」既是称呼也带姓。"""
+        from app.models import NameType
+
+        assert role_term_hit({"柳三娘"}, "柳_family", self.LEX, NameType.role) is None
+
     def test_named_person_still_gets_a_name(self):
         """有家族键说明它是个有姓的人，仍要生成人名。"""
         assert role_term_hit({"柳三娘"}, "柳_family", self.LEX) is None
