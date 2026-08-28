@@ -243,6 +243,11 @@ def build_script(
             if block.block_type == BlockType.dialogue:
                 dialogue_count += 1
 
+    # 先 flush 再统计。session 是 autoflush=False 的，
+    # 在 flush 之前查 script_blocks 只能查到空 —— 块还在 session 里没落库。
+    # 表现是 stats.translatable 恒为 0，而单个块的 translatable 是 true，
+    # 前端据此显示「无内容可翻译」，人会以为拆剧本失败了。
+    db.flush()
     doc.stats_json = {
         "scenes": len(scenes_raw),
         "blocks": block_count,
