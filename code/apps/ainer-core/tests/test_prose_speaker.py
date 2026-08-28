@@ -155,6 +155,30 @@ class TestNameValidation:
         ok, _ = validate_localized_name("Edmund Ashcroft", "en-GB", "given_family")
         assert ok
 
+    @pytest.mark.parametrize("name,kind", [
+        ("Волчья балка", "location"),
+        ("Гостиный двор", "location"),
+        ("Артель Каменева", "faction"),
+    ])
+    def test_place_and_faction_skip_person_name_shape(self, name, kind):
+        """段数要求只对人物生效。
+
+        地点与组织有自己的命名规范 ——「Гостиный двор」是完整的客栈名。
+        按「名+父称+姓」判会拒掉它，然后回落到**人名**兜底池，
+        于是端到端跑出了「镖局」= Николай Андреевич Лебедев，
+        译文里「镖局的院子」成了「尼古拉·安德烈耶维奇·列别捷夫的院子」。
+        """
+        ok, why = validate_localized_name(
+            name, "ru-RU", "given_patronymic_family", kind=kind)
+        assert ok, why
+
+    def test_script_still_enforced_for_places(self):
+        """放宽段数不等于放宽书写系统 —— 俄语世界观里的地名仍须是西里尔。"""
+        ok, why = validate_localized_name(
+            "Roland Whitfield", "ru-RU", None, kind="location")
+        assert not ok
+        assert "cyrillic" in why
+
     def test_rejects_pinyin_transliteration(self):
         ok, why = validate_localized_name("Li Qingzhao", "en-GB", "given_family")
         assert not ok
@@ -191,3 +215,44 @@ class TestFallbackPool:
         """没有该语言的池子时报错，而不是发一个英文名。"""
         with pytest.raises(NoFallbackPool):
             deterministic_fallback_name("we_x", "tf_x", "sw-KE")
+
+
+# ── 职务型实体不该走人名命名 ──────────────────────────────────────────────────
+
+from app.pipelines.naming import role_term_hit
+
+
+class TestRoleTermSplit:
+    """名物词表里已有的实体是职务／身份，不是人名。
+
+    不分流的后果是端到端第二跑抓到的那个：
+    模型给「总镖头」提了 старшой（俄语「老大」），
+    被「必须名+父称+姓」的规则判不合格，回落到兜底池，
+    于是这个职务变成了 Дарья Ивановна Орлова —— 一个凭空出现的女角色，
+    而译文里「总镖头把镖单推过来」从此由她来做。
+    """
+
+    LEX = {"总镖头", "掌柜", "小二", "客栈", "捕快"}
+
+    def test_pure_role_term_skipped(self):
+        assert role_term_hit({"总镖头"}, None, self.LEX) == "总镖头"
+
+    def test_named_person_still_gets_a_name(self):
+        """有家族键说明它是个有姓的人，仍要生成人名。"""
+        assert role_term_hit({"柳三娘"}, "柳_family", self.LEX) is None
+
+    def test_role_term_with_family_key_still_named(self):
+        """既在词表里又有姓 —— 以人名为准，宁可多给不可漏给。"""
+        assert role_term_hit({"掌柜", "柳三娘"}, "柳_family", self.LEX) is None
+
+    def test_unknown_entity_gets_a_name(self):
+        assert role_term_hit({"沈砚"}, "沈_family", self.LEX) is None
+        assert role_term_hit({"裴无咎"}, None, self.LEX) is None
+
+    def test_alias_hit_counts(self):
+        """别名命中词表也算 —— 实体可能以本名登记、以职务被引用。"""
+        assert role_term_hit({"周老板", "掌柜"}, None, self.LEX) == "掌柜"
+
+    def test_empty_lexicon_names_everything(self):
+        """名物勘探还没跑时不该误跳过任何实体。"""
+        assert role_term_hit({"总镖头"}, None, set()) is None

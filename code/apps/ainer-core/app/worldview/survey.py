@@ -318,9 +318,6 @@ def survey_chapter(
             (src_profile_early.language_json or {}).get("code")
             if src_profile_early else None
         )
-    # 候选词上限压到 24：模型会试着给每个候选都出一条词条，
-    # 给 40 个就要生成 40 条，输出量随之翻倍
-    max_candidates = min(max_candidates, 24)
     candidates = _candidate_tokens(texts, covered, max_candidates, src_lang)
     # 候选词是**降噪加速**手段，不是前置条件。
     # 短章节、新书开头、名物密度低的段落，统计层本来就给不出候选 ——
@@ -339,6 +336,31 @@ def survey_chapter(
     excerpt = "\n".join(texts)[:3000]
     known_sample = ", ".join(sorted(covered)[:60])
 
+    # 分批送。**限流不够，必须分批** —— 上一版只是把原文压到 3000 字、
+    # 候选压到 24 个，结果仍然两轮都被截断：每条词条的输出
+    # （译法 + 读音 + 禁用词 + 依据）是候选词本身的几十倍，
+    # 24 条就要生成上万 token。压输入解决不了输出爆炸，只有分批能。
+    for i in range(0, len(candidates) or 1, _MINE_BATCH):
+        batch = candidates[i : i + _MINE_BATCH]
+        if not batch and not direct:
+            break
+        _mine_batch(db, transform, chapter, src_profile, tgt_profile,
+                    batch, direct, excerpt, known_sample, covered, result)
+    db.flush()
+    return result
+
+
+#: 单次挖掘的候选词上限。词条的输出量是候选词的几十倍。
+_MINE_BATCH = 10
+
+
+def _mine_batch(
+    db: Session, transform: WorldTransform, chapter: Chapter,
+    src_profile: WorldProfile | None, tgt_profile: WorldProfile | None,
+    candidates: list[tuple[str, int]], direct: bool,
+    excerpt: str, known_sample: str, covered: set[str],
+    result: SurveyResult,
+) -> None:
     data, _task = chat_json(
         db,
         [
@@ -405,9 +427,9 @@ def survey_chapter(
         result.mined_created += 1
         result.mined_terms.append(src)
 
-    result.unresolved = [t for t, _ in candidates if t not in covered]
+    # 分批累积而非覆盖 —— 每批各有自己没认出来的词
+    result.unresolved.extend(t for t, _ in candidates if t not in covered)
     db.flush()
-    return result
 
 
 def _first_context(texts: list[str], term: str, width: int = 40) -> str | None:

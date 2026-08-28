@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
+    WorldLexicon,
     EntityKind, EntityWorldName, NamingPolicy, ReviewStatus, WorldEntity,
     WorldProfile, WorldTransform,
 )
@@ -112,6 +113,21 @@ NAME_SYSTEM = """你是跨文化影视本地化的命名顾问，专长是【文
 7. rationale 说明为什么这个名字在目标文化里等效，不要泛泛而谈。"""
 
 
+def role_term_hit(
+    names: set[str], family_key: str | None, lex_terms: set[str]
+) -> str | None:
+    """这个实体是不是「职务／身份」而非人名。返回命中的词条，否则 None。
+
+    判据两条：名字在名物词表里，且没有家族键。
+    有 family_key 说明它确实是个有姓的人 —— 「柳三娘」既是称呼也带姓氏，
+    那种仍要生成人名；纯职务词（总镖头、掌柜、小二）才跳过。
+    """
+    hit = {n for n in names if n} & lex_terms
+    if hit and not family_key:
+        return sorted(hit)[0]
+    return None
+
+
 def _pending_appellations(
     db: Session, transform: WorldTransform, entity_ids: list[str],
 ) -> dict[str, list[dict]]:
@@ -148,6 +164,8 @@ class NamingResult:
     updated: int = 0
     skipped_locked: int = 0
     appellations: int = 0
+    #: 按职务/身份处理、不生成人名的实体
+    as_role_term: list[dict] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)
     families: dict[str, str] = field(default_factory=dict)
 
@@ -156,6 +174,7 @@ class NamingResult:
             "created": self.created, "updated": self.updated,
             "skipped_locked": self.skipped_locked,
             "appellations": self.appellations,
+            "as_role_term": self.as_role_term,
             "rejected": self.rejected, "families": self.families,
         }
 
@@ -190,12 +209,36 @@ def suggest_names(
         ).scalars()
     }
 
+    # 名物词表里已有的实体是**职务／身份**而非人名：总镖头、掌柜、小二、师父。
+    # 给它们生成人名的后果很实：模型给「总镖头」提了 старшой（俄语「老大」），
+    # 被「必须是名+父称+姓」的规则判不合格，回落到兜底池，
+    # 于是这个职务变成了 Дарья Ивановна Орлова —— 一个凭空出现的女角色，
+    # 而译文里「总镖头把镖单推过来」从此由她来做。
+    #
+    # 判据用名物词表而不是新加字段：词表里有的**就是**名物，这是它的定义。
+    # 顺序也对得上 —— 名物勘探在命名之前跑。
+    lex_terms: set[str] = set()
+    for row in db.execute(
+        select(WorldLexicon).where(WorldLexicon.transform_id == transform.id)
+    ).scalars():
+        lex_terms.add(row.source_term)
+        lex_terms.update(row.source_aliases or [])
+
     result = NamingResult()
     pending = []
     for e in entities:
         cur = existing.get(e.id)
         if cur is not None and cur.locked:
             result.skipped_locked += 1
+            continue
+        names = {e.display_name, *(e.aliases_json or [])}
+        hit = role_term_hit(names, e.family_key, lex_terms)
+        if hit:
+            result.as_role_term.append({
+                "entity": e.display_name,
+                "lexicon_term": hit,
+                "note": "按名物词表处理，不生成人名",
+            })
             continue
         pending.append(e)
     if not pending:
@@ -307,7 +350,8 @@ def _name_one_batch(
             target_name = str(member.get("target_name") or "").strip()
 
             ok, why = nm.validate_localized_name(
-                target_name, transform.target_language_code, pattern
+                target_name, transform.target_language_code, pattern,
+                kind=entity.kind.value,
             )
             if not ok:
                 # 从备选里找一个合格的
@@ -315,10 +359,25 @@ def _name_one_batch(
                 for alt in member.get("alternatives") or []:
                     cand = str(alt.get("name") or "").strip()
                     if nm.validate_localized_name(
-                        cand, transform.target_language_code, pattern
+                        cand, transform.target_language_code, pattern,
+                        kind=entity.kind.value,
                     )[0]:
                         picked = (cand, str(alt.get("reading") or ""))
                         break
+                if picked is None and entity.kind is not EntityKind.character:
+                    # 地点与组织没有兜底池，也不该借用人名池 ——
+                    # 那正是「镖局」变成一个人名的由来。留空待人工处理。
+                    log.warning("%s（%s）译名不合格且无兜底：%s",
+                                entity.display_name, entity.kind.value, why)
+                    result.rejected.append({
+                        "entity": entity.display_name,
+                        "kind": entity.kind.value,
+                        "proposed": target_name,
+                        "reason": why,
+                        "fallback": None,
+                        "action": "非人物实体不套用人名兜底，需人工指定",
+                    })
+                    continue
                 if picked is None:
                     try:
                         fb_name, fb_reading = nm.deterministic_fallback_name(

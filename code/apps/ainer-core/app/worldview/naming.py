@@ -182,9 +182,18 @@ def _min_tokens(name_pattern: str | None) -> int:
 
 
 def validate_localized_name(
-    name: str, target_language: str, name_pattern: str | None = None
+    name: str, target_language: str, name_pattern: str | None = None,
+    kind: str = "character",
 ) -> tuple[bool, str | None]:
-    """校验一个候选名是否可用。返回 (是否合格, 不合格原因)。"""
+    """校验一个候选名是否可用。返回 (是否合格, 不合格原因)。
+
+    **段数要求只对人物生效。** 地点与组织有自己的命名规范：
+    «Гостиный двор» 是完整的客栈名、Волчья балка 是完整的地名，
+    它们不该被「必须是名+父称+姓」的规则拒掉 ——
+    拒掉的下场是回落到人名兜底池，于是「镖局」变成了
+    Николай Андреевич Лебедев，译文里「镖局的院子」
+    成了「尼古拉·安德烈耶维奇·列别捷夫的院子」。
+    """
     value = (name or "").strip()
     if not value:
         return False, "空名字"
@@ -235,11 +244,12 @@ def validate_localized_name(
         if hits:
             return False, f"「{value}」含拼音片段 {hits}"
 
-    need = _min_tokens(name_pattern)
-    parts = [p for p in value.replace("　", " ").split() if p]
-    if len(parts) < need:
-        shape = "名 + 父称 + 姓" if need == 3 else "名 + 姓"
-        return False, f"「{value}」应为「{shape}」的完整本地姓名"
+    if kind == "character":
+        need = _min_tokens(name_pattern)
+        parts = [p for p in value.replace("　", " ").split() if p]
+        if len(parts) < need:
+            shape = "名 + 父称 + 姓" if need == 3 else "名 + 姓"
+            return False, f"「{value}」应为「{shape}」的完整本地姓名"
     return True, None
 
 
