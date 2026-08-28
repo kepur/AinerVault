@@ -280,6 +280,8 @@ class RunIn(BaseModel):
     batch_size: int = 10
     strict: bool | None = None
     force: bool = False          # 跳过 preflight 门禁
+    #: literal 逐句对应；adaptive 按骨架与装置重写，保效果不保字面
+    mode: str = "literal"
 
 
 @router.post("/chapters/{chapter_id}/translation/{lang}:run")
@@ -306,6 +308,7 @@ def run_translation(chapter_id: str, lang: str, body: RunIn,
         res = tr_pipe.translate_chapter(
             db, c, t, batch_size=body.batch_size,
             only_missing=body.only_missing, strict=body.strict,
+            mode=body.mode,
         )
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

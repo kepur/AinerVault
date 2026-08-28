@@ -21,6 +21,8 @@ from app.models import (
 from app.models.world import TransformStatus
 from app.pipelines import audiobook as ab
 from app.pipelines import audit as audit_pipe
+from app.pipelines import backcheck as bc_pipe
+from app.pipelines import devices as dev_pipe
 from app.pipelines import prose as prose_pipe
 from app.pipelines import review as review_pipe
 from app.pipelines.base import PipelineError
@@ -173,6 +175,95 @@ def review_prose(chapter_id: str, body: ReviewIn,
     try:
         return review_pipe.review_translation(
             db, c, t, batch_size=body.batch_size, max_blocks=body.max_blocks
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# ── 3.5 叙事装置与回译校验 ─────────────────────────────────────────────────────
+
+class DeviceIn(BaseModel):
+    batch_size: int = 14
+
+
+@router.post("/chapters/{chapter_id}/devices:extract")
+def extract_devices(chapter_id: str, body: DeviceIn,
+                    db: Session = Depends(get_db)) -> dict:
+    """抽离叙事装置 —— 笑点、泪点、反转的「机制」。
+
+    跨文化改编真正会丢的不是词，是效果。抽机制而非文本，
+    重写时才能在目标文化里重造出同样的反应。
+    """
+    c = _chapter(db, chapter_id)
+    try:
+        return dev_pipe.extract_devices(db, c, batch_size=body.batch_size).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/chapters/{chapter_id}/devices")
+def list_devices(chapter_id: str, db: Session = Depends(get_db)) -> dict:
+    from app.models import NarrativeDevice
+
+    _chapter(db, chapter_id)
+    rows = list(
+        db.execute(
+            select(NarrativeDevice).where(NarrativeDevice.chapter_id == chapter_id)
+            .order_by(NarrativeDevice.intensity.desc())
+        ).scalars()
+    )
+    items = [
+        {
+            "id": d.id, "block_id": d.block_id,
+            "device_type": d.device_type.value, "effect": d.effect.value,
+            "cultural_load": d.cultural_load.value, "strategy": d.strategy.value,
+            "source_text": d.source_text, "mechanism": d.mechanism,
+            "setup": d.setup, "punch": d.punch, "intensity": d.intensity,
+            "depends_on": d.depends_on or [],
+            "target_plan": d.target_plan,
+            "landed": d.landed, "landed_note": d.landed_note,
+        }
+        for d in rows
+    ]
+    by_load: dict[str, int] = {}
+    for d in rows:
+        by_load[d.cultural_load.value] = by_load.get(d.cultural_load.value, 0) + 1
+    return {
+        "items": items,
+        "stats": {
+            "total": len(rows), "by_load": by_load,
+            "high_intensity": sum(1 for d in rows if d.intensity >= 4),
+            "landed": sum(1 for d in rows if d.landed is True),
+            "lost": sum(1 for d in rows if d.landed is False),
+        },
+    }
+
+
+class BackCheckIn(BaseModel):
+    transform_id: str | None = None
+    language: str | None = None
+    max_blocks: int | None = None
+    pass_threshold: float = 0.9
+
+
+@router.post("/chapters/{chapter_id}/prose:back-check")
+def back_check(chapter_id: str, body: BackCheckIn,
+               db: Session = Depends(get_db)) -> dict:
+    """回译校验：把译文回译成源语言，与骨架逐点比对。
+
+    译文读着通顺不代表情节没丢。改编模式允许调整句式，
+    模型可能为了顺畅悄悄抹掉一个情节点，而译文毫无破绽 ——
+    只有回译比对能查出来。
+    """
+    c = _chapter(db, chapter_id)
+    t = (
+        _transform(db, body.transform_id) if body.transform_id
+        else _active_transform(db, c.novel_id, body.language or "en-US")
+    )
+    try:
+        return bc_pipe.back_check(
+            db, c, t, max_blocks=body.max_blocks,
+            pass_threshold=body.pass_threshold,
         ).as_dict()
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

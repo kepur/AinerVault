@@ -32,6 +32,7 @@ from app.pipelines.base import PipelineError
 from app.pipelines.entities import (
     apply_placeholders, placeholder_map, restore_placeholders,
 )
+from app.pipelines.devices import build_device_brief
 from app.worldview import injector, preflight as pf, validator
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,25 @@ def _settings(db: Session, novel_id: str, lang: str) -> NovelTranslationSettings
     ).scalars().first()
 
 
+#: 改编模式的写作指令。这是 literal 与 adaptive 的分野 ——
+#: 前者逐句转换，后者按骨架重写，允许调整句式与顺序以保住效果。
+ADAPTIVE_BRIEF = """【改编模式】你不是在逐句翻译，是在为目标世界观的读者重写这一段。
+
+必须守住的（不可增删）：
+  · 情节事实：谁做了什么、导致了什么，一个都不能少也不能加
+  · 出场人物与他们的态度
+  · 这一段要让读者产生的情绪
+
+可以调整的：
+  · 句式、语序、断句 —— 按目标语言的自然写法来
+  · 修辞手法 —— 中文的排比换成英文更顺的结构是对的
+  · 笑点与情绪的实现方式 —— 见下方「叙事装置」
+
+判断标准不是「像不像原文」，是**目标文化的读者读到这里，
+反应是否与中文读者读原文时相同**。
+读着像翻译腔，即使字字对应，也是失败的。"""
+
+
 def translate_chapter(
     db: Session,
     chapter: Chapter,
@@ -96,8 +116,15 @@ def translate_chapter(
     batch_size: int = 10,
     only_missing: bool = True,
     strict: bool | None = None,
+    mode: str = "literal",
 ) -> TranslateResult:
-    """翻译一章。四层世界观全部生效。"""
+    """翻译一章。四层世界观全部生效。
+
+    mode:
+      literal   逐块对应翻译，保守稳妥，适合已定稿的内容
+      adaptive  按叙事骨架与装置重写，允许调整句式以保住笑点与情绪 ——
+                跨文化改编要的是效果对等，不是字面对等
+    """
     lang = transform.target_language_code
     doc = _active_doc(db, chapter.id)
     src_profile = db.get(WorldProfile, transform.source_profile_id)
@@ -169,6 +196,19 @@ def translate_chapter(
             glossary_lines=glossary,
             style_prompt=style_prompt,
         )
+        if mode == "adaptive":
+            # 骨架与装置只在改编模式注入 —— 逐句模式给了也用不上，
+            # 反而会诱导模型自由发挥
+            parts = [system_prompt, ADAPTIVE_BRIEF]
+            spine = _beat_brief(db, chapter, [b.id for b in chunk])
+            if spine:
+                parts.append(spine)
+            brief = build_device_brief(
+                db, [b.id for b in chunk], tgt_profile.display_name
+            )
+            if brief:
+                parts.append(brief)
+            system_prompt = "\n\n".join(parts)
 
         segments = [
             {
@@ -251,6 +291,29 @@ def translate_chapter(
 
     db.flush()
     return result
+
+
+def _beat_brief(db: Session, chapter: Chapter, block_ids: list[str]) -> str:
+    """本批涉及的情节点与情绪 —— 重写时必须命中的东西。"""
+    from app.models import StoryBeat
+
+    beats = list(
+        db.execute(
+            select(StoryBeat).where(StoryBeat.chapter_id == chapter.id)
+            .order_by(StoryBeat.order_no)
+        ).scalars()
+    )
+    if not beats:
+        return ""
+    lines = ["【叙事骨架】以下情节点与情绪必须在译文中原样保留："]
+    for b in beats[:8]:
+        bits = [f"  {b.order_no}. {b.title}"]
+        if b.plot_point:
+            bits.append(f"     情节：{b.plot_point}")
+        if b.emotion:
+            bits.append(f"     情绪：{b.emotion}（强度 {b.emotion_intensity}）")
+        lines.append("\n".join(bits))
+    return "\n".join(lines)
 
 
 def _call_translate(

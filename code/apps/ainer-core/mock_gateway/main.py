@@ -118,7 +118,8 @@ def _run_text_chat(inp: dict) -> tuple[dict, dict]:
 
 
 #: 输入条目里可能出现的标识字段，回显时按此顺序匹配
-_ECHO_KEYS = ("canonical_key", "entity_id", "id", "source_term", "family_key")
+_ECHO_KEYS = ("canonical_key", "block_id", "entity_id", "id",
+              "source_term", "family_key", "device_id")
 
 
 def _echo_items(user_text: str) -> list[dict]:

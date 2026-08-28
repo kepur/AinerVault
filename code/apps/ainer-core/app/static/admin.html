@@ -960,22 +960,33 @@ const Prose = {
               ${ch.word_count} 字 · ${h(lang)}</span></h2>
             <p class="hint" style="margin:2px 0 0">${h(st.next_step || "先执行分块")}</p>
           </div>
-          <select id="pr-lang" style="width:auto" onchange="Prose.setLang(this.value)">
-            ${["en-GB","en-US","ja-JP","ko-KR","fr-FR"].map(l=>
-              `<option ${l===lang?"selected":""}>${l}</option>`).join("")}
-          </select>
+          <div class="row" style="gap:7px">
+            <select id="pr-mode" style="width:auto" title="翻译模式">
+              <option value="adaptive">改编模式（保效果）</option>
+              <option value="literal">逐句模式（保字面）</option>
+            </select>
+            <select id="pr-lang" style="width:auto" onchange="Prose.setLang(this.value)">
+              ${["en-GB","en-US","ja-JP","ko-KR","fr-FR"].map(l=>
+                `<option ${l===lang?"selected":""}>${l}</option>`).join("")}
+            </select>
+          </div>
         </div>
         <div class="row" style="margin-top:12px">
           <button class="btn" onclick="Prose.build(this)">1 分块</button>
           <button class="btn" onclick="Prose.translate(this)">2 翻译</button>
-          <button class="btn" onclick="Prose.review(this)">3 二次审核</button>
-          <button class="btn" onclick="Prose.audit(this)">4 全书审计</button>
-          <button class="btn" onclick="Prose.lock(this)">5 锁定译文</button>
+          <button class="btn" onclick="Prose.devices(this)">3 装置抽离</button>
+          <button class="btn" onclick="Prose.review(this)">4 二次审核</button>
+          <button class="btn" onclick="Prose.backCheck(this)">5 回译校验</button>
+          <button class="btn" onclick="Prose.audit(this)">6 全书审计</button>
+          <button class="btn" onclick="Prose.lock(this)">7 锁定</button>
           <span style="flex:1"></span>
           <button class="btn pri" onclick="Prose.runAll(this)">▶ 一键跑完</button>
         </div>
-        <p class="hint" style="margin:9px 0 0">分块是纯规则、零成本；翻译与审核会调用 LLM。
-          一键跑完按顺序执行前四步，不含锁定。</p>
+        <p class="hint" style="margin:9px 0 0">
+          <b>改编模式</b>按叙事骨架与装置重写，允许调整句式以保住笑点与情绪 ——
+          判断标准是目标读者的反应是否与中文读者相同，不是字面像不像。
+          <b>装置抽离</b>找出「换个语言就会失效」的地方并给出重铸策略；
+          <b>回译校验</b>把成品译回中文与骨架比对，查情节点丢没丢。</p>
       </div>
 
       ${State.transformId ? "" : `<div class="card" style="border-color:var(--warn)">
@@ -984,6 +995,7 @@ const Prose = {
         <button class="btn pri" onclick="App.go('world')">去「世界观」创建 →</button>
       </div>`}
 
+      <div id="check-box"></div>
       <div id="audit-box"></div>
 
       ${prose ? `<div class="card">
@@ -1023,9 +1035,10 @@ const Prose = {
   async translate(btn) {
     return run(btn, async () => {
       try {
+        const mode = $("#pr-mode") ? $("#pr-mode").value : "adaptive";
         const r = await api("POST",
           `/chapters/${State.chapterId}/translation/${State.lang}:run`,
-          {only_missing:false, batch_size:8});
+          {only_missing:false, batch_size:8, mode});
         logOk(`翻译 ${r.translated} 段　重译 ${r.retried}　违规 ${r.violations}　跳过锁定 ${r.skipped_locked}`);
         if (r.missing_names && r.missing_names.length)
           logWarn(`缺译名：${r.missing_names.join("、")}`);
@@ -1036,13 +1049,71 @@ const Prose = {
           if (confirm("世界观映射尚未审核完。强制翻译？\n\n（建议先去「世界观」页审核名物词表）")) {
             const r2 = await api("POST",
               `/chapters/${State.chapterId}/translation/${State.lang}:run`,
-              {only_missing:false, batch_size:8, force:true});
+              {only_missing:false, batch_size:8, force:true,
+               mode: ($("#pr-mode")||{value:"adaptive"}).value});
             logOk(`强制翻译 ${r2.translated} 段　违规 ${r2.violations}`);
           }
         } else throw e;
       }
       App.refresh();
     }, "翻译中");
+  },
+  async devices(btn) {
+    return run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/devices:extract`, {});
+      logOk(`装置 ${r.devices} 处　类型 ${JSON.stringify(r.by_type)}`);
+      logOk(`  文化依赖分布 ${JSON.stringify(r.by_load)}`);
+      (r.high_load||[]).slice(0,4).forEach(d =>
+        logWarn(`  [高依赖] ${d.device_type}／${d.effect}：${String(d.source_text).slice(0,30)}`
+                + `　依赖 ${(d.depends_on||[]).join("、")||"—"}`));
+      App.refresh();
+    }, "抽离中");
+  },
+  async backCheck(btn) {
+    if (!State.transformId) return logErr("请先在「世界观」创建映射");
+    return run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/prose:back-check`,
+        {transform_id: State.transformId});
+      const pct = x => Math.round((x||0)*100) + "%";
+      logOk(`回译校验：情节保留 ${pct(r.beat_coverage)}　`
+            + `装置命中 ${pct(r.device_landing)}　情绪吻合 ${pct(r.emotion_match)}　`
+            + `通过=${r.passed}`);
+      $("#check-box").innerHTML = `<div class="card">
+        <h2>回译校验 ${r.passed
+          ? '<span class="tag t-ok">通过</span>'
+          : '<span class="tag t-bad">未通过</span>'}</h2>
+        <p class="hint">把译文回译成中文，与叙事骨架逐点比对。
+          只回答一个问题：<b>东西丢了没有</b> —— 不评价译文写得好不好。</p>
+        <div class="steps" style="margin-bottom:12px">
+          <div class="step ${r.beat_coverage>=0.9?'done':'blocked'}">
+            <div class="k">情节保留</div><div class="v">${pct(r.beat_coverage)}</div></div>
+          <div class="step ${r.device_landing>=0.9?'done':'blocked'}">
+            <div class="k">装置命中</div><div class="v">${pct(r.device_landing)}</div></div>
+          <div class="step ${r.emotion_match>=0.9?'done':'blocked'}">
+            <div class="k">情绪吻合</div><div class="v">${pct(r.emotion_match)}</div></div>
+          <div class="step ${r.added_content.length?'blocked':'done'}">
+            <div class="k">私自增添</div><div class="v">${r.added_content.length}</div></div>
+        </div>
+        ${r.verdict?`<p class="hint" style="color:var(--body)">${h(r.verdict)}</p>`:""}
+        ${r.missing_beats.length?`<h2 style="font-size:13px;margin-top:14px">丢失的情节点</h2>
+          <div class="tblwrap"><table><tbody>${r.missing_beats.map(b=>`<tr>
+            <td class="mono">${b.order}</td><td><b>${h(b.title)}</b>
+            ${b.note?`<br><span style="color:var(--muted)">${h(b.note)}</span>`:""}</td>
+          </tr>`).join("")}</tbody></table></div>`:""}
+        ${r.lost_devices.length?`<h2 style="font-size:13px;margin-top:14px">未重铸的装置</h2>
+          <div class="tblwrap"><table><thead><tr><th>类型</th><th>效果</th><th>强度</th>
+            <th>原文</th><th>机制</th></tr></thead><tbody>${r.lost_devices.map(d=>`<tr>
+            <td class="mono">${h(d.type)}</td><td class="mono">${h(d.effect)}</td>
+            <td><span class="tag ${d.intensity>=4?'t-bad':'t-warn'}">${d.intensity}</span></td>
+            <td>${h(d.source_text)}</td>
+            <td style="color:var(--muted)">${h(d.mechanism)}</td>
+          </tr>`).join("")}</tbody></table></div>`:""}
+        ${r.added_content.length?`<h2 style="font-size:13px;margin-top:14px">原文没有的内容</h2>
+          <ul style="margin:0;padding-left:18px;color:var(--danger)">${
+            r.added_content.map(x=>`<li>${h(x)}</li>`).join("")}</ul>`:""}
+      </div>`;
+      $("#check-box").scrollIntoView({behavior:"smooth", block:"nearest"});
+    }, "回译中");
   },
   async review(btn) {
     if (!State.transformId) return logErr("请先在「世界观」创建映射");
@@ -1100,10 +1171,12 @@ const Prose = {
   },
   async runAll(btn) {
     return run(btn, async () => {
-      log("── 一键跑完：分块 → 翻译 → 审核 → 审计 ──");
+      log("── 一键跑完：分块 → 装置 → 翻译 → 审核 → 回译 → 审计 ──");
       await this.build(null);
+      await this.devices(null);
       await this.translate(null);
       await this.review(null);
+      await this.backCheck(null);
       await this.audit(null);
       logOk("全部完成");
     }, "执行中");

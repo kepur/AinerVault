@@ -8,6 +8,10 @@ from app.models.content import Chapter, Novel, SourceFormat
 from app.models.entity import EntityChapterState, EntityKind, WorldEntity
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
 from app.models.narrative import StoryBeat, StyleHint
+from app.models.narrative_device import (
+    BackTranslationCheck, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
+    NarrativeDevice,
+)
 from app.models.script import (
     TRANSLATABLE_TYPES, BlockType, DocMode, DocStatus, Scene, ScriptBlock,
     ScriptDoc,
@@ -48,6 +52,8 @@ __all__ = [
     "ViolationKind", "ViolationScope", "ViolationStatus", "Severity",
     "WorldEntity", "EntityChapterState", "EntityKind",
     "StoryBeat", "StyleHint",
+    "NarrativeDevice", "BackTranslationCheck",
+    "DeviceType", "DeviceEffect", "CulturalLoad", "DeviceStrategy",
     "ShotPlan", "Shot", "FrameSpec", "AudioSpec", "FrameRole", "AudioKind", "SpecStatus",
     "GenTask", "Asset", "TaskStatus", "AssetKind", "AssetSource",
     "CapabilityEndpoint", "CapabilityRoute", "PromptTemplate", "User",

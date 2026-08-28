@@ -34,6 +34,14 @@ class StoryBeat(Base, StdMixin):
     summary: Mapped[str | None] = mapped_column(Text)
     #: 1–5。分镜按它决定切分密度：5 该切碎，1 可以给长镜头
     tension_level: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    #: setup / conflict / turn / payoff / resolution —— 叙事功能
+    beat_type: Mapped[str | None] = mapped_column(String(24))
+    #: 这一拍要让读者产生什么情绪。重写后必须命中同一情绪。
+    emotion: Mapped[str | None] = mapped_column(String(32))
+    #: 情绪强度 1–5，与 tension 分开：温情戏张力低但情绪强
+    emotion_intensity: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    #: 这一拍推进了什么 —— 情节因果链的原子事实，语言无关
+    plot_point: Mapped[str | None] = mapped_column(Text)
     location_text: Mapped[str | None] = mapped_column(String(256))
     entity_names: Mapped[list | None] = mapped_column(JSONB)
     evidence_json: Mapped[list | None] = mapped_column(JSONB)
