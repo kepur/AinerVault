@@ -340,10 +340,12 @@ def survey_chapter(
     # 候选压到 24 个，结果仍然两轮都被截断：每条词条的输出
     # （译法 + 读音 + 禁用词 + 依据）是候选词本身的几十倍，
     # 24 条就要生成上万 token。压输入解决不了输出爆炸，只有分批能。
-    for i in range(0, len(candidates) or 1, _MINE_BATCH):
-        batch = candidates[i : i + _MINE_BATCH]
-        if not batch and not direct:
-            break
+    # direct 模式没有候选可分批，只跑一轮并在提示词里限量
+    steps = [[]] if direct else [
+        candidates[i : i + _MINE_BATCH]
+        for i in range(0, len(candidates), _MINE_BATCH)
+    ]
+    for batch in steps:
         _mine_batch(db, transform, chapter, src_profile, tgt_profile,
                     batch, direct, excerpt, known_sample, covered, result, texts)
     db.flush()
@@ -375,7 +377,13 @@ def _mine_batch(
                     f"【已有词表】{known_sample}\n\n"
                     + (
                         "【候选词】统计层未能给出候选（语料太短或名物分散），"
-                        "请直接通读原文找出全部名物词。\n\n"
+                        "请直接通读原文找名物词。"
+                        # 不设上限时模型会试图把整章的名物一次列完，
+                        # 每条又带译法/读音/禁用词/依据，输出直接撞穿上限。
+                        # 分批在这条路径上不起作用 —— 它没有候选可分。
+                        f"**本次最多给 {_MINE_BATCH} 条**，"
+                        "挑出现频率高、对场景最关键的；漏掉的下一章还会遇到，"
+                        "词条是跨章累积的。\n\n"
                         if direct else
                         f"【高频候选词】"
                         f"{', '.join(f'{t}({c})' for t, c in candidates)}\n"

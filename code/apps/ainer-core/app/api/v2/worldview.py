@@ -398,14 +398,33 @@ def survey_lexicon(
     return res.as_dict()
 
 
+class LexiconPatch(BaseModel):
+    """部分更新。字段全部可选 —— 原来复用 LexiconIn（全字段必填），
+    那是 PUT 的语义：想改一个译法就得把 source_aliases、forbidden_targets
+    一并原样传回，漏传一个就被清空，而清空不会报错。
+    """
+
+    canonical_key: str | None = None
+    category: LexiconCategory | None = None
+    source_term: str | None = None
+    source_aliases: list[str] | None = None
+    target_term: str | None = None
+    target_reading: str | None = None
+    forbidden_targets: list[str] | None = None
+    rationale: str | None = None
+
+
 @router.patch("/lexicon/{lex_id}")
-def update_lexicon(lex_id: str, body: LexiconIn, db: Session = Depends(get_db)) -> dict:
+def update_lexicon(lex_id: str, body: LexiconPatch,
+                   db: Session = Depends(get_db)) -> dict:
     r = db.get(WorldLexicon, lex_id)
     if r is None:
         raise HTTPException(status_code=404, detail="lexicon entry not found")
     if r.status == ReviewStatus.locked:
         raise HTTPException(status_code=409, detail="条目已锁定，请先解锁再修改")
-    for k, v in body.model_dump().items():
+    # exclude_unset：只写用户真正传了的字段。
+    # 用 exclude_none 会让「把 rationale 清空」变得无法表达。
+    for k, v in body.model_dump(exclude_unset=True).items():
         setattr(r, k, v)
     db.flush()
     return _lex_out(r)
