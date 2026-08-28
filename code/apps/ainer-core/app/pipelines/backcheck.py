@@ -59,7 +59,7 @@ CHECK_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        "added_content": {"type": "array", "items": {"type": "string"}},
+        "contradictions": {"type": "array", "items": {"type": "string"}},
         "verdict": {"type": "string"},
     },
 }
@@ -83,8 +83,16 @@ devices 每处装置，效果在回译文本里有没有重现。
        一处笑点从谐音换成了情境反差，只要还好笑，就算 landed。
        landed=false 只在效果确实消失时填（比如原本的笑点变成了平铺直叙）。
 
-added_content 列出回译文本里**原文没有**的情节或事实。
-       改编可以改说法，不能加剧情。
+contradictions 列出回译文本里**与上面的情节骨架相矛盾**的地方。
+
+       注意问的是「矛盾」不是「多出来」。你手上只有骨架，没有原文 ——
+       骨架是情节梗概，本来就不含细节动作。看到一句
+       「他从怀里摸出油纸包，剥了颗豆子扔进嘴里」而骨架没提，
+       那是骨架的粒度问题，**不是新增剧情**，不要列。
+
+       要列的是真矛盾：骨架说他没跑，回译文本里他跑了；
+       骨架说箱子没打开，回译文本里箱子开了；
+       出现了骨架里根本不存在的人物或事件转折。
 
 verdict 一句话结论。"""
 
@@ -97,7 +105,7 @@ class CheckResult:
     passed: bool = False
     missing_beats: list[dict] = field(default_factory=list)
     lost_devices: list[dict] = field(default_factory=list)
-    added_content: list[str] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
     verdict: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -108,7 +116,7 @@ class CheckResult:
             "passed": self.passed,
             "missing_beats": self.missing_beats,
             "lost_devices": self.lost_devices,
-            "added_content": self.added_content,
+            "contradictions": self.contradictions,
             "verdict": self.verdict,
         }
 
@@ -248,7 +256,9 @@ def back_check(
     result.device_landing = (
         round(len(landed_ids) / len(devices), 4) if devices else 1.0
     )
-    result.added_content = [str(x)[:200] for x in (data.get("added_content") or [])]
+    result.contradictions = [
+        str(x)[:200] for x in (data.get("contradictions") or [])
+    ]
 
     # 高强度装置丢失是硬否决 —— 那正是读者会察觉的东西
     hard_loss = any(x["intensity"] >= 4 for x in result.lost_devices)
@@ -256,7 +266,10 @@ def back_check(
         result.beat_coverage >= pass_threshold
         and result.device_landing >= pass_threshold
         and not hard_loss
-        and not result.added_content
+        # 与骨架矛盾是硬否决 —— 那是真改了剧情，不是换了说法。
+        # 原来这里卡的是 added_content（模型无从判断的东西），
+        # 于是一句「掏出油纸包剥炒豆」就让整章不通过。
+        and not result.contradictions
     )
 
     db.add(BackTranslationCheck(
@@ -267,7 +280,7 @@ def back_check(
         emotion_match=result.emotion_match,
         missing_beats=result.missing_beats or None,
         lost_devices=result.lost_devices or None,
-        added_content=result.added_content or None,
+        contradictions=result.contradictions or None,
         notes=result.verdict, passed=result.passed,
     ))
     db.flush()

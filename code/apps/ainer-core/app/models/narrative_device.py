@@ -269,6 +269,11 @@ class BackTranslationCheck(Base, StdMixin):
 
     missing_beats: Mapped[list | None] = mapped_column(JSONB)
     lost_devices: Mapped[list | None] = mapped_column(JSONB)
-    added_content: Mapped[list | None] = mapped_column(JSONB)
+    #: 与情节骨架**矛盾**之处。不是「原文没有的内容」——
+    #: 回译校验刻意不给模型看原文（给了它会照抄），
+    #: 所以它无从判断什么是原文没有的，只能拿骨架当原文，
+    #: 而骨架是梗概、不含细节动作，于是每个细节都被报成新增。
+    #: 问模型「与骨架是否矛盾」它才有依据回答。
+    contradictions: Mapped[list | None] = mapped_column(JSONB)
     notes: Mapped[str | None] = mapped_column(Text)
     passed: Mapped[bool] = mapped_column(default=False, nullable=False)

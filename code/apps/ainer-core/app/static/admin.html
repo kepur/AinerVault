@@ -1331,8 +1331,8 @@ const Prose = {
             <div class="k">装置命中</div><div class="v">${pct(r.device_landing)}</div></div>
           <div class="step ${r.emotion_match>=0.9?'done':'blocked'}">
             <div class="k">情绪吻合</div><div class="v">${pct(r.emotion_match)}</div></div>
-          <div class="step ${r.added_content.length?'blocked':'done'}">
-            <div class="k">私自增添</div><div class="v">${r.added_content.length}</div></div>
+          <div class="step ${r.contradictions.length?'blocked':'done'}">
+            <div class="k">与骨架矛盾</div><div class="v">${r.contradictions.length}</div></div>
         </div>
         ${r.verdict?`<p class="hint" style="color:var(--body)">${h(r.verdict)}</p>`:""}
         ${r.missing_beats.length?`<h2 style="font-size:13px;margin-top:14px">丢失的情节点</h2>
@@ -1348,9 +1348,9 @@ const Prose = {
             <td>${h(d.source_text)}</td>
             <td style="color:var(--muted)">${h(d.mechanism)}</td>
           </tr>`).join("")}</tbody></table></div>`:""}
-        ${r.added_content.length?`<h2 style="font-size:13px;margin-top:14px">原文没有的内容</h2>
+        ${r.contradictions.length?`<h2 style="font-size:13px;margin-top:14px">与情节骨架矛盾之处</h2>
           <ul style="margin:0;padding-left:18px;color:var(--danger)">${
-            r.added_content.map(x=>`<li>${h(x)}</li>`).join("")}</ul>`:""}
+            r.contradictions.map(x=>`<li>${h(x)}</li>`).join("")}</ul>`:""}
       </div>`;
       $("#check-box").scrollIntoView({behavior:"smooth", block:"nearest"});
     }, "回译中");
