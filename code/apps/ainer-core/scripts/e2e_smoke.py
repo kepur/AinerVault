@@ -65,6 +65,11 @@ def main() -> int:
                     help="源圈层:目标圈层 的 profile code")
     ap.add_argument("--lang", default="ru-RU")
     ap.add_argument("--title", default=None)
+    ap.add_argument("--mode", choices=("prose", "script"), default="prose",
+                    help="prose 译本线（规则分块，零成本）／script 成片线"
+                         "（LLM 拆场景，产出时间地点天气情绪）")
+    ap.add_argument("--stop-after", default=None,
+                    help="跑到某一步就停，如 --stop-after ⑨。调翻译链时不必等完")
     args = ap.parse_args()
 
     src_code, tgt_code = args.pair.split(":")
@@ -99,28 +104,51 @@ def main() -> int:
     R.call("POST", f"/transforms/{tf['id']}:activate")
     print(f"书 {nv['id']}　映射 {tf['id']}　{src_code} → {tgt_code}\n", flush=True)
 
+    #: 译本线用规则分块（零成本），成片线用 LLM 拆场景 ——
+    #: 后者多出时间/地点/天气/情绪，那是分镜的输入，译本用不上。
+    if args.mode == "script":
+        step_one = ("①", "拆剧本", lambda c: R.call(
+            "POST", f"/chapters/{c}/script:generate",
+            {"scene_granularity": "medium", "confirm_discard_edits": True}))
+    else:
+        step_one = ("①", "分块", lambda c: R.call(
+            "POST", f"/chapters/{c}/prose:build", {"force": True}))
+
     per_chapter = [
-        ("①", "分块", lambda c: R.call("POST", f"/chapters/{c}/prose:build", {"force": True})),
+        step_one,
         ("②", "实体+称呼", lambda c: R.call("POST", f"/chapters/{c}/entities:extract", {})),
         ("③", "装置", lambda c: R.call("POST", f"/chapters/{c}/devices:extract", {})),
         ("④", "梗", lambda c: R.call("POST", f"/chapters/{c}/memes:extract", {})),
         ("⑤", "名物", lambda c: R.call(
             "POST", f"/transforms/{tf['id']}/lexicon:survey?chapter_id={c}")),
     ]
+    def stop_here(tag: str) -> bool:
+        return bool(args.stop_after) and tag > args.stop_after
+
     for tag, label, fn in per_chapter:
+        if stop_here(tag):
+            break
         for i, c in enumerate(chs, 1):
             R.step(tag, f"{label} ch{i}", lambda c=c, fn=fn: fn(c))
 
-    R.step("⑥", "命名+称呼定形",
-           lambda: R.call("POST", f"/transforms/{tf['id']}/names:suggest", {}))
-    R.step("⑦", "梗呈现",
-           lambda: R.call("POST", f"/transforms/{tf['id']}/memes:render", {}))
-    R.step("⑧", "门禁", lambda: R.call("GET", f"/transforms/{tf['id']}/preflight"))
+    if not stop_here("⑥"):
+        R.step("⑥", "命名+称呼定形",
+               lambda: R.call("POST", f"/transforms/{tf['id']}/names:suggest", {}))
+    if not stop_here("⑦"):
+        R.step("⑦", "梗呈现",
+               lambda: R.call("POST", f"/transforms/{tf['id']}/memes:render", {}))
+    if not stop_here("⑧"):
+        R.step("⑧", "门禁",
+               lambda: R.call("GET", f"/transforms/{tf['id']}/preflight"))
     for i, c in enumerate(chs, 1):
+        if stop_here("⑨"):
+            break
         R.step("⑨", f"翻译 ch{i}", lambda c=c: R.call(
             "POST", f"/chapters/{c}/translation/{args.lang}:run",
             {"only_missing": False, "force": True, "mode": "adaptive"}))
     for i, c in enumerate(chs, 1):
+        if stop_here("⑩a"):
+            break
         R.step("⑩a", f"违规审查 ch{i}",
                lambda c=c: R.call("POST", f"/chapters/{c}/prose:review", {}))
         R.step("⑩b", f"回译校验 ch{i}", lambda c=c: R.call(

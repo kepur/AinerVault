@@ -322,6 +322,7 @@ const GROUPS = [
     {id:"world",    ico:"🌍", name:"映射与词表", sub:"映射 · 名物词表 · 人名 · 称呼"},
     {id:"model",    ico:"🧩", name:"世界模型", sub:"人物 · 场景 · 道具 · 节拍 · 风格"},
     {id:"culture",  ico:"🎭", name:"文化梗", sub:"网络梗 · 典故 · 九档呈现策略"},
+    {id:"prompts",  ico:"🖼", name:"提示词台账", sub:"素材生图提示词 · 依据 · 引用"},
   ]},
   {id:"g-trans", name:"译本", pages:[
     {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 装置 → 翻译 → 审核 → 回译 → 锁定"},
@@ -1849,6 +1850,109 @@ const Staging = {
   },
 };
 
+
+// ───────────────────────── 提示词台账 ─────────────────────────
+const KIND_CN = {
+  character:"人物", costume:"服装", prop:"道具", location:"场景",
+  style:"风格", voice:"音色", sfx:"音效", bgm:"配乐", room_tone:"环境声",
+};
+
+const Prompts = {
+  async render(v) {
+    if (!State.transformId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「映射与词表」选一个世界观映射</div></div>`;
+      return;
+    }
+    const kind = this.kind || "";
+    const q = this.q || "";
+    const url = `/transforms/${State.transformId}/prompt-ledger`
+      + (kind || q ? `?${kind?`kind=${encodeURIComponent(kind)}&`:""}${q?`q=${encodeURIComponent(q)}`:""}` : "");
+    const d = await api("GET", url).catch(()=>null);
+    if (!d) {
+      v.innerHTML = `<div class="card"><div class="empty">读取失败</div></div>`;
+      return;
+    }
+    v.innerHTML = `
+      <div class="card">
+        <h2>生图提示词台账
+          <span class="sub mono" style="color:var(--muted)">${d.with_prompt}/${d.total}</span>
+          ${d.missing_prompt?`<span class="tag t-warn">${d.missing_prompt} 缺提示词</span>`:""}
+          ${d.unused?`<span class="tag t-mute">${d.unused} 未被镜头引用</span>`:""}
+        </h2>
+        <p class="hint">提示词散在各条素材里就等于没有。
+          改一条之前必须知道它<b>影响哪些镜头</b> —— 否则是盲改：
+          一个道具的描述改了，可能连带十几个镜头的画面全变，而改的人完全不知情。<br>
+          所以这里把三件事拼在一起：<b>提示词本身</b>（改什么）、
+          <b>依据的原文</b>（为什么是这样）、<b>被谁引用</b>（改了会影响什么）。<br>
+          <span style="color:var(--muted)">目标世界观：${h(d.profile.display_name)}</span></p>
+        <div class="row" style="margin-bottom:10px">
+          <select id="pl-kind" style="width:auto;min-width:130px"
+                  onchange="Prompts.setKind(this.value)">
+            <option value="">全部类型</option>
+            ${Object.entries(d.by_kind).map(([k,n])=>
+              `<option value="${h(k)}" ${k===kind?"selected":""}>${h(KIND_CN[k]||k)}（${n}）</option>`).join("")}
+          </select>
+          <input id="pl-q" placeholder="搜名称或提示词内容" value="${h(q)}"
+                 style="max-width:260px" onkeydown="if(event.key==='Enter')Prompts.setQ(this.value)">
+          <button class="btn sm" onclick="Prompts.setQ(($('#pl-q')||{}).value)">搜索</button>
+          <a class="btn sm" href="/api/v2/transforms/${State.transformId}/prompt-ledger/export"
+             target="_blank">导出全部</a>
+        </div>
+        ${d.items.length ? d.items.map(i => `
+          <div class="gap" style="margin-bottom:8px">
+            <div class="gh">
+              <span class="tag t-mute">${h(KIND_CN[i.kind]||i.kind)}</span>
+              <b style="color:var(--ink)">${h(i.source_name)}</b>
+              <span style="color:var(--muted)">→</span>
+              <span style="color:var(--accent)">${h(i.target_name||"（未定形）")}</span>
+              <span class="tag ${i.status==="locked"?"t-ok":i.status==="missing"?"t-bad":"t-mute"}"
+                >${h(i.status)}</span>
+              ${i.used_by_shots
+                ? `<span class="tag t-info">${i.used_by_shots} 镜引用</span>`
+                : `<span class="tag t-mute" title="还没有镜头用到它">未引用</span>`}
+              ${(i.missing_fields||[]).length
+                ? `<span class="tag t-warn">缺 ${i.missing_fields.join("、")}</span>`:""}
+              <span class="mono" style="color:var(--muted);font-size:11px;margin-left:auto"
+                >${i.prompt_chars} 字</span>
+            </div>
+            ${i.visual_prompt ? `
+              <textarea id="pp-${i.variant_id}" rows="2"
+                style="font-family:var(--mono);font-size:12px">${h(i.visual_prompt)}</textarea>
+              ${i.negative_prompt?`<div class="sub mono" style="color:var(--danger);font-size:11px;margin-top:4px">
+                negative: ${h(i.negative_prompt)}</div>`:""}
+              <div class="acts">
+                <button class="btn sm" onclick="Prompts.save('${i.variant_id}',this)">保存</button>
+              </div>
+            ` : `<div class="sub" style="color:var(--warn);font-size:12.5px">
+                   还没有提示词 —— 在「世界模型」里为该素材生成变体</div>`}
+            ${(i.evidence||[]).length ? `
+              <details style="margin-top:7px">
+                <summary style="cursor:pointer;color:var(--muted);font-size:11.5px">
+                  原文依据（${i.evidence.length}）</summary>
+                ${i.evidence.slice(0,4).map(e=>
+                  `<div class="sub" style="color:var(--body);font-size:12px;margin-top:4px">
+                     「${h(String(e))}」</div>`).join("")}
+              </details>` : ""}
+            ${i.rationale?`<div class="sub" style="color:var(--muted);font-size:11.5px;margin-top:5px">
+               ${h(i.rationale)}</div>`:""}
+          </div>`).join("")
+        : `<div class="empty">没有匹配的素材</div>`}
+      </div>
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  setKind(k) { this.kind = k; App.refresh(); },
+  setQ(v) { this.q = (v||"").trim(); App.refresh(); },
+  async save(vid, btn) {
+    const el = $(`#pp-${vid}`);
+    await run(btn, async () => {
+      await api("PATCH", `/asset-variants/${vid}`,
+                {visual_prompt: (el?el.value:"").trim()});
+      logOk("提示词已保存"); App.refresh();
+    }, "保存");
+  },
+};
+
 // ───────────────────────── 任务 ─────────────────────────
 const Tasks = {
   async render(v) {
@@ -1961,7 +2065,7 @@ const App = {
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
-               culture:Culture, review:Review, staging:Staging,
+               culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {

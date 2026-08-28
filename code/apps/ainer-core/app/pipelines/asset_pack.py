@@ -482,3 +482,124 @@ def _chunks(items: Sequence[Any], size: int):
 def _dump(payload: Any) -> str:
     import json
     return json.dumps(payload, ensure_ascii=False, indent=1)
+
+
+def prompt_ledger(
+    db: Session, transform: WorldTransform, *,
+    kind: str | None = None, q: str | None = None,
+) -> dict[str, Any]:
+    """生图提示词台账：每条素材的提示词、来源、状态、被哪些镜头用到。
+
+    提示词散在各条素材记录里就等于没有 —— 改一条之前必须先知道
+    它会影响哪些镜头，否则是盲改：一个道具的描述改了，
+    可能连带十几个镜头的画面全变，而改的人完全不知情。
+
+    所以台账把三件事拼在一起：
+        提示词本身      改什么
+        来源与证据      为什么是这样（原文哪句支持）
+        被谁引用        改了会影响什么
+    """
+    from app.models import FrameSpec, Shot, ShotAssetBinding, ShotPlan
+
+    profile = db.get(WorldProfile, transform.target_profile_id)
+    if profile is None:
+        raise PipelineError("目标世界观档案缺失")
+
+    rows = list(db.execute(
+        select(AssetSpec, AssetVariant)
+        .outerjoin(
+            AssetVariant,
+            (AssetVariant.asset_spec_id == AssetSpec.id)
+            & (AssetVariant.world_profile_id == profile.id),
+        )
+        .where(AssetSpec.novel_id == transform.novel_id)
+        .order_by(AssetSpec.kind, AssetSpec.display_name)
+    ))
+
+    # 引用计数：一条素材被多少个镜头绑定。改之前要知道波及面
+    usage: dict[str, int] = {}
+    for b in db.execute(select(ShotAssetBinding)).scalars():
+        if b.asset_spec_id:
+            usage[b.asset_spec_id] = usage.get(b.asset_spec_id, 0) + 1
+
+    items: list[dict[str, Any]] = []
+    for spec, var in rows:
+        if kind and spec.kind.value != kind:
+            continue
+        if q:
+            hay = " ".join(filter(None, [
+                spec.display_name, spec.canonical_key,
+                var.target_name if var else "",
+                var.visual_prompt if var else "",
+            ])).lower()
+            if q.lower() not in hay:
+                continue
+        items.append({
+            "spec_id": spec.id,
+            "variant_id": var.id if var else None,
+            "kind": spec.kind.value,
+            "canonical_key": spec.canonical_key,
+            "source_name": spec.display_name,
+            "target_name": var.target_name if var else None,
+            "visual_prompt": var.visual_prompt if var else None,
+            "negative_prompt": var.negative_prompt if var else None,
+            "structured": (var.structured_json if var else None) or {},
+            "ref_count": len(var.ref_asset_ids or []) if var else 0,
+            "status": var.status.value if var else "missing",
+            # AssetVariant 用 status=locked 表示锁定，没有独立的 locked 布尔
+            "locked": bool(var and var.status is ReviewStatus.locked),
+            # 完整度检查留下的缺项。有缺项的提示词生成出来会缺关键描述
+            "missing_fields": (var.missing_fields if var else None) or [],
+            "rationale": var.rationale if var else None,
+            # 证据链：这条素材的依据是原文哪几句。
+            # evidence_json 是 {chapter_ids, excerpts} 而不是列表 ——
+            # 当成列表取会静默得到一个 dict，前端渲染成一堆键名
+            "evidence": (spec.evidence_json or {}).get("excerpts") or [],
+            "from_chapters": (spec.evidence_json or {}).get("chapter_ids") or [],
+            "aliases": spec.aliases_json or [],
+            "importance": spec.importance,
+            "origin": spec.source.value,
+            "used_by_shots": usage.get(spec.id, 0),
+            "prompt_chars": len(var.visual_prompt or "") if var else 0,
+        })
+
+    missing = [i for i in items if not i["visual_prompt"]]
+    return {
+        "transform_id": transform.id,
+        "profile": {"id": profile.id, "code": profile.code,
+                    "display_name": profile.display_name},
+        "total": len(items),
+        "with_prompt": len(items) - len(missing),
+        "missing_prompt": len(missing),
+        "unused": sum(1 for i in items if i["used_by_shots"] == 0),
+        "by_kind": {
+            k: sum(1 for i in items if i["kind"] == k)
+            for k in sorted({i["kind"] for i in items})
+        },
+        "items": items,
+    }
+
+
+def export_prompts(db: Session, transform: WorldTransform) -> str:
+    """把台账导成纯文本，便于贴进别的工具或存档比对。
+
+    只导有提示词的条目 —— 导出一堆空行没有意义。
+    """
+    led = prompt_ledger(db, transform)
+    lines = [
+        f"# 生图提示词台账　{led['profile']['display_name']}",
+        f"# {led['with_prompt']}/{led['total']} 条已生成",
+        "",
+    ]
+    for kind in sorted(led["by_kind"]):
+        group = [i for i in led["items"] if i["kind"] == kind and i["visual_prompt"]]
+        if not group:
+            continue
+        lines.append(f"## {kind}（{len(group)}）")
+        for i in group:
+            lines.append(f"### {i['source_name']} → {i['target_name'] or '—'}")
+            lines.append(i["visual_prompt"])
+            if i["negative_prompt"]:
+                lines.append(f"[negative] {i['negative_prompt']}")
+            lines.append("")
+    return "\n".join(lines)

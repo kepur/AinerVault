@@ -183,6 +183,29 @@ def get_pack_status(transform_id: str, db: Session = Depends(get_db)) -> dict:
     return pack.pack_status(db, _transform(db, transform_id))
 
 
+@router.get("/transforms/{transform_id}/prompt-ledger")
+def prompt_ledger(transform_id: str, kind: str | None = None,
+                  q: str | None = None, db: Session = Depends(get_db)) -> dict:
+    """生图提示词台账。
+
+    提示词散在各条素材里就等于没有：改一条之前必须知道它影响哪些镜头，
+    否则是盲改 —— 一个道具的描述改了，可能连带十几个镜头的画面全变。
+    台账把「提示词本身 / 依据的原文 / 被谁引用」拼在一起。
+    """
+    return pack.prompt_ledger(db, _transform(db, transform_id), kind=kind, q=q)
+
+
+@router.get("/transforms/{transform_id}/prompt-ledger/export")
+def export_prompt_ledger(transform_id: str, db: Session = Depends(get_db)):
+    """导出为纯文本，便于存档比对或贴进别的工具。"""
+    from fastapi.responses import PlainTextResponse
+
+    text = pack.export_prompts(db, _transform(db, transform_id))
+    return PlainTextResponse(text, headers={
+        "Content-Disposition": f'attachment; filename="prompts-{transform_id}.md"'
+    })
+
+
 class VariantPatch(BaseModel):
     target_name: str | None = None
     target_reading: str | None = None
