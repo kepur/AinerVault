@@ -138,13 +138,29 @@ def main() -> int:
         R.step("⑦", "梗呈现",
                lambda: R.call("POST", f"/transforms/{tf['id']}/memes:render", {}))
     if not stop_here("⑧"):
-        R.step("⑧", "门禁",
-               lambda: R.call("GET", f"/transforms/{tf['id']}/preflight"))
+        gate = R.step("⑧", "门禁",
+                      lambda: R.call("GET", f"/transforms/{tf['id']}/preflight"))
+        # 门禁不通过时**必须先审词表再翻译**。
+        # 未审核的词条一条都不会进翻译提示词 —— 带 force 硬翻，
+        # 等于没有名物词表，译名各章各样。
+        # 第二轮端到端就是这么跑的，结果 25 条 lexicon_miss。
+        # 冒烟里用批量通过代替人审：不是流程简化，是把人的那一步自动化，
+        # 走的仍是同一条路径。
+        if isinstance(gate, dict) and not gate.get("ready"):
+            lex = R.call("GET", f"/transforms/{tf['id']}/lexicon")
+            ids = [r["id"] for r in (lex if isinstance(lex, list) else [])
+                   if r.get("target_term") and r.get("status") == "candidate"]
+            if ids:
+                R.step("⑧b", f"审核词表（{len(ids)} 条）", lambda: R.call(
+                    "POST", f"/transforms/{tf['id']}/lexicon:batch-approve",
+                    {"ids": ids}))
     for i, c in enumerate(chs, 1):
         if stop_here("⑨"):
             break
         R.step("⑨", f"翻译 ch{i}", lambda c=c: R.call(
             "POST", f"/chapters/{c}/translation/{args.lang}:run",
+            # force 只跳过门禁的**其余**检查；词表已在 ⑧b 审过，
+            # 所以这一步拿到的是真正注入了名物对照的译文
             {"only_missing": False, "force": True, "mode": "adaptive"}))
     for i, c in enumerate(chs, 1):
         if stop_here("⑩a"):

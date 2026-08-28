@@ -240,7 +240,12 @@ def preflight(db: Session, transform: WorldTransform,
     if unreviewed:
         issues.append(PreflightIssue(
             "lexicon_unreviewed", "blocking",
-            f"{len(unreviewed)} 条高频名物仍是候选状态，未经审核",
+            # 说清后果。只说「未经审核」，人会以为那只是个流程标记，
+            # 带 force 跳过就完事了 —— 而实际后果是这些词条
+            # 一条都不会进入翻译提示词，模型全靠自己发挥。
+            f"{len(unreviewed)} 条高频名物仍是候选状态。"
+            f"**未审核的词条不会注入翻译提示词** —— "
+            f"现在翻译等于没有名物词表，译名会各章各样",
             len(unreviewed), [f"{h['source']}→{h['target']}" for h in unreviewed[:8]],
         ))
 
