@@ -69,13 +69,103 @@ class CulturalLoad(str, Enum):
 
 
 class DeviceStrategy(str, Enum):
-    """改编策略。high 文化依赖的装置不该硬翻。"""
+    """改编策略阶梯。从「照搬」到「舍弃」，代价递增。
 
-    preserve = "preserve"      # 直接重铸，机制照搬
-    substitute = "substitute"  # 换成目标文化的等价装置
-    compensate = "compensate"  # 此处丢失，在附近补一个同效果的
-    relocate = "relocate"      # 移到别处实现
-    drop = "drop"              # 放弃（只在低价值时）
+    「能不能翻」不是是非题，是选哪一档的问题。选错的代价不对称：
+    该 substitute 的用了 footnote，读者出戏；
+    该 gloss 的用了 preserve，读者一脸茫然还以为自己没读懂。
+
+    前四档不出戏 —— 读者读到的仍是故事：
+      preserve    直接重铸，机制照搬。机制本身跨文化通用时用。
+      substitute  换成目标文化里承担同样功能的等价物。
+      transplant  整体移植：换一个目标文化的梗，字面全变、效果对齐。
+      naturalize  归化重写：整段按目标文化的表达习惯重来，不留源文痕迹。
+
+    中间两档要付出「读者意识到这是译文」的代价：
+      gloss_inline 行内轻注：在句子里自然带出必要背景，不加括号不打断。
+                   代价最小的解释手段，但会让句子变长、节奏变慢。
+      footnote     脚注：正文保留原样，注释单列。信息最完整、出戏最狠，
+                   只用于「这个典故本身就是内容」的场合。
+
+    最后两档是止损：
+      compensate  此处认赔，在附近补一个同效果的装置，总量守恒。
+      relocate    移到别处实现。
+      omit        舍弃。强行保留反而伤害阅读时才用。
+    """
+
+    preserve = "preserve"
+    substitute = "substitute"
+    transplant = "transplant"
+    naturalize = "naturalize"
+    gloss_inline = "gloss_inline"
+    footnote = "footnote"
+    compensate = "compensate"
+    relocate = "relocate"
+    omit = "omit"
+
+
+class PlotLoad(str, Enum):
+    """这处装置承载多少情节。决定「能不能舍」。
+
+    纯修辞的笑点舍了只是可惜；伏笔舍了，后文的回扣就落空 ——
+    读者不会觉得「这里少了个梗」，只会觉得「后面那段莫名其妙」。
+    所以承载情节的装置永远不能 omit，宁可 footnote。
+    """
+
+    none = "none"          # 纯修辞，舍了只损失趣味
+    flavor = "flavor"      # 塑造人物或氛围，舍了角色变薄
+    setup = "setup"        # 伏笔，后文有回扣，舍了后文断裂
+    pivot = "pivot"        # 情节转折本身就靠它，绝不可舍
+
+
+class Volatility(str, Enum):
+    """时效性。网络梗会过期 —— 三年后没人知道「绝绝子」是什么。
+
+    高时效的梗直译到目标语言更糟：目标读者既不懂源文化，
+    这个梗在源文化里也快死了，等于为一个即将消失的东西付出理解成本。
+    """
+
+    evergreen = "evergreen"  # 成语、经典典故，几百年不变
+    decade = "decade"        # 一代人的共同记忆
+    years = "years"          # 几年热度的流行语
+    months = "months"        # 短命网络梗
+
+
+def choose_strategy(
+    load: CulturalLoad, plot: PlotLoad, vol: Volatility,
+) -> DeviceStrategy:
+    """三维定策略。只看文化依赖度会做出两类错判。
+
+    第一类：高依赖 + 承载情节。按依赖度该「舍了补偿」，
+    但那是伏笔 —— 舍了后文回扣就落空。这种宁可 footnote 出戏，
+    也不能让读者在三十页后遇到一个没有来处的呼应。
+
+    第二类：高依赖 + 短命网络梗。按依赖度该费力找等价物，
+    可这梗在源文化里都快死了，值不上目标读者的理解成本 ——
+    直接归化重写，读者拿到的是效果，不是考古。
+
+    返回的是默认值，人工与模型都可覆盖。
+    """
+    # 情节转折靠它 —— 无论多难翻都必须让读者拿到，代价其次
+    if plot is PlotLoad.pivot:
+        return (
+            DeviceStrategy.substitute if load is not CulturalLoad.high
+            else DeviceStrategy.gloss_inline
+        )
+    # 伏笔要留住指向性，等价物找不到就轻注，绝不舍
+    if plot is PlotLoad.setup and load is CulturalLoad.high:
+        return DeviceStrategy.gloss_inline
+    # 短命梗不值得考古，直接按目标习惯重写
+    if vol in (Volatility.months, Volatility.years) and load is CulturalLoad.high:
+        return DeviceStrategy.naturalize
+    return {
+        CulturalLoad.low: DeviceStrategy.preserve,
+        CulturalLoad.medium: DeviceStrategy.substitute,
+        CulturalLoad.high: (
+            DeviceStrategy.transplant if plot is PlotLoad.flavor
+            else DeviceStrategy.compensate
+        ),
+    }[load]
 
 
 class NarrativeDevice(Base, StdMixin):
@@ -112,6 +202,14 @@ class NarrativeDevice(Base, StdMixin):
     punch: Mapped[str | None] = mapped_column(Text)
     #: 强度 1–5，决定这处丢了要不要补偿
     intensity: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    #: 承载多少情节 —— 决定「能不能舍」
+    plot_load: Mapped[PlotLoad] = mapped_column(default=PlotLoad.none, nullable=False)
+    #: 时效性 —— 短命网络梗不值得让目标读者付理解成本
+    volatility: Mapped[Volatility] = mapped_column(
+        default=Volatility.evergreen, nullable=False
+    )
+    #: 走 gloss_inline / footnote 时的注释文本
+    gloss_text: Mapped[str | None] = mapped_column(Text)
     #: 依赖哪些源文化知识才能 get
     depends_on: Mapped[list | None] = mapped_column(JSONB)
     #: 目标文化下的重铸方案（阶段 2 产出）

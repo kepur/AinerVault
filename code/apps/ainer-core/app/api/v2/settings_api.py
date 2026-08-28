@@ -15,7 +15,9 @@ from app.capability.errors import CapabilityError
 from app.capability.schemas import Capability, CapabilityCatalog
 from app.db import get_db
 from app.ids import new_id
-from app.models import CapabilityEndpoint, CapabilityRoute, utcnow
+from app.models import (
+    DEFAULT_TIER, CapabilityEndpoint, CapabilityRoute, QualityTier, utcnow,
+)
 
 router = APIRouter(prefix="/api/v2/settings", tags=["settings"])
 
@@ -73,6 +75,7 @@ class EndpointOut(BaseModel):
 class RouteIn(BaseModel):
     capability: str
     purpose: str = "*"
+    tier: str = "*"
     endpoint_id: str
     model: str | None = None
     default_params: dict = Field(default_factory=dict)
@@ -227,18 +230,48 @@ def aggregated_capabilities(db: Session = Depends(get_db)) -> dict:
     }
 
 
+_TIERS = ("*", *[t.value for t in QualityTier])
+
+
+@router.get("/tiers")
+def list_tiers() -> dict:
+    """档位定义与各用途的默认档。后台据此渲染路由表。"""
+    return {
+        "tiers": [
+            {"value": "*", "name": "通用",
+             "hint": "不分档，任何档位的调用都落到它。只接了一个模型时填这个即可"},
+            {"value": "draft", "name": "快速",
+             "hint": "批量、结构化、错了立刻能发现的活。分块、切镜、素材参数"},
+            {"value": "standard", "name": "标准",
+             "hint": "默认档。大部分内容生成"},
+            {"value": "premium", "name": "高级",
+             "hint": "判断吃重、错了藏得住的活。命名、装置、梗、翻译"},
+            {"value": "critical", "name": "终审",
+             "hint": "结论直接决定要不要返工。文化差异审查、回译校验"},
+        ],
+        "defaults": {k: v.value for k, v in DEFAULT_TIER.items()},
+        "note": (
+            "回落顺序：(用途,档位) → (用途,*) → (*,档位) → (*,*)。"
+            "用途优先于档位 —— 给翻译单接了一个调过的模型时，"
+            "它应该胜过任何档位规则。"
+        ),
+    }
+
+
 # ── 路由 ──────────────────────────────────────────────────────────────────────
 
 @router.get("/routes")
 def list_routes(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.execute(
         select(CapabilityRoute).order_by(
-            CapabilityRoute.capability, CapabilityRoute.purpose, CapabilityRoute.priority
+            CapabilityRoute.capability, CapabilityRoute.purpose,
+            CapabilityRoute.tier, CapabilityRoute.priority,
         )
     ).scalars()
     return [
         {
             "id": r.id, "capability": r.capability, "purpose": r.purpose,
+            "tier": r.tier,
             "endpoint_id": r.endpoint_id, "model": r.model,
             "default_params": r.default_params or {}, "priority": r.priority,
             "enabled": r.enabled,
@@ -257,6 +290,11 @@ def replace_routes(body: list[RouteIn], db: Session = Depends(get_db)) -> dict:
             raise HTTPException(status_code=400, detail=f"未知端点 {r.endpoint_id}")
         if r.capability not in known_caps:
             raise HTTPException(status_code=400, detail=f"未知能力 {r.capability}")
+        if r.tier not in _TIERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"档位只能是 {'/'.join(_TIERS)}，收到 {r.tier}",
+            )
 
     for old in db.execute(select(CapabilityRoute)).scalars().all():
         db.delete(old)
@@ -265,7 +303,7 @@ def replace_routes(body: list[RouteIn], db: Session = Depends(get_db)) -> dict:
     for r in body:
         db.add(CapabilityRoute(
             id=new_id("rt"), capability=r.capability, purpose=r.purpose,
-            endpoint_id=r.endpoint_id, model=r.model,
+            tier=r.tier, endpoint_id=r.endpoint_id, model=r.model,
             default_params=r.default_params, priority=r.priority, enabled=r.enabled,
         ))
     db.flush()

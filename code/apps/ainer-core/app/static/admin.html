@@ -34,20 +34,70 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-
 textarea{font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertical}
 
 /* layout */
-.app{display:grid;grid-template-columns:200px 1fr;min-height:100vh}
-.side{background:var(--panel);border-right:1px solid var(--line);padding:16px 0;
-      display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-.brand{padding:0 18px 16px;border-bottom:1px solid var(--line-soft);margin-bottom:10px}
-.brand b{color:var(--ink);font-size:14px;letter-spacing:.02em}
-.brand span{display:block;font:11px/1.5 var(--mono);color:var(--muted);margin-top:3px}
-.nav{display:flex;flex-direction:column;gap:1px;padding:0 8px}
-.nav button{display:flex;align-items:center;gap:9px;background:none;border:0;color:var(--body);
-  padding:9px 10px;border-radius:6px;text-align:left;font-size:13.5px}
-.nav button:hover{background:var(--panel-2);color:var(--ink)}
-.nav button.on{background:var(--accent-dim);color:var(--accent);font-weight:600}
-.nav .ico{width:17px;text-align:center;opacity:.85}
-.side-foot{margin-top:auto;padding:12px 18px 0;border-top:1px solid var(--line-soft);
-  font:11px/1.6 var(--mono);color:var(--muted)}
+.app{display:grid;grid-template-columns:var(--sidew,214px) 1fr;min-height:100vh;
+     transition:grid-template-columns .2s cubic-bezier(.2,.8,.3,1)}
+.app.collapsed{--sidew:56px}
+.side{background:var(--panel);border-right:1px solid var(--line);padding:14px 0;
+      display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
+.brand{padding:0 16px 13px;border-bottom:1px solid var(--line-soft);margin-bottom:8px;
+       display:flex;align-items:center;gap:9px}
+.brand .mark{width:24px;height:24px;border-radius:6px;background:var(--accent);
+  color:var(--accent-ink);display:grid;place-items:center;font:700 13px var(--mono);flex:none}
+.brand .txt{min-width:0;overflow:hidden}
+.brand b{color:var(--ink);font-size:13.5px;letter-spacing:.02em;display:block;white-space:nowrap}
+.brand span{display:block;font:10.5px/1.4 var(--mono);color:var(--muted);white-space:nowrap}
+.collapsed .brand .txt{display:none}
+
+/* 折叠开关：贴在侧栏右缘，不占菜单位置 */
+.sidetoggle{position:absolute;left:calc(var(--sidew,214px) - 11px);top:17px;z-index:30;
+  width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
+  color:var(--muted);display:grid;place-items:center;font-size:10px;padding:0;
+  transition:left .2s cubic-bezier(.2,.8,.3,1),transform .2s,color .12s}
+.sidetoggle:hover{color:var(--accent);border-color:var(--accent)}
+.collapsed .sidetoggle{transform:rotate(180deg)}
+
+.nav{display:flex;flex-direction:column;gap:1px;padding:0 7px;overflow-y:auto;overflow-x:hidden}
+.nav::-webkit-scrollbar{width:5px}
+.nav::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+
+.navgrp{margin-top:9px}
+.navgrp:first-child{margin-top:0}
+.navgrp>.gh{display:flex;align-items:center;gap:6px;width:100%;background:none;border:0;
+  color:var(--muted);font:10px/1.6 var(--mono);letter-spacing:.13em;text-transform:uppercase;
+  padding:6px 9px 4px;text-align:left}
+.navgrp>.gh:hover{color:var(--body)}
+.navgrp>.gh .caret{margin-left:auto;font-size:8px;transition:transform .18s;opacity:.6}
+.navgrp.shut>.gh .caret{transform:rotate(-90deg)}
+.navgrp .items{display:grid;grid-template-rows:1fr;transition:grid-template-rows .2s ease}
+.navgrp.shut .items{grid-template-rows:0fr}
+.navgrp .items>div{overflow:hidden;min-height:0}
+.collapsed .navgrp>.gh{display:none}
+.collapsed .navgrp .items{grid-template-rows:1fr!important}
+
+.nav button.item{display:flex;align-items:center;gap:10px;background:none;border:0;
+  color:var(--body);padding:8px 9px;border-radius:7px;text-align:left;font-size:13.5px;
+  width:100%;position:relative;transition:background .12s,color .12s}
+.nav button.item:hover{background:var(--panel-2);color:var(--ink)}
+.nav button.item:active{transform:scale(.975)}
+.nav button.item.on{background:var(--accent-dim);color:var(--accent);font-weight:600}
+.nav button.item.on::before{content:"";position:absolute;left:-7px;top:7px;bottom:7px;width:2.5px;
+  border-radius:0 2px 2px 0;background:var(--accent)}
+.nav .ico{width:18px;text-align:center;flex:none;font-size:14px}
+.nav .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.collapsed .nav .lbl{display:none}
+.collapsed .nav button.item{justify-content:center;padding:9px 0}
+/* 收起后靠悬浮标签认菜单 */
+.collapsed .nav button.item:hover .lbl{display:block;position:absolute;left:calc(100% + 9px);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;
+  font-size:12.5px;color:var(--ink);z-index:40;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+.navbadge{margin-left:auto;font:9.5px/1.4 var(--mono);background:var(--accent-dim);
+  color:var(--accent);padding:1px 5px;border-radius:8px;flex:none}
+.collapsed .navbadge{position:absolute;top:4px;right:6px;margin:0;padding:0;
+  width:6px;height:6px;border-radius:50%;font-size:0;background:var(--accent)}
+.side-foot{margin-top:auto;padding:11px 16px 0;border-top:1px solid var(--line-soft);
+  font:11px/1.6 var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden}
+.collapsed .side-foot{padding:11px 0 0;text-align:center}
+.collapsed .side-foot .fl{display:none}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:5px}
 .dot.ok{background:var(--ok)} .dot.bad{background:var(--danger)}
 
@@ -60,7 +110,10 @@ textarea{font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertic
 .content{padding:22px;max-width:1240px;width:100%}
 
 /* bits */
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-bottom:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin-bottom:13px;transition:border-color .15s}
+.card:hover{border-color:var(--line)}
+.card h2 .tag{margin-left:7px;vertical-align:1px}
 .card h2{margin:0 0 4px;font-size:14px;color:var(--ink);font-weight:600}
 .card .hint{margin:0 0 14px;font-size:12.5px;color:var(--muted);max-width:70ch}
 .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
@@ -71,16 +124,33 @@ label{display:block;font:11px/1.7 var(--mono);color:var(--muted);letter-spacing:
       text-transform:uppercase;margin-bottom:3px}
 
 .btn{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
-  padding:7px 13px;border-radius:6px;font-size:13px;white-space:nowrap;transition:.12s}
+  padding:7px 13px;border-radius:7px;font-size:13px;white-space:nowrap;position:relative;
+  overflow:hidden;transition:border-color .13s,color .13s,transform .08s,box-shadow .13s}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
-.btn:disabled{opacity:.45;cursor:not-allowed}
+/* 按下去要有回应 —— 没有反馈的按钮会被连点，然后撞幂等键 */
+.btn:active{transform:translateY(1px) scale(.985)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
-.btn.pri:hover{filter:brightness(1.08);color:var(--accent-ink)}
-.btn.sm{padding:4px 9px;font-size:12px}
+.btn.pri:hover{filter:brightness(1.08);color:var(--accent-ink);
+  box-shadow:0 2px 10px color-mix(in srgb,var(--accent) 32%,transparent)}
+.btn.sm{padding:4px 9px;font-size:12px;border-radius:6px}
 .btn.danger:hover{border-color:var(--danger);color:var(--danger)}
+/* 点击涟漪：纯 CSS，靠 :active 触发，无 JS */
+.btn::after{content:"";position:absolute;inset:0;border-radius:inherit;
+  background:radial-gradient(circle,currentColor 12%,transparent 12%) center/220% 220% no-repeat;
+  opacity:0;transition:background-size .45s,opacity .55s}
+.btn:active::after{background-size:0 0;opacity:.16;transition:0s}
 
-.tag{display:inline-block;font:10.5px/1.5 var(--mono);padding:2px 7px;border-radius:3px;
+.tag{display:inline-block;font:10.5px/1.5 var(--mono);padding:2px 7px;border-radius:5px;
   letter-spacing:.05em;white-space:nowrap}
+.t-info{background:var(--panel-2);color:var(--accent)}
+/* 严重度色阶：1–2 静音、3 提示、4–5 告警。颜色本身就是排序 */
+.sev{display:inline-grid;place-items:center;width:19px;height:19px;border-radius:5px;
+  font:700 11px/1 var(--mono)}
+.sev-1,.sev-2{background:var(--panel-2);color:var(--muted)}
+.sev-3{background:var(--warn-dim);color:var(--warn)}
+.sev-4,.sev-5{background:var(--danger-dim);color:var(--danger)}
 .t-ok{background:var(--accent-dim);color:var(--accent)}
 .t-warn{background:var(--warn-dim);color:var(--warn)}
 .t-bad{background:var(--danger-dim);color:var(--danger)}
@@ -91,6 +161,7 @@ th{text-align:left;font:10.5px/1.6 var(--mono);color:var(--muted);letter-spacing
    text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:8px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
 tr:last-child td{border-bottom:0}
+tbody tr{transition:background .11s}
 tbody tr:hover{background:var(--panel-2)}
 .mono{font-family:var(--mono);font-size:12px}
 .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
@@ -126,27 +197,65 @@ tbody tr:hover{background:var(--panel-2)}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.spin{animation:none}}
 .hide{display:none!important}
+.content>.card{animation:rise .22s cubic-bezier(.2,.8,.3,1) both}
+.content>.card:nth-child(2){animation-delay:.03s}
+.content>.card:nth-child(3){animation-delay:.06s}
+.content>.card:nth-child(n+4){animation-delay:.09s}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* 差异审查：原文/译文对照 + 裁决 */
+.gap{border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin-bottom:9px;
+  background:var(--panel);transition:border-color .13s}
+.gap:hover{border-color:var(--accent)}
+.gap.done{opacity:.55}
+.gap .gh{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.gap .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}
+.gap .pair>div{background:var(--panel-2);border-radius:7px;padding:8px 10px;font-size:12.5px}
+.gap .pair .k{font:9.5px/1.5 var(--mono);color:var(--muted);letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:3px}
+.gap .eff{font-size:12.5px;color:var(--body);margin:6px 0}
+.gap .prop{background:var(--accent-dim);border-radius:7px;padding:9px 11px;margin:8px 0;
+  font-size:12.5px;color:var(--ink)}
+.gap .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+@media(max-width:760px){.gap .pair{grid-template-columns:1fr}}
+
+@media(prefers-reduced-motion:reduce){
+  .content>.card{animation:none}
+  .app,.sidetoggle,.navgrp .items{transition:none}
+  .btn:active{transform:none}
+}
 @media(max-width:860px){
   .app{grid-template-columns:1fr}
-  .side{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto}
-  .brand{border:0;margin:0;padding:0 14px 0 18px;white-space:nowrap}
-  .nav{flex-direction:row;padding:0 8px}
-  .side-foot{display:none}
+  .side{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;
+        padding:10px 0}
+  .brand{border:0;margin:0;padding:0 12px 0 16px;white-space:nowrap}
+  .brand .txt{display:none}
+  .nav{flex-direction:row;padding:0 8px;overflow-x:auto}
+  .navgrp{margin:0}
+  .navgrp>.gh{display:none}
+  .navgrp .items{grid-template-rows:1fr!important}
+  .navgrp .items>div{display:flex;gap:2px}
+  .nav .lbl{display:none}
+  .nav button.item{padding:8px 11px}
+  .nav button.item.on::before{display:none}
+  .sidetoggle,.side-foot{display:none}
   .para{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
 <div class="app">
+  <button class="sidetoggle" onclick="App.toggleSide()" title="收起/展开菜单">◀</button>
   <aside class="side">
     <div class="brand">
-      <b>AinerN2D</b><span>core v2</span>
+      <div class="mark">N</div>
+      <div class="txt"><b>AinerN2D</b><span>core v2</span></div>
     </div>
     <nav class="nav" id="nav"></nav>
     <div class="side-foot">
-      <div><span class="dot" id="dot-core"></span>core <span id="st-core">…</span></div>
-      <div><span class="dot" id="dot-gw"></span>gateway <span id="st-gw">…</span></div>
-      <div style="margin-top:6px"><a href="/docs" target="_blank">API 文档 →</a></div>
+      <div><span class="dot" id="dot-core"></span><span class="fl">core <span id="st-core">…</span></span></div>
+      <div><span class="dot" id="dot-gw"></span><span class="fl">gateway <span id="st-gw">…</span></span></div>
+      <div class="fl" style="margin-top:6px"><a href="/docs" target="_blank">API 文档 →</a></div>
     </div>
   </aside>
   <main class="main">
@@ -202,16 +311,32 @@ const State = {
   },
 };
 
-const PAGES = [
-  {id:"settings", ico:"⚙", name:"设置", sub:"LLM 端点与能力路由"},
-  {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
-  {id:"world",    ico:"🌍", name:"世界观", sub:"映射 · 名物词表 · 人名"},
-  {id:"model",    ico:"🧩", name:"世界模型", sub:"人物 · 场景 · 道具 · 节拍 · 风格"},
-  {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
-  {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 翻译 → 审核 → 锁定"},
-  {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
-  {id:"tasks",    ico:"⚡", name:"任务", sub:"生成任务与成本"},
+// 菜单按「工作流的先后」分组，不按功能相似度 ——
+// 用户是顺着流程走的，把「世界观」和「译本」分在两个抽屉里
+// 只会让人每次都要开两个抽屉。
+const GROUPS = [
+  {id:"g-src", name:"素材", pages:[
+    {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
+  ]},
+  {id:"g-world", name:"世界观", pages:[
+    {id:"world",    ico:"🌍", name:"映射与词表", sub:"映射 · 名物词表 · 人名 · 称呼"},
+    {id:"model",    ico:"🧩", name:"世界模型", sub:"人物 · 场景 · 道具 · 节拍 · 风格"},
+    {id:"culture",  ico:"🎭", name:"文化梗", sub:"网络梗 · 典故 · 九档呈现策略"},
+  ]},
+  {id:"g-trans", name:"译本", pages:[
+    {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 装置 → 翻译 → 审核 → 回译 → 锁定"},
+    {id:"review",   ico:"🔍", name:"文化差异审查", sub:"模型出报表，人裁决"},
+  ]},
+  {id:"g-media", name:"成品", pages:[
+    {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
+    {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
+  ]},
+  {id:"g-sys", name:"系统", pages:[
+    {id:"tasks",    ico:"⚡", name:"任务", sub:"生成任务与成本"},
+    {id:"settings", ico:"⚙", name:"设置", sub:"端点 · 能力路由 · 质量档位"},
+  ]},
 ];
+const PAGES = GROUPS.flatMap(g => g.pages);
 
 let logBuf = [];
 function log(msg, cls="") {
@@ -240,10 +365,11 @@ const REGISTER_CN = {
 // ───────────────────────── 设置 ─────────────────────────
 const Settings = {
   async render(v) {
-    const [eps, caps, routes] = await Promise.all([
+    const [eps, caps, routes, tiers] = await Promise.all([
       api("GET", "/settings/endpoints"),
       api("GET", "/settings/capabilities").catch(() => ({capabilities: [], unsupported: []})),
       api("GET", "/settings/routes").catch(() => []),
+      api("GET", "/settings/tiers").catch(() => null),
     ]);
     this.eps = eps; this.caps = caps;
 
@@ -336,29 +462,57 @@ const Settings = {
 
       <div class="card">
         <h2>能力路由</h2>
-        <p class="hint">能力 × 用途 → 端点。译本线只需要
+        <p class="hint">能力 × 用途 × <b>档位</b> → 端点。译本线只需要
           <code>text.chat</code>、<code>text.translate</code>、<code>audio.tts</code>
-          三个能力，图像与视频一个都不用。</p>
+          三个能力，图像与视频一个都不用。<br>
+          分档的理由是成本与质量不成正比：分块、切镜这种活，
+          强模型的产出与快模型没有可觉察差别，钱全烧在没人看得出的地方；
+          而文化差异审查、名物定译，快模型给的结论似是而非 ——
+          读着头头是道，错的地方要等读者笑不出来才发现。<br>
+          <span class="mono" style="font-size:11.5px">${h(tiers?tiers.note:"")}</span></p>
+
+        ${tiers ? `<div class="row" style="gap:6px;margin-bottom:11px">${
+          tiers.tiers.map(t => `<span class="tag ${
+            t.value==="critical"?"t-bad":t.value==="premium"?"t-warn":"t-mute"
+          }" title="${h(t.hint)}">${h(t.name)} · ${h(t.value)}</span>`).join("")
+        }</div>` : ""}
+
         <div class="row" style="margin-bottom:11px">
           <button class="btn pri" onclick="Settings.autoRoute(this)">按端点能力自动生成路由</button>
           <span class="mono" style="color:var(--muted);font-size:12px">
             当前 ${routes.length} 条</span>
         </div>
         ${routes.length ? `<div class="tblwrap"><table><thead><tr>
-          <th>能力</th><th>用途</th><th>端点</th><th>模型</th>
+          <th>能力</th><th>用途</th><th>档位</th><th>端点</th><th>模型</th>
         </tr></thead><tbody>${
-          routes.slice(0,40).map(r => `<tr>
+          routes.slice(0,60).map(r => `<tr>
             <td class="mono">${h(r.capability)}</td>
             <td class="mono">${h(r.purpose)}</td>
+            <td>${r.tier==="*" ? `<span class="tag t-mute">通用</span>`
+              : `<span class="tag ${r.tier==="critical"?"t-bad":
+                   r.tier==="premium"?"t-warn":"t-mute"}">${h(r.tier)}</span>`}</td>
             <td class="mono">${h((eps.find(e=>e.id===r.endpoint_id)||{}).name || r.endpoint_id)}</td>
             <td class="mono">${h(r.model||"默认")}</td>
           </tr>`).join("")
         }</tbody></table></div>` : `<div class="empty">还没有路由</div>`}
+
+        ${tiers ? `<details style="margin-top:12px">
+          <summary style="cursor:pointer;color:var(--accent);font-size:13px">
+            各用途的默认档位</summary>
+          <div class="row" style="gap:5px;margin-top:9px">${
+            Object.entries(tiers.defaults).map(([k,v]) =>
+              `<span class="tag ${v==="critical"?"t-bad":v==="premium"?"t-warn":"t-mute"}"
+               >${h(k)} → ${h(v)}</span>`).join("")
+          }</div>
+          <p class="hint" style="margin-top:8px">这是 pipeline 不填档位时的默认。
+            要覆盖就在上表加一条对应 (用途, 档位) 的路由 —— 不用改代码。</p>
+        </details>` : ""}
       </div>
 
       <div class="card">
         <h2>内置资产</h2>
-        <p class="hint">6 个世界观档案、3 对名物词表（198 条）、4 个导演包。幂等，可重复执行。</p>
+        <p class="hint">25 个世界观圈层档案（覆盖全球前十大语言）、名物词表、导演包。
+          幂等，可重复执行；已存在的只补空缺字段，不覆盖你改过的内容。</p>
         <button class="btn" onclick="Settings.seed(this)">灌入内置资产</button>
       </div>
 
@@ -1318,6 +1472,259 @@ const Audio = {
   },
 };
 
+
+// ───────────────────────── 文化梗 ─────────────────────────
+const STRATEGY_CN = {
+  preserve:"照搬", substitute:"换等价说法", transplant:"换目标文化的梗",
+  naturalize:"按目标习惯重写", gloss_inline:"行内轻注", footnote:"脚注",
+  compensate:"就近补偿", relocate:"移到别处", omit:"舍弃",
+};
+const VOL_CN = {evergreen:"长青", decade:"一代人", years:"数年", months:"短命"};
+const PLOT_CN = {none:"纯修辞", flavor:"塑造", setup:"伏笔", pivot:"转折"};
+const REGISTER_MEME_CN = {
+  internet_slang:"网络流行语", subculture:"亚文化黑话", classical_allusion:"典故",
+  idiom_proverb:"成语俗语", dialect:"方言", brand_ref:"品牌指涉",
+  media_ref:"影视引用", historical_event:"历史事件", social_phenomenon:"社会现象词",
+  taboo_euphemism:"委婉禁忌",
+};
+
+const Culture = {
+  async render(v) {
+    if (!State.novelId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一本小说</div></div>`;
+      return;
+    }
+    const q = State.transformId ? `?transform_id=${State.transformId}` : "";
+    const d = await api("GET", `/novels/${State.novelId}/memes${q}`).catch(()=>null);
+    const items = d ? d.items : [];
+    v.innerHTML = `
+      <div class="card">
+        <h2>文化梗
+          <span class="sub mono" style="color:var(--muted)">${d?d.total:0} 条</span>
+          ${d&&d.unrendered?`<span class="tag t-warn">${d.unrendered} 未定呈现</span>`:""}
+          ${d&&d.high_risk?`<span class="tag t-bad">${d.high_risk} 承载情节</span>`:""}
+        </h2>
+        <p class="hint">收的是<b>字面义不等于实际用法</b>的说法 ——「破防了」字面是防御被击穿，
+          实际指情绪失守，直译必错。两者差得越远越该收，差不多的不必收。<br>
+          <b>时效</b>决定值不值得费力找等价物：短命梗在源文化里都快消失了，
+          不值得目标读者付理解成本。<b>情节承载</b>决定能不能舍：
+          伏笔舍了，读者不会觉得「少了个梗」，只会觉得「后面那段莫名其妙」。</p>
+        <div class="row" style="margin-bottom:11px">
+          <button class="btn" onclick="Culture.extract(this)">从当前章节抽梗</button>
+          <button class="btn pri" onclick="Culture.render_(this)"
+            ${State.transformId?"":"disabled"}>为目标圈层定呈现</button>
+          ${State.transformId?"":`<span class="sub" style="color:var(--warn);font-size:12px">
+            先在「映射与词表」选一个世界观映射</span>`}
+        </div>
+        <div class="tblwrap"><table><thead><tr>
+          <th>说法</th><th>类型</th><th>时效</th><th>情节</th>
+          <th>实际在说</th><th>目标呈现</th><th>次数</th><th></th>
+        </tr></thead><tbody>${
+          items.length ? items.map(m => {
+            const r = m.rendering;
+            const risky = m.plot_load === "setup" || m.plot_load === "pivot";
+            return `<tr>
+              <td><b>${h(m.surface)}</b>
+                ${m.literal_gloss?`<div class="sub" style="color:var(--muted);font-size:11px">
+                   字面：${h(m.literal_gloss)}</div>`:""}</td>
+              <td><span class="tag t-mute">${h(REGISTER_MEME_CN[m.register]||m.register)}</span></td>
+              <td><span class="tag ${m.volatility==="months"?"t-bad":m.volatility==="years"?"t-warn":"t-mute"}">
+                ${h(VOL_CN[m.volatility]||m.volatility)}</span></td>
+              <td><span class="tag ${risky?"t-warn":"t-mute"}">${h(PLOT_CN[m.plot_load]||m.plot_load)}</span></td>
+              <td style="max-width:230px;font-size:12.5px">${h(m.actual_use||"")}</td>
+              <td style="min-width:210px">${r ? `
+                  <span class="tag t-info">${h(STRATEGY_CN[r.strategy]||r.strategy)}</span>
+                  <input value="${h(r.target_text||"")}" id="mr-${r.id}"
+                         placeholder="${r.strategy==="omit"?"（舍弃，不译）":"目标说法"}"
+                         style="margin-top:5px">
+                  ${r.gloss_text?`<div class="sub" style="color:var(--muted);font-size:11px;margin-top:3px">
+                     注：${h(r.gloss_text)}</div>`:""}
+                  ${r.rationale?`<div class="sub" style="color:var(--muted);font-size:11px;margin-top:3px">
+                     ${h(r.rationale)}</div>`:""}
+                  ${r.target_volatility&&r.target_volatility!=="evergreen"?`
+                     <div class="sub" style="color:var(--warn);font-size:11px;margin-top:3px">
+                     ⚠ 目标说法时效为 ${h(VOL_CN[r.target_volatility])}，几年后读者可能不认识</div>`:""}
+                ` : `<span class="sub" style="color:var(--muted)">未定</span>`}</td>
+              <td class="mono">${m.occurrences||0}</td>
+              <td>${r ? (r.locked
+                ? `<span class="tag t-ok">已锁定</span>`
+                : `<button class="btn sm" onclick="Culture.save('${r.id}',this)">定稿</button>`) : ""}</td>
+            </tr>`;
+          }).join("")
+          : `<tr><td colspan="8" class="empty">还没有抽到文化梗</td></tr>`
+        }</tbody></table></div>
+      </div>
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async extract(btn) {
+    if (!State.chapterId) return logErr("先在「书架」选一个章节");
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/memes:extract`, {});
+      logOk(`新增 ${r.memes} 条，累积 ${r.updated} 条`);
+      (r.high_risk||[]).forEach(x =>
+        logWarn(`承载情节：${x.surface}（${PLOT_CN[x.plot_load]||x.plot_load}）`));
+      App.refresh();
+    }, "抽取中");
+  },
+  async render_(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/transforms/${State.transformId}/memes:render`, {});
+      logOk(`定呈现 ${r.rendered} 条　${JSON.stringify(r.by_strategy)}`);
+      (r.needs_review||[]).forEach(x => logWarn(`${x.surface}：${x.reason}`));
+      App.refresh();
+    }, "生成中");
+  },
+  async save(id, btn) {
+    const el = $(`#mr-${id}`);
+    await run(btn, async () => {
+      await api("PATCH", `/meme-renderings/${id}`,
+                {target_text: (el?el.value:"").trim(), locked: true});
+      logOk("已定稿"); App.refresh();
+    }, "保存");
+  },
+};
+
+// ───────────────────────── 文化差异审查 ─────────────────────────
+const GAP_CN = {
+  humor_lost:"笑点丢失", emotion_flattened:"情绪抹平", register_mismatch:"语体错位",
+  relation_lost:"关系丢失", subtext_lost:"言外之意丢失", allusion_opaque:"典故读不懂",
+  meme_untranslated:"梗直译了", cultural_assumption:"缺文化前提",
+  anachronism:"年代错置", taboo_shift:"禁忌错位", pacing_shift:"节奏改变",
+  overtranslation:"过度解释",
+};
+const CHANNEL_CN = {
+  lexicon:"名物词表", appellation:"称呼表", meme:"梗表",
+  device:"叙事装置", retranslate:"整段重译", manual:"人工",
+};
+
+const Review = {
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一个章节</div></div>`;
+      return;
+    }
+    const list = await api("GET", `/chapters/${State.chapterId}/culture-reviews`)
+      .catch(()=>({items:[]}));
+    const latest = (list.items||[])[0];
+    const detail = latest
+      ? await api("GET", `/culture-reviews/${latest.id}`).catch(()=>null) : null;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>文化差异审查</h2>
+        <p class="hint">这里问的不是「翻得对不对」，是<b>「两边的读者各自得到了什么」</b>。
+          问对不对，模型会去比对字面然后告诉你「忠实准确」；
+          问读者得到什么，它才会去想那句话在两个文化里各自激起什么反应 ——
+          落差就是要找的东西。<br>
+          报表<b>不会自动改译文</b>。每条要你裁决：同意 / 修改 / 补充 / 驳回，
+          裁完再一并落地。锁定过的块不会被覆盖。</p>
+        <div class="row">
+          <button class="btn pri" onclick="Review.run(this)">跑一次审查</button>
+          <select id="rv-tier" style="width:auto;min-width:150px">
+            <option value="">默认档位（critical）</option>
+            <option value="premium">premium</option>
+            <option value="standard">standard</option>
+          </select>
+          ${detail && detail.pending ? `<button class="btn" onclick="Review.apply(this)">
+             应用已裁决（${detail.findings.filter(f=>
+               ["accepted","modified","supplemented"].includes(f.verdict) && !f.applied
+             ).length} 条）</button>` : ""}
+        </div>
+      </div>
+      ${detail ? `
+      <div class="card">
+        <div class="steps">
+          <div class="step ${detail.fidelity_score>=80?"done":detail.fidelity_score<60?"blocked":""}">
+            <div class="k">体验还原度</div><div class="v">${detail.fidelity_score ?? "—"}</div></div>
+          <div class="step"><div class="k">发现</div><div class="v">${detail.findings_total}</div></div>
+          <div class="step ${detail.pending?"blocked":"done"}">
+            <div class="k">待裁决</div><div class="v">${detail.pending}</div></div>
+          <div class="step"><div class="k">已落地</div><div class="v">${detail.resolved_total}</div></div>
+          <div class="step"><div class="k">档位</div><div class="v" style="font-size:13px">
+            ${h(detail.tier)}</div></div>
+        </div>
+        ${detail.summary?`<p class="hint" style="margin-top:4px">${h(detail.summary)}</p>`:""}
+        <div class="row" style="gap:5px">${
+          Object.entries(detail.by_kind||{}).map(([k,n])=>
+            `<span class="tag t-mute">${h(GAP_CN[k]||k)} ${n}</span>`).join("")
+        }</div>
+      </div>
+      ${detail.findings.map(f => Review.card(f)).join("")}
+      ` : `<div class="card"><div class="empty">还没有审查记录</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+
+  card(f) {
+    const judged = f.verdict !== "pending";
+    return `<div class="gap ${f.applied?"done":""}">
+      <div class="gh">
+        <span class="sev sev-${f.severity}">${f.severity}</span>
+        <b style="color:var(--ink)">${h(GAP_CN[f.kind]||f.kind)}</b>
+        ${f.fix_channel?`<span class="tag t-mute">修在：${h(CHANNEL_CN[f.fix_channel]||f.fix_channel)}</span>`:""}
+        ${f.applied?`<span class="tag t-ok">已落地</span>`
+          : judged?`<span class="tag t-info">${h({accepted:"已同意",modified:"已修改",
+              supplemented:"已补充",rejected:"已驳回"}[f.verdict]||f.verdict)}</span>`:""}
+      </div>
+      <div class="pair">
+        <div><div class="k">原文</div>${h(f.source||"")}</div>
+        <div><div class="k">译文</div>${h(f.target||"")}</div>
+      </div>
+      ${f.source_effect?`<div class="eff"><b>中文读者得到</b>：${h(f.source_effect)}</div>`:""}
+      ${f.target_effect?`<div class="eff"><b>目标读者得到</b>：${h(f.target_effect)}</div>`:""}
+      <div class="eff" style="color:var(--warn)"><b>落差</b>：${h(f.gap)}</div>
+      ${f.proposal?`<div class="prop"><b>方案</b>：${h(f.proposal)}
+        ${f.proposed_text?`<div style="margin-top:6px;font-family:var(--mono);font-size:12px">
+          ${h(f.proposed_text)}</div>`:""}</div>`:""}
+      ${f.applied?"":`
+        <textarea id="hv-${f.id}" rows="2"
+          placeholder="修改或补充时写在这里（裁决为「修改」「补充」时必填）">${h(f.human_text||"")}</textarea>
+        <div class="acts">
+          <button class="btn sm pri" onclick="Review.judge('${f.id}','accepted',this)">同意</button>
+          <button class="btn sm" onclick="Review.judge('${f.id}','modified',this)">按我写的改</button>
+          <button class="btn sm" onclick="Review.judge('${f.id}','supplemented',this)">补充</button>
+          <button class="btn sm danger" onclick="Review.judge('${f.id}','rejected',this)">驳回</button>
+        </div>`}
+    </div>`;
+  },
+
+  async run(btn) {
+    const tier = ($("#rv-tier")||{}).value || null;
+    await run(btn, async () => {
+      const r = await api("POST",
+        `/chapters/${State.chapterId}/culture-review/${State.lang}:run`, {tier});
+      logOk(`发现 ${r.findings} 处差异　体验还原度 ${r.fidelity_score ?? "—"}`);
+      (r.top||[]).slice(0,5).forEach(x =>
+        logWarn(`[${x.severity}] ${GAP_CN[x.kind]||x.kind}：${x.gap}`));
+      App.refresh();
+    }, "审查中");
+  },
+  async judge(id, verdict, btn) {
+    const el = $(`#hv-${id}`);
+    const text = (el ? el.value : "").trim();
+    if ((verdict === "modified" || verdict === "supplemented") && !text)
+      return logErr("裁决为「修改」或「补充」时必须写出文本，否则应用时无内容可用");
+    await run(btn, async () => {
+      await api("PATCH", `/culture-findings/${id}`,
+                {verdict, human_text: text || null});
+      logOk(`已裁决：${verdict}`); App.refresh();
+    }, "提交");
+  },
+  async apply(btn) {
+    const list = await api("GET", `/chapters/${State.chapterId}/culture-reviews`);
+    const rid = (list.items||[])[0] ? (list.items||[])[0].id : null;
+    if (!rid) return logErr("没有可应用的审查");
+    await run(btn, async () => {
+      const r = await api("POST", `/culture-reviews/${rid}:apply`, {});
+      logOk(`落地 ${r.applied} 条`);
+      if (r.locked) logWarn(`${r.locked} 条因目标块已锁定未覆盖`);
+      (r.skipped||[]).forEach(x => logWarn(`跳过：${x.reason}`));
+      App.refresh();
+    }, "应用");
+  },
+};
+
 // ───────────────────────── 任务 ─────────────────────────
 const Tasks = {
   async render(v) {
@@ -1372,15 +1779,38 @@ const Tasks = {
 // ───────────────────────── App ─────────────────────────
 const App = {
   async boot() {
-    $("#nav").innerHTML = PAGES.map(p =>
-      `<button data-p="${p.id}" onclick="App.go('${p.id}')">
-        <span class="ico">${p.ico}</span>${p.name}</button>`).join("");
+    const shut = new Set(JSON.parse(localStorage.getItem("nav.shut") || "[]"));
+    $("#nav").innerHTML = GROUPS.map(g => `
+      <div class="navgrp ${shut.has(g.id) ? "shut" : ""}" id="${g.id}">
+        <button class="gh" onclick="App.toggleGroup('${g.id}')">
+          ${h(g.name)}<span class="caret">▼</span></button>
+        <div class="items"><div>${g.pages.map(p => `
+          <button class="item" data-p="${p.id}" onclick="App.go('${p.id}')" title="${h(p.sub)}">
+            <span class="ico">${p.ico}</span><span class="lbl">${h(p.name)}</span>
+            <span class="navbadge hide" id="badge-${p.id}"></span>
+          </button>`).join("")}</div></div>
+      </div>`).join("");
+    if (localStorage.getItem("nav.collapsed") === "1")
+      $(".app").classList.add("collapsed");
     await this.health();
     setInterval(() => this.health(), 20000);
     setInterval(() => this.badge(), 6000);
     await this.refresh();
   },
   go(id) { State.page = id; State.save(); this.refresh(); },
+
+  toggleGroup(gid) {
+    const el = document.getElementById(gid);
+    if (!el) return;
+    el.classList.toggle("shut");
+    const shut = [...document.querySelectorAll(".navgrp.shut")].map(x => x.id);
+    localStorage.setItem("nav.shut", JSON.stringify(shut));
+  },
+
+  toggleSide() {
+    const on = $(".app").classList.toggle("collapsed");
+    localStorage.setItem("nav.collapsed", on ? "1" : "0");
+  },
 
   /** 校验并修复本地记住的 transformId。
    *  localStorage 里的 id 会因数据被删或换小说而失效，
@@ -1407,6 +1837,7 @@ const App = {
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
+               culture:Culture, review:Review,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {

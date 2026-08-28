@@ -31,6 +31,7 @@ def chat_json(
     schema: dict[str, Any],
     *,
     purpose: str = "*",
+    tier: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 8192,
     novel_id: str | None = None,
@@ -39,6 +40,9 @@ def chat_json(
     ref_id: str | None = None,
 ) -> tuple[dict[str, Any], GenTask]:
     """走 text.chat 的 json_schema 模式取结构化结果。
+
+    tier 不传时按 purpose 取默认档 —— 调用方声明这是什么活，
+    该用多强的模型交给路由决定，改档位不必碰 pipeline 代码。
 
     契约要求中间层保证 json_schema 输出可解析（内部重试/修复），
     所以这里不做二次解析兜底 —— 那是中间层的职责，不该在 Core 里重复实现。
@@ -53,6 +57,7 @@ def chat_json(
             "response_format": {"type": "json_schema", "schema": schema},
         },
         purpose=purpose,
+        tier=tier,
         sync=True,
         novel_id=novel_id,
         chapter_id=chapter_id,

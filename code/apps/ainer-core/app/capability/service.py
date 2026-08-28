@@ -73,6 +73,7 @@ def submit_task(
     chapter_id: str | None = None,
     sync: bool = False,
     route: ResolvedRoute | None = None,
+    tier: str | None = None,
     max_cost: float | None = None,
 ) -> GenTask:
     """提交一次能力调用并落 gen_tasks。
@@ -80,7 +81,7 @@ def submit_task(
     同 idempotency_key 命中已有记录时直接返回，不重复提交、不重复计费。
     """
     cap = Capability(capability) if isinstance(capability, str) else capability
-    route = route or resolve_one(db, cap, purpose)
+    route = route or resolve_one(db, cap, purpose, tier)
 
     merged = {**route.default_params, **payload}
     idem = canonical_idempotency_key(

@@ -19,6 +19,32 @@ from typing import Any
 
 CULTURE_PACKS: list[dict[str, Any]] = [
     {
+        "code": "cn_modern_net",
+        "display_name": "中文 · 当代网络 (2010–2030)",
+        "role": "source",
+        "axes": {
+            "region": "CN", "era": "contemporary", "era_span": [2010, 2030],
+            "genre": "web_fiction", "world_setting": "modern",
+            "social_context": "urban_online", "tech_level": "digital"
+        },
+        "visual": {
+            "visual_do": ["写字楼格子间", "外卖与共享单车", "手机屏幕", "地铁早高峰",
+                          "奶茶店", "出租屋", "直播补光灯", "城中村"],
+            "visual_dont": ["古装", "马车", "中世纪建筑", "西部荒原"],
+            "signage_rules": {"language": "汉字", "script": "简体汉字",
+                              "style": "黑体/圆体", "material": "亚克力灯箱",
+                              "avoid": "毛笔书法"},
+            "palette": ["#F5F5F5", "#2B2B2B", "#4A90D9", "#FF6B6B", "屏幕蓝", "水泥灰"]
+        },
+        "language": {
+            "code": "zh-CN", "register": "internet_vernacular",
+            "name_pattern": "family_given", "name_script": "hanzi",
+            "numerals": "arabic", "date_style": "calendar_year",
+            "honorifics": {"peer": "哥/姐", "online": "老铁/家人们"}
+        },
+        "description": "网文的主战场。网络梗密度极高，且半数活不过三年 —— 时效性判断在这里最吃重。"
+    },
+    {
         "code": "en_gb_regency",
         "display_name": "英语 · 摄政英国 (1811–1820)",
         "role": "target",

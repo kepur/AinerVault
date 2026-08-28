@@ -23,6 +23,7 @@ class ResolvedRoute:
     model: str | None
     default_params: dict[str, Any] = field(default_factory=dict)
     priority: int = 0
+    tier: str = "*"
 
     @property
     def catalog(self) -> CapabilityCatalog | None:
@@ -60,27 +61,47 @@ class ResolvedRoute:
 
 
 def resolve_routes(
-    db: Session, capability: Capability | str, purpose: str = "*"
+    db: Session, capability: Capability | str, purpose: str = "*",
+    tier: str | None = None,
 ) -> list[ResolvedRoute]:
-    """返回按 priority 升序的候选路由。先找专用 purpose，再回落到 "*"。"""
-    cap = Capability(capability) if isinstance(capability, str) else capability
+    """返回按 priority 升序的候选路由。
 
-    def _query(p: str) -> list[CapabilityRoute]:
+    四步回落，从最具体到最通用：
+        (purpose, tier) → (purpose, "*") → ("*", tier) → ("*", "*")
+
+    purpose 优先于 tier 是有意的：「这是翻译活」比「这活要用强模型」
+    更能决定该走哪个端点 —— 有人给翻译单接了一个专门调过的模型，
+    那它比任何档位规则都更该被用上。
+
+    tier 为 None 时按 DEFAULT_TIER 取该 purpose 的默认档 ——
+    调用方声明用途即可，不必每处都想一遍该用多强的模型。
+    """
+    from app.models import DEFAULT_TIER
+
+    cap = Capability(capability) if isinstance(capability, str) else capability
+    if tier is None:
+        t = DEFAULT_TIER.get(purpose)
+        tier = t.value if t else "*"
+
+    def _query(p: str, ti: str) -> list[CapabilityRoute]:
         return list(
             db.execute(
                 select(CapabilityRoute)
                 .where(
                     CapabilityRoute.capability == cap.value,
                     CapabilityRoute.purpose == p,
+                    CapabilityRoute.tier == ti,
                     CapabilityRoute.enabled.is_(True),
                 )
                 .order_by(CapabilityRoute.priority.asc())
             ).scalars()
         )
 
-    rows = _query(purpose)
-    if not rows and purpose != "*":
-        rows = _query("*")
+    rows: list[CapabilityRoute] = []
+    for p, ti in ((purpose, tier), (purpose, "*"), ("*", tier), ("*", "*")):
+        rows = _query(p, ti)
+        if rows:
+            break
 
     out: list[ResolvedRoute] = []
     for r in rows:
@@ -94,17 +115,23 @@ def resolve_routes(
                 model=r.model,
                 default_params=dict(r.default_params or {}),
                 priority=r.priority,
+                tier=r.tier,
             )
         )
     return out
 
 
-def resolve_one(db: Session, capability: Capability | str, purpose: str = "*") -> ResolvedRoute:
-    routes = resolve_routes(db, capability, purpose)
+def resolve_one(
+    db: Session, capability: Capability | str, purpose: str = "*",
+    tier: str | None = None,
+) -> ResolvedRoute:
+    routes = resolve_routes(db, capability, purpose, tier)
     if not routes:
         cap = capability.value if isinstance(capability, Capability) else capability
         raise CapabilityError(
             CapErrorCode.NO_ROUTE,
-            f"未配置能力路由：{cap} (purpose={purpose})。请在 设置 › 能力路由 中添加。",
+            f"未配置能力路由：{cap} (purpose={purpose}, tier={tier})。"
+            f"请在 设置 › 能力路由 中添加 —— 加一条 purpose=* / tier=* 的兜底路由"
+            f"即可覆盖全部调用。",
         )
     return routes[0]

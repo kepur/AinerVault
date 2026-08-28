@@ -43,6 +43,8 @@ OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 #: 分段翻译一次最多要求的段数，超了模型必丢段
 _TRANSLATE_BATCH = 40
+#: 被截断时自动抬高的输出预算上限。再高多数服务会直接拒请求。
+_MAX_TOKENS_CEILING = 16384
 
 
 # ── JSON 抽取 ────────────────────────────────────────────────────────────────
@@ -76,6 +78,14 @@ def _schema_brief(schema: dict[str, Any]) -> str:
     )
 
 
+class _Truncated(Exception):
+    """输出撞上 max_tokens。内部信号，不外泄。"""
+
+    def __init__(self, partial: str = "") -> None:
+        self.partial = partial
+        super().__init__("output truncated")
+
+
 class _Caller:
     """把一次 /chat/completions 调用连同重试封起来。"""
 
@@ -91,6 +101,30 @@ class _Caller:
 
     def __call__(self, messages: list[dict[str, str]], *, temperature: float,
                  max_tokens: int, json_mode: bool) -> str:
+        """一次调用。被 max_tokens 截断时自动抬高预算重来一次。
+
+        契约要求返回可解析的 JSON，而被截断的 JSON 一定不可解析 ——
+        所以这一层必须自己兜住，不能把「上游返回空内容」抛给 pipeline。
+        结构化生成的输出常常是输入的好几倍（每项还要带候选和理由），
+        调用方很难预先估准，估错的后果又是整个任务失败。
+        """
+        try:
+            return self._once(messages, temperature=temperature,
+                              max_tokens=max_tokens, json_mode=json_mode)
+        except _Truncated as exc:
+            bigger = min(max(max_tokens * 2, 8192), _MAX_TOKENS_CEILING)
+            if bigger <= max_tokens:
+                raise CapabilityError(
+                    CapErrorCode.BAD_RESPONSE,
+                    f"输出被截断，且预算已达上限 {max_tokens}。"
+                    f"请减少单次请求的条目数（分批调用）。",
+                ) from exc
+            log.warning("输出被截断（max_tokens=%d），抬到 %d 重试", max_tokens, bigger)
+            return self._once(messages, temperature=temperature,
+                              max_tokens=bigger, json_mode=json_mode)
+
+    def _once(self, messages: list[dict[str, str]], *, temperature: float,
+              max_tokens: int, json_mode: bool) -> str:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -132,12 +166,13 @@ class _Caller:
             raise CapabilityError(CapErrorCode.BAD_RESPONSE, "上游未返回 choices")
         msg = choices[0].get("message") or {}
         content = msg.get("content")
+        reason = choices[0].get("finish_reason")
+        if reason == "length":
+            # 有内容也算截断：JSON 缺右括号照样解析不了
+            raise _Truncated(str(content or ""))
         if not content:
-            reason = choices[0].get("finish_reason")
             raise CapabilityError(
-                CapErrorCode.BAD_RESPONSE,
-                f"上游返回空内容（finish_reason={reason}）"
-                + ("，多半是 max_tokens 太小被截断" if reason == "length" else ""),
+                CapErrorCode.BAD_RESPONSE, f"上游返回空内容（finish_reason={reason}）"
             )
         return str(content)
 
