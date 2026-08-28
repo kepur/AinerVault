@@ -44,7 +44,14 @@ _PINYIN_FINALS = (
 )
 # 声调数字 / 带调字母
 _TONE_RE = re.compile(r"[1-5]$")
-_TONED_CHARS = "āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ"
+#: 拼音**专属**的声调符号：macron（ā ē ī ō ū ǖ）与 caron（ǎ ě ǐ ǒ ǔ ǚ）。
+#: 西欧语言不用这两类，所以见到即可判定是拼音。
+_PINYIN_ONLY_TONES = "āēīōūǖǎěǐǒǔǚǜǘ"
+#: 与西欧语言**共用**的重音：á à é è í ì ó ò ú ù。
+#: Cárdenas、Étienne、Gonçalo 里全是这些 —— 拿它们判拼音会把
+#: 西语法语葡语的绝大多数人名判成音译，然后回落到兜底池。
+_SHARED_ACCENTS = "áàéèíìóòúù"
+_TONED_CHARS = _PINYIN_ONLY_TONES + _SHARED_ACCENTS
 
 # 目标语言里合法、但形似拼音的常见词 —— 避免误伤。
 # 英文虚词与拼音姓氏大量撞车：he=何/贺, she=佘, you=尤, an=安, long=龙…
@@ -99,8 +106,13 @@ def looks_like_pinyin(token: str) -> bool:
 
 
 def contains_pinyin(name: str) -> list[str]:
-    """返回名字中疑似拼音的片段。空列表表示干净。"""
-    if any(c in _TONED_CHARS for c in name):
+    """返回名字中疑似拼音的片段。空列表表示干净。
+
+    只有**拼音专属**的声调符号才直接判定。共用重音（á é í ó ú）
+    要走音节判断 —— 它们在西欧语言里是常态，
+    见到就判拼音会把 Cárdenas、Étienne、Gonçalo 全判成音译。
+    """
+    if any(c in _PINYIN_ONLY_TONES for c in name):
         return [name]
     return [tok for tok in _LATIN_TOKEN_RE.findall(name) if looks_like_pinyin(tok)]
 
@@ -117,7 +129,61 @@ def looks_like_katakana_transliteration(name: str) -> bool:
     return "・" in s or "･" in s or len(s.replace(" ", "")) >= 4
 
 
-def validate_localized_name(name: str, target_language: str) -> tuple[bool, str | None]:
+#: 各书写系统的字符区间。判定「这个名字用的是不是目标语言的文字」——
+#: 原来只认拉丁字母，于是俄语的 Фёдор、印地语的 अजय、阿拉伯语的 يوسف
+#: 全被判成不合格，然后回落到兜底池。而兜底池只有 ja/en/ko，
+#: 俄语会拿到一个英语名 —— 给俄语世界观配英文名比不配更糟，
+#: 且下游全链路都会用它，没有任何一处会报错。
+_SCRIPT_RANGES: dict[str, tuple[tuple[str, str], ...]] = {
+    "latin": (("A", "Z"), ("a", "z"), ("À", "ÿ"), ("Ā", "ſ")),
+    "cyrillic": (("Ѐ", "ӿ"),),
+    "arabic": (("؀", "ۿ"), ("ݐ", "ݿ")),
+    "devanagari": (("ऀ", "ॿ"),),
+    "bengali": (("ঀ", "৿"),),
+    "han": (("一", "鿿"),),
+    "kana": (("぀", "ヿ"),),
+    "hangul": (("가", "힣"), ("ᄀ", "ᇿ")),
+}
+
+#: 目标语言 → 期望的书写系统。多个表示都可接受。
+_LANG_SCRIPTS: dict[str, tuple[str, ...]] = {
+    "en": ("latin",), "es": ("latin",), "fr": ("latin",), "pt": ("latin",),
+    "de": ("latin",), "it": ("latin",), "nl": ("latin",), "pl": ("latin",),
+    "tr": ("latin",), "id": ("latin",), "vi": ("latin",),
+    "ru": ("cyrillic",), "uk": ("cyrillic",), "bg": ("cyrillic",),
+    "ar": ("arabic",), "fa": ("arabic",), "ur": ("arabic",),
+    "hi": ("devanagari",), "mr": ("devanagari",), "ne": ("devanagari",),
+    "bn": ("bengali",),
+    "zh": ("han",), "ja": ("han", "kana"), "ko": ("hangul",),
+}
+
+
+def detect_scripts(value: str) -> set[str]:
+    """这个字符串用到了哪些书写系统。"""
+    found: set[str] = set()
+    for ch in value:
+        if not ch.strip() or ch in "'-·.":
+            continue
+        for name, ranges in _SCRIPT_RANGES.items():
+            if any(lo <= ch <= hi for lo, hi in ranges):
+                found.add(name)
+                break
+    return found
+
+
+def _min_tokens(name_pattern: str | None) -> int:
+    """这个姓名格式至少要几段。
+
+    俄语正式姓名是「名 + 父称 + 姓」三段（Фёдор Степанович Рукавишников）。
+    按两段判会把完全正确的俄语全名判成不合格 —— 而不合格的下场是
+    回落到兜底池，拿到一个别的语言的名字。
+    """
+    return 3 if (name_pattern or "").startswith("given_patronymic") else 2
+
+
+def validate_localized_name(
+    name: str, target_language: str, name_pattern: str | None = None
+) -> tuple[bool, str | None]:
     """校验一个候选名是否可用。返回 (是否合格, 不合格原因)。"""
     value = (name or "").strip()
     if not value:
@@ -125,7 +191,21 @@ def validate_localized_name(name: str, target_language: str) -> tuple[bool, str 
 
     lang = target_language[:2].lower()
 
-    if lang in {"ja", "ko"}:
+    if lang == "ko":
+        # 谚文既不是汉字也不是假名，套 ja 的判据会把所有韩文名判成不合格，
+        # 然后回落到兜底池 —— 而池子里正是这些被判不合格的名字，
+        # 于是韩语这条线整个走不通。
+        used = detect_scripts(value)
+        if "hangul" in used:
+            return True, None
+        if "han" in used:
+            return True, None          # 韩语人名可用汉字表记
+        hits = contains_pinyin(value)
+        if hits:
+            return False, f"「{value}」含拼音片段 {hits}"
+        return False, f"「{value}」不含谚文或汉字"
+
+    if lang == "ja":
         if contains_han(value) or _KATAKANA_RE.match(value) or _has_kana(value):
             if looks_like_katakana_transliteration(value):
                 return False, f"「{value}」是片假名音译，不是文化等效命名"
@@ -138,14 +218,28 @@ def validate_localized_name(name: str, target_language: str) -> tuple[bool, str 
     if lang == "zh":
         return (True, None) if contains_han(value) else (False, f"「{value}」不含汉字")
 
-    # 拉丁语系目标
-    hits = contains_pinyin(value)
-    if hits:
-        return False, f"「{value}」含拼音片段 {hits}"
-    if contains_han(value):
+    # 其余语言：按该语言的书写系统判定
+    expected = _LANG_SCRIPTS.get(lang, ("latin",))
+    used = detect_scripts(value)
+    if not used:
+        return False, f"「{value}」不含任何可识别的文字"
+    if not used & set(expected):
+        return False, (
+            f"「{value}」用的是 {'/'.join(sorted(used))} 文字，"
+            f"目标语言 {lang} 需要 {'/'.join(expected)}"
+        )
+    if "han" in used and "han" not in expected:
         return False, f"「{value}」残留汉字"
-    if len(_LATIN_TOKEN_RE.findall(value)) < 2:
-        return False, f"「{value}」应为「名 + 姓」的完整本地姓名"
+    if "latin" in expected:
+        hits = contains_pinyin(value)
+        if hits:
+            return False, f"「{value}」含拼音片段 {hits}"
+
+    need = _min_tokens(name_pattern)
+    parts = [p for p in value.replace("　", " ").split() if p]
+    if len(parts) < need:
+        shape = "名 + 父称 + 姓" if need == 3 else "名 + 姓"
+        return False, f"「{value}」应为「{shape}」的完整本地姓名"
     return True, None
 
 
@@ -154,6 +248,9 @@ def _has_kana(s: str) -> bool:
 
 
 # ── 确定性兜底 ────────────────────────────────────────────────────────────────
+
+class NoFallbackPool(RuntimeError):
+    """该目标语言没有兜底姓名池。宁可报错，也不给一个别的语言的名字。"""
 
 _FALLBACK_POOLS: dict[str, list[tuple[str, str]]] = {
     "ja": [
@@ -170,6 +267,35 @@ _FALLBACK_POOLS: dict[str, list[tuple[str, str]]] = {
     "ko": [
         ("김민준", ""), ("이서연", ""), ("박지훈", ""), ("최수빈", ""),
     ],
+    "ru": [
+        ("Фёдор Ильич Соколов", ""), ("Анна Петровна Волкова", ""),
+        ("Николай Андреевич Лебедев", ""), ("Мария Львовна Зайцева", ""),
+        ("Павел Сергеевич Морозов", ""), ("Дарья Ивановна Орлова", ""),
+    ],
+    "es": [
+        ("Alonso Quijada", ""), ("Isabel Montoya", ""), ("Rodrigo Vela", ""),
+        ("Beatriz Cárdenas", ""), ("Gaspar Mendoza", ""), ("Elena Ferrer", ""),
+    ],
+    "fr": [
+        ("Étienne Duval", ""), ("Camille Rousseau", ""), ("Henri Baudin", ""),
+        ("Sylvie Marchand", ""), ("Armand Delacroix", ""), ("Louise Bernard", ""),
+    ],
+    "pt": [
+        ("Duarte Nogueira", ""), ("Inês Ribeiro", ""), ("Gonçalo Braga", ""),
+        ("Beatriz Soares", ""), ("Afonso Meireles", ""), ("Clara Antunes", ""),
+    ],
+    "ar": [
+        ("يوسف بن إبراهيم", ""), ("زينب بنت حسن", ""), ("عمر بن خالد", ""),
+        ("فاطمة بنت سليمان", ""),
+    ],
+    "hi": [
+        ("अजय शर्मा", ""), ("मीरा वर्मा", ""), ("रघुनाथ सिंह", ""),
+        ("कमला देवी", ""),
+    ],
+    "bn": [
+        ("অরুণ ঘোষ", ""), ("শ্যামা দত্ত", ""), ("বিমল সরকার", ""),
+        ("রেণুকা বসু", ""),
+    ],
 }
 
 
@@ -182,7 +308,14 @@ def deterministic_fallback_name(
     改用 sha256：同一 (entity, transform, lang) 在任何进程、任何时刻结果恒定。
     """
     lang = target_language[:2].lower()
-    pool = _FALLBACK_POOLS.get(lang, _FALLBACK_POOLS["en"])
+    pool = _FALLBACK_POOLS.get(lang)
+    if pool is None:
+        # 不给别的语言的名字。回落到英语池会让俄语角色叫 Roland Whitfield，
+        # 下游全链路都会用它，且没有任何一处会报错 —— 比没有名字糟得多。
+        raise NoFallbackPool(
+            f"目标语言 {lang} 没有兜底姓名池。请人工指定译名，"
+            f"或在 _FALLBACK_POOLS 里补一组该语言的名字。"
+        )
     digest = hashlib.sha256(
         f"{entity_id}|{transform_id}|{target_language}".encode()
     ).digest()

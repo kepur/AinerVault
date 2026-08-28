@@ -307,7 +307,7 @@ def _name_one_batch(
             target_name = str(member.get("target_name") or "").strip()
 
             ok, why = nm.validate_localized_name(
-                target_name, transform.target_language_code
+                target_name, transform.target_language_code, pattern
             )
             if not ok:
                 # 从备选里找一个合格的
@@ -315,14 +315,27 @@ def _name_one_batch(
                 for alt in member.get("alternatives") or []:
                     cand = str(alt.get("name") or "").strip()
                     if nm.validate_localized_name(
-                        cand, transform.target_language_code
+                        cand, transform.target_language_code, pattern
                     )[0]:
                         picked = (cand, str(alt.get("reading") or ""))
                         break
                 if picked is None:
-                    fb_name, fb_reading = nm.deterministic_fallback_name(
-                        entity.id, transform.id, transform.target_language_code
-                    )
+                    try:
+                        fb_name, fb_reading = nm.deterministic_fallback_name(
+                            entity.id, transform.id, transform.target_language_code
+                        )
+                    except nm.NoFallbackPool as exc:
+                        # 该语言没有兜底池。跳过这个实体而不是硬塞一个
+                        # 别的语言的名字 —— 那会一路用下去且沿途不报错。
+                        log.warning("%s 无法命名：%s", entity.display_name, exc)
+                        result.rejected.append({
+                            "entity": entity.display_name,
+                            "proposed": target_name,
+                            "reason": why,
+                            "fallback": None,
+                            "action": "已跳过，需人工指定译名",
+                        })
+                        continue
                     picked = (fb_name, fb_reading)
                     result.rejected.append({
                         "entity": entity.display_name,

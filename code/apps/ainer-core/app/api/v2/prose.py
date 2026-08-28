@@ -45,18 +45,42 @@ def _transform(db: Session, tid: str) -> WorldTransform:
     return t
 
 
-def _active_transform(db: Session, novel_id: str, lang: str) -> WorldTransform:
-    t = db.execute(
-        select(WorldTransform).where(
-            WorldTransform.novel_id == novel_id,
-            WorldTransform.target_language_code == lang,
-            WorldTransform.status == TransformStatus.active,
-        ).order_by(WorldTransform.version.desc())
-    ).scalars().first()
-    if t is None:
+def _active_transform(
+    db: Session, novel_id: str, lang: str | None = None
+) -> WorldTransform:
+    """按语言取 active 映射；不给语言时取这本书唯一的那个。
+
+    原来不给语言就默认 "en-US" —— 在一个支持十大语言的系统里
+    硬编码英语是错的：跑俄语线的用户会收到「en-US 没有 active 的世界观映射」，
+    错误信息指向一个他从没提过的语言，根本无从排查。
+
+    只有一个 active 映射时不该逼用户重复说明它是哪个；
+    有多个时必须明确指定，猜错的代价是把译文写进错误的版本。
+    """
+    q = select(WorldTransform).where(
+        WorldTransform.novel_id == novel_id,
+        WorldTransform.status == TransformStatus.active,
+    )
+    if lang:
+        q = q.where(WorldTransform.target_language_code == lang)
+    rows = list(db.execute(q.order_by(WorldTransform.version.desc())).scalars())
+    if not rows:
         raise HTTPException(
-            status_code=409, detail=f"{lang} 没有 active 的世界观映射")
-    return t
+            status_code=409,
+            detail=(f"{lang} 没有 active 的世界观映射" if lang
+                    else "这本书还没有 active 的世界观映射，请先创建并激活"),
+        )
+    if lang is None:
+        langs = {t.target_language_code for t in rows}
+        if len(langs) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"这本书有多个 active 映射（{'、'.join(sorted(langs))}），"
+                    f"请用 language 或 transform_id 指明要哪一个"
+                ),
+            )
+    return rows[0]
 
 
 # ── 1. 分块 ───────────────────────────────────────────────────────────────────
@@ -171,7 +195,7 @@ def review_prose(chapter_id: str, body: ReviewIn,
     c = _chapter(db, chapter_id)
     t = (
         _transform(db, body.transform_id) if body.transform_id
-        else _active_transform(db, c.novel_id, body.language or "en-US")
+        else _active_transform(db, c.novel_id, body.language)
     )
     try:
         return review_pipe.review_translation(
@@ -259,7 +283,7 @@ def back_check(chapter_id: str, body: BackCheckIn,
     c = _chapter(db, chapter_id)
     t = (
         _transform(db, body.transform_id) if body.transform_id
-        else _active_transform(db, c.novel_id, body.language or "en-US")
+        else _active_transform(db, c.novel_id, body.language)
     )
     try:
         return bc_pipe.back_check(
@@ -349,7 +373,7 @@ def compile_audiobook(chapter_id: str, body: AudiobookIn,
     c = _chapter(db, chapter_id)
     t = (
         _transform(db, body.transform_id) if body.transform_id
-        else _active_transform(db, c.novel_id, body.language or "en-US")
+        else _active_transform(db, c.novel_id, body.language)
     )
     try:
         return ab.compile_audiobook(db, c, t).as_dict()

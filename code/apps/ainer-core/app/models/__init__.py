@@ -15,7 +15,8 @@ from app.models.meme import MemeEntry, MemeRegister, MemeRendering
 from app.models.narrative import StoryBeat, StyleHint
 from app.models.narrative_device import (
     BackTranslationCheck, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
-    NarrativeDevice, PlotLoad, Volatility, choose_strategy,
+    NarrativeDevice, PlotLoad, STRATEGY_BRIEF, Volatility, choose_strategy,
+    strategy_brief,
 )
 from app.models.performance import (
     Facing, ShotPerformance, SpeechRole, StagePosition,
@@ -51,6 +52,7 @@ __all__ = [
     "ShotPerformance", "SpeechRole", "StagePosition", "Facing",
     "QualityTier", "DEFAULT_TIER",
     "PlotLoad", "Volatility", "choose_strategy",
+    "STRATEGY_BRIEF", "strategy_brief",
     "Novel", "Chapter", "SourceFormat",
     "AssetSpec", "AssetVariant", "ShotAssetBinding", "DirectorProfile",
     "AssetKindSpec", "AssetOrigin",

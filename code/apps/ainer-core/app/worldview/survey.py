@@ -318,6 +318,9 @@ def survey_chapter(
             (src_profile_early.language_json or {}).get("code")
             if src_profile_early else None
         )
+    # 候选词上限压到 24：模型会试着给每个候选都出一条词条，
+    # 给 40 个就要生成 40 条，输出量随之翻倍
+    max_candidates = min(max_candidates, 24)
     candidates = _candidate_tokens(texts, covered, max_candidates, src_lang)
     # 候选词是**降噪加速**手段，不是前置条件。
     # 短章节、新书开头、名物密度低的段落，统计层本来就给不出候选 ——
@@ -330,7 +333,10 @@ def survey_chapter(
 
     src_profile = db.get(WorldProfile, transform.source_profile_id)
     tgt_profile = db.get(WorldProfile, transform.target_profile_id)
-    excerpt = "\n".join(texts)[:6000]
+    # 原文节选压到 3000 字：每条词条的输出（译法 + 读音 + 禁用词 + 依据）
+    # 是输入的好几倍，一次给太多原文，模型会试图把整章的名物一次列完，
+    # 直接撞穿输出上限。宁可分章多跑几次 —— 词条是跨章累积的，不会丢。
+    excerpt = "\n".join(texts)[:3000]
     known_sample = ", ".join(sorted(covered)[:60])
 
     data, _task = chat_json(

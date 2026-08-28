@@ -120,8 +120,18 @@ class _Caller:
                     f"请减少单次请求的条目数（分批调用）。",
                 ) from exc
             log.warning("输出被截断（max_tokens=%d），抬到 %d 重试", max_tokens, bigger)
-            return self._once(messages, temperature=temperature,
-                              max_tokens=bigger, json_mode=json_mode)
+            try:
+                return self._once(messages, temperature=temperature,
+                                  max_tokens=bigger, json_mode=json_mode)
+            except _Truncated as exc2:
+                # _Truncated 是内部信号。让它逃出这一层就会变成 500，
+                # 调用方只看到「Internal Server Error」，
+                # 完全不知道该做的是把单次请求拆小。
+                raise CapabilityError(
+                    CapErrorCode.BAD_RESPONSE,
+                    f"输出两轮均被截断（已抬到 {bigger}）。"
+                    f"这一次请求要生成的内容太多 —— 请减少单批条目数。",
+                ) from exc2
 
     def _once(self, messages: list[dict[str, str]], *, temperature: float,
               max_tokens: int, json_mode: bool) -> str:

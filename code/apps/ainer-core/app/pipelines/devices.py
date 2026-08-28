@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
+    strategy_brief,
     Chapter, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
     NarrativeDevice, ScriptBlock, ScriptDoc, StoryBeat,
 )
@@ -232,13 +233,7 @@ def build_device_brief(
 
     lines = ["【叙事装置】这一段有以下效果必须在译文中重现，重现方式见「策略」："]
     for d in rows[:12]:
-        plan = {
-            DeviceStrategy.preserve: "照机制直接重铸",
-            DeviceStrategy.substitute: f"换成{target_display}文化里的等价装置",
-            DeviceStrategy.compensate: "此处难以直译，可在邻近处补一个同效果的",
-            DeviceStrategy.relocate: "可移到附近合适的位置实现",
-            DeviceStrategy.drop: "可放弃",
-        }[d.strategy]
+        plan = strategy_brief(d.strategy, target_display)
         lines.append(
             f"  · [{d.device_type.value}／{d.effect.value}／强度{d.intensity}] "
             f"「{d.source_text[:40]}」\n"

@@ -464,7 +464,13 @@ def update_name(name_id: str, body: NameIn, db: Session = Depends(get_db)) -> di
         raise HTTPException(status_code=409, detail="译名已锁定，请先解锁")
 
     t = db.get(WorldTransform, n.transform_id)
-    ok, why = naming.validate_localized_name(body.target_name, t.target_language_code)
+    tgt_profile = db.get(WorldProfile, t.target_profile_id)
+    pattern = (
+        (tgt_profile.language_json or {}).get("name_pattern") if tgt_profile else None
+    )
+    ok, why = naming.validate_localized_name(
+        body.target_name, t.target_language_code, pattern
+    )
     if not ok:
         raise HTTPException(status_code=422, detail=why)
 

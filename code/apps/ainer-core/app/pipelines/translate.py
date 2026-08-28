@@ -23,6 +23,7 @@ from app.capability.schemas import Capability
 from app.capability.service import submit_task
 from app.ids import new_id
 from app.models import (
+    STRATEGY_BRIEF,
     Chapter, DocStatus, GlossaryTerm, NovelTranslationSettings, ScriptBlock, ScriptDoc,
     TaskStatus, TermStatus, TranslationBlock, TranslationBlockStatus, WorldProfile,
     WorldTransform,
@@ -304,14 +305,6 @@ def translate_chapter(
     return result
 
 
-_STRATEGY_CN = {
-    "preserve": "照搬", "substitute": "换等价说法", "transplant": "换目标文化的梗",
-    "naturalize": "按目标习惯重写", "gloss_inline": "行内轻注（不加括号）",
-    "footnote": "正文保留＋脚注", "compensate": "此处认赔、就近补偿",
-    "relocate": "移到别处实现", "omit": "舍弃",
-}
-
-
 def _meme_brief(db: Session, transform: WorldTransform, texts: list[str]) -> str:
     """文化梗对照。只带这批文本里真出现的条目 —— 全量注入会淹掉真正相关的几条。"""
     from app.pipelines import memes as meme_pipe
@@ -321,7 +314,7 @@ def _meme_brief(db: Session, transform: WorldTransform, texts: list[str]) -> str
         return ""
     lines = ["【文化梗处理表】这些说法的字面义不等于实际用法，直译必错。按下表处理："]
     for h in hits:
-        line = f"  {h['surface']} → 【{_STRATEGY_CN.get(h['strategy'], h['strategy'])}】"
+        line = f"  {h['surface']} → 【{STRATEGY_BRIEF.get(h['strategy'], h['strategy'])}】"
         if h.get("target_text"):
             line += f" {h['target_text']}"
         if h.get("gloss_text"):

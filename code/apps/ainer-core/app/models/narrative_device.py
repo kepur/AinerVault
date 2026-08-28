@@ -104,6 +104,29 @@ class DeviceStrategy(str, Enum):
     omit = "omit"
 
 
+#: 策略 → 给模型看的中文说明。**唯一一份**。
+#: 之前 devices.py 和 translate.py 各存一份，策略从 5 档扩到 9 档时
+#: 只改了枚举，两份映射都没跟上 —— 而它们用 `[key]` 索引，
+#: 漏一档不是显示不全，是直接 KeyError 把整次翻译打挂。
+STRATEGY_BRIEF: dict[str, str] = {
+    "preserve": "照机制直接重铸",
+    "substitute": "换成目标文化里承担同样功能的等价物",
+    "transplant": "换一个目标文化自己的梗，字面全变、效果对齐",
+    "naturalize": "按目标文化的表达习惯重写，不留源文痕迹",
+    "gloss_inline": "行内轻注：把必要背景自然编进句子，不加括号不打断",
+    "footnote": "正文保留原样，注释单列",
+    "compensate": "此处认赔，在邻近处补一个同效果的",
+    "relocate": "移到附近合适的位置实现",
+    "omit": "舍弃，不留字面翻译",
+}
+
+
+def strategy_brief(strategy: "DeviceStrategy", target_display: str = "目标") -> str:
+    """取策略说明。用 get 兜底 —— 新增枚举忘了配文案时应该降级，不该崩。"""
+    text = STRATEGY_BRIEF.get(strategy.value, strategy.value)
+    return text.replace("目标文化", f"{target_display}文化")
+
+
 class PlotLoad(str, Enum):
     """这处装置承载多少情节。决定「能不能舍」。
 

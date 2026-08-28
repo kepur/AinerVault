@@ -149,3 +149,30 @@ class TestPositionJump:
         不排除的话，每个进出场都会报一次警，告警就没人看了。
         """
         assert not is_position_jump(prev, cur, moved=False)
+
+
+# ── 策略文案完整性 ────────────────────────────────────────────────────────────
+
+from app.models import DeviceStrategy, STRATEGY_BRIEF, strategy_brief
+
+
+class TestStrategyBrief:
+    @pytest.mark.parametrize("s", list(DeviceStrategy))
+    def test_every_strategy_has_a_brief(self, s):
+        """每一档都要有说明文本。
+
+        这条测试是被一次线上崩溃逼出来的：策略从 5 档扩到 9 档时，
+        devices.py 和 translate.py 各存了一份 5 档的映射，
+        而它们用 `[key]` 索引 —— 漏一档不是显示不全，
+        是 KeyError 把整次翻译打挂，且只有真跑到那一档才会炸。
+        """
+        assert s.value in STRATEGY_BRIEF, f"{s.value} 缺说明文本"
+
+    def test_unknown_strategy_degrades_not_crashes(self):
+        """取不到时降级返回枚举值本身，不抛异常。"""
+        fake = SimpleNamespace(value="some_future_strategy")
+        assert strategy_brief(fake) == "some_future_strategy"
+
+    def test_target_display_interpolated(self):
+        out = strategy_brief(DeviceStrategy.substitute, "摄政英国")
+        assert "摄政英国" in out
