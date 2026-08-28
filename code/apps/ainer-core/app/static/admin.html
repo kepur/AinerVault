@@ -358,6 +358,16 @@ async function run(btn, fn, label) {
   finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
 }
 
+const NAMETYPE_CN = {
+  proper: "专名", role: "职务", epithet: "名号", generic: "泛指",
+};
+const NAMETYPE_HINT = {
+  proper: "有专属名字 —— 会在目标文化里造一个等效专名",
+  role: "以职务／身份指代 —— 走名物词表，不生成人名",
+  epithet: "描述性名号 —— 意译，不音译",
+  generic: "泛指，本不该建实体",
+};
+
 const REGISTER_CN = {
   formal_full: "全名", formal_title: "头衔式", respectful: "敬称",
   intimate: "亲昵", diminutive: "小名", kinship: "关系代称",
@@ -1035,6 +1045,23 @@ const World = {
 
 // ───────────────────────── 世界模型抽离 ─────────────────────────
 const Model = {
+  /** 指认方式可改。判错的代价最大 ——
+   *  「总镖头」被判成专名，就会拿到一个人名，
+   *  然后译文里那个职务变成一个凭空出现的角色。 */
+  nameTypeCell(r) {
+    const cur = r.name_type || "proper";
+    return `<select onchange="Model.setNameType('${r.id}',this.value,this)"
+      style="min-width:88px;font-size:12px" title="${h(NAMETYPE_HINT[cur]||"")}">${
+      Object.keys(NAMETYPE_CN).map(k=>`<option value="${k}" ${k===cur?"selected":""}
+        >${h(NAMETYPE_CN[k])}</option>`).join("")}</select>`;
+  },
+  async setNameType(id, v, el) {
+    try {
+      await api("PATCH", `/entities/${id}`, {name_type: v});
+      logOk(`已改为「${NAMETYPE_CN[v]}」：${NAMETYPE_HINT[v]}`);
+      if (el) el.title = NAMETYPE_HINT[v] || "";
+    } catch (e) { logErr(`修改失败：${e.message}`); }
+  },
   async render(v) {
     if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
       请先在「书架」打开一个章节</div></div>`; return; }
@@ -1047,15 +1074,18 @@ const Model = {
 
     const ev = (rows) => (rows||[]).slice(0,2).map(x=>h(x)).join("；") || "—";
     const TABS = {
-      characters: {n:"人物", cols:["名称","外貌","声音","别名","原文证据"],
+      characters: {n:"人物", cols:["名称","指认方式","外貌","声音","别名","原文证据"],
         row:r=>[`<b>${h(r.name)}</b>${r.family_key?`<br><span class="mono" style="color:var(--muted);font-size:11px">${h(r.family_key)}</span>`:""}`,
+                Model.nameTypeCell(r),
                 h(r.appearance||"—"), h(r.voice_hints||"—"),
                 (r.aliases||[]).map(h).join("、")||"—", ev(r.evidence)]},
-      locations:  {n:"场景", cols:["名称","视觉关键词","摘要","原文证据"],
-        row:r=>[`<b>${h(r.name)}</b>`, (r.visual_keywords||[]).map(h).join("、")||"—",
+      locations:  {n:"场景", cols:["名称","指认方式","视觉关键词","摘要","原文证据"],
+        row:r=>[`<b>${h(r.name)}</b>`, Model.nameTypeCell(r),
+                (r.visual_keywords||[]).map(h).join("、")||"—",
                 h(r.summary||"—"), ev(r.evidence)]},
-      props:      {n:"道具", cols:["名称","持有者","用途","原文证据"],
-        row:r=>[`<b>${h(r.name)}</b>`, h(r.owner||"—"), h(r.usage||r.summary||"—"),
+      props:      {n:"道具", cols:["名称","指认方式","持有者","用途","原文证据"],
+        row:r=>[`<b>${h(r.name)}</b>`, Model.nameTypeCell(r),
+                h(r.owner||"—"), h(r.usage||r.summary||"—"),
                 ev(r.evidence)]},
       beats:      {n:"剧情节拍", cols:["#","节拍","张力","地点","出场","原文证据"],
         row:r=>[`<span class="mono">${r.order_no}</span>`,

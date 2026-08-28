@@ -197,6 +197,9 @@ def get_world_model(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     def pack(e: WorldEntity) -> dict:
         return {
             "id": e.id, "name": e.display_name, "kind": e.kind.value,
+            # 决定这条实体走名字映射还是名物词表 —— 判错的代价最大，
+            # 所以要能在界面上看见并改
+            "name_type": e.name_type.value,
             "aliases": e.aliases_json or [], "summary": e.summary,
             "appearance": e.appearance, "voice_hints": e.voice_hints,
             "visual_keywords": e.visual_keywords or [],
@@ -313,8 +316,19 @@ def update_entity(entity_id: str, body: dict, db: Session = Depends(get_db)) -> 
             setattr(e, field_name, body[field_name])
     if "aliases" in body:
         e.aliases_json = list(body["aliases"])
+    if "name_type" in body:
+        from app.models import NameType
+
+        try:
+            e.name_type = NameType(body["name_type"])
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"name_type 只能是 {[t.value for t in NameType]}",
+            ) from exc
     db.flush()
     return {"id": e.id, "display_name": e.display_name,
+            "name_type": e.name_type.value,
             "aliases": e.aliases_json or [], "family_key": e.family_key}
 
 
