@@ -8,9 +8,11 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.requests import Request
 
 from app.capability.errors import CapabilityError
@@ -68,6 +70,21 @@ app.include_router(shots.router)
 app.include_router(audio.router)
 app.include_router(gen_tasks.router)
 app.include_router(settings_api.router)
+
+
+# ── 后台 ──────────────────────────────────────────────────────────────────────
+_STATIC = Path(__file__).parent / "static"
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page() -> FileResponse:
+    """单文件后台。零构建、零依赖，改完刷新即生效。"""
+    return FileResponse(_STATIC / "admin.html")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/admin")
 
 
 @app.get("/health", tags=["meta"])

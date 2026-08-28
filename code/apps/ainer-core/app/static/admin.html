@@ -1,0 +1,1138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AinerN2D Core</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234ea88f'/%3E%3Ctext x='16' y='23' font-size='19' font-family='monospace' font-weight='700' fill='%230f1416' text-anchor='middle'%3EN%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0f1416; --panel:#151c1f; --panel-2:#1b2427; --line:#263236; --line-soft:#1f2a2d;
+  --ink:#e6eeec; --body:#a8b8b5; --muted:#6f8380;
+  --accent:#4ea88f; --accent-dim:#1d3a33; --accent-ink:#0f1416;
+  --warn:#d9a441; --warn-dim:#332a15; --danger:#d4664c; --danger-dim:#331c16;
+  --ok:#4ea88f;
+  --mono:"SF Mono",Menlo,Consolas,"IBM Plex Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+}
+@media(prefers-color-scheme:light){
+  :root{
+    --bg:#f4f6f5; --panel:#fff; --panel-2:#eef2f1; --line:#dbe3e1; --line-soft:#e8eeec;
+    --ink:#111a1c; --body:#3d4a48; --muted:#728380;
+    --accent:#2b7a66; --accent-dim:#dcece6; --accent-ink:#fff;
+    --warn:#8a6414; --warn-dim:#f5ecd8; --danger:#a8452f; --danger-dim:#f6e3de;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--body);font:14px/1.6 var(--sans);
+     -webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;background:var(--panel-2);color:var(--ink);
+  border:1px solid var(--line);border-radius:5px;padding:7px 9px;width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+textarea{font-family:var(--mono);font-size:12.5px;line-height:1.55;resize:vertical}
+
+/* layout */
+.app{display:grid;grid-template-columns:200px 1fr;min-height:100vh}
+.side{background:var(--panel);border-right:1px solid var(--line);padding:16px 0;
+      display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:0 18px 16px;border-bottom:1px solid var(--line-soft);margin-bottom:10px}
+.brand b{color:var(--ink);font-size:14px;letter-spacing:.02em}
+.brand span{display:block;font:11px/1.5 var(--mono);color:var(--muted);margin-top:3px}
+.nav{display:flex;flex-direction:column;gap:1px;padding:0 8px}
+.nav button{display:flex;align-items:center;gap:9px;background:none;border:0;color:var(--body);
+  padding:9px 10px;border-radius:6px;text-align:left;font-size:13.5px}
+.nav button:hover{background:var(--panel-2);color:var(--ink)}
+.nav button.on{background:var(--accent-dim);color:var(--accent);font-weight:600}
+.nav .ico{width:17px;text-align:center;opacity:.85}
+.side-foot{margin-top:auto;padding:12px 18px 0;border-top:1px solid var(--line-soft);
+  font:11px/1.6 var(--mono);color:var(--muted)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:5px}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--danger)}
+
+.main{min-width:0;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:14px;padding:12px 22px;border-bottom:1px solid var(--line);
+  background:var(--panel);position:sticky;top:0;z-index:10;min-height:53px}
+.top h1{margin:0;font-size:15px;color:var(--ink);font-weight:600}
+.top .sub{font:11.5px/1.4 var(--mono);color:var(--muted)}
+.top .grow{flex:1}
+.content{padding:22px;max-width:1240px;width:100%}
+
+/* bits */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-bottom:14px}
+.card h2{margin:0 0 4px;font-size:14px;color:var(--ink);font-weight:600}
+.card .hint{margin:0 0 14px;font-size:12.5px;color:var(--muted);max-width:70ch}
+.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;gap:10px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+label{display:block;font:11px/1.7 var(--mono);color:var(--muted);letter-spacing:.06em;
+      text-transform:uppercase;margin-bottom:3px}
+
+.btn{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+  padding:7px 13px;border-radius:6px;font-size:13px;white-space:nowrap;transition:.12s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.pri:hover{filter:brightness(1.08);color:var(--accent-ink)}
+.btn.sm{padding:4px 9px;font-size:12px}
+.btn.danger:hover{border-color:var(--danger);color:var(--danger)}
+
+.tag{display:inline-block;font:10.5px/1.5 var(--mono);padding:2px 7px;border-radius:3px;
+  letter-spacing:.05em;white-space:nowrap}
+.t-ok{background:var(--accent-dim);color:var(--accent)}
+.t-warn{background:var(--warn-dim);color:var(--warn)}
+.t-bad{background:var(--danger-dim);color:var(--danger)}
+.t-mute{background:var(--panel-2);color:var(--muted)}
+
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{text-align:left;font:10.5px/1.6 var(--mono);color:var(--muted);letter-spacing:.1em;
+   text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel-2)}
+.mono{font-family:var(--mono);font-size:12px}
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
+
+.steps{display:flex;gap:0;flex-wrap:wrap;margin-bottom:14px}
+.step{flex:1;min-width:118px;background:var(--panel);border:1px solid var(--line);
+  padding:9px 12px;position:relative}
+.step:first-child{border-radius:7px 0 0 7px}
+.step:last-child{border-radius:0 7px 7px 0}
+.step+.step{border-left:0}
+.step .k{font:10px/1.5 var(--mono);color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.step .v{font-size:15px;color:var(--ink);font-weight:600;margin-top:2px}
+.step.done .v{color:var(--accent)}
+.step.blocked .v{color:var(--danger)}
+
+.para{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:11px 0;
+  border-bottom:1px solid var(--line-soft)}
+.para:last-child{border-bottom:0}
+.para .src{color:var(--muted);font-size:13px}
+.para .tgt{color:var(--ink);font-size:13.5px}
+.para .meta{grid-column:1/-1;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.para.skip{opacity:.5}
+
+.log{background:#0a0e10;border:1px solid var(--line);border-radius:7px;padding:11px 13px;
+  font:12px/1.65 var(--mono);color:#8fb3ab;max-height:280px;overflow:auto;white-space:pre-wrap;
+  word-break:break-word}
+@media(prefers-color-scheme:light){.log{background:#12191b;color:#a8ccc3}}
+.log .e{color:#d4664c} .log .w{color:#d9a441} .log .s{color:#4ea88f} .log .d{color:#6f8380}
+
+.empty{padding:34px 14px;text-align:center;color:var(--muted);font-size:13px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.spin{animation:none}}
+.hide{display:none!important}
+@media(max-width:860px){
+  .app{grid-template-columns:1fr}
+  .side{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto}
+  .brand{border:0;margin:0;padding:0 14px 0 18px;white-space:nowrap}
+  .nav{flex-direction:row;padding:0 8px}
+  .side-foot{display:none}
+  .para{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <b>AinerN2D</b><span>core v2</span>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="side-foot">
+      <div><span class="dot" id="dot-core"></span>core <span id="st-core">…</span></div>
+      <div><span class="dot" id="dot-gw"></span>gateway <span id="st-gw">…</span></div>
+      <div style="margin-top:6px"><a href="/docs" target="_blank">API 文档 →</a></div>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="top">
+      <h1 id="page-title">设置</h1>
+      <span class="sub" id="page-sub"></span>
+      <span class="grow"></span>
+      <span class="sub" id="task-badge"></span>
+      <button class="btn sm" onclick="App.refresh()">刷新</button>
+    </header>
+    <div class="content" id="view"></div>
+  </main>
+</div>
+
+<script>
+const API = "/api/v2";
+const $ = (s, r=document) => r.querySelector(s);
+const h = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function api(method, path, body) {
+  const res = await fetch(API + path, {
+    method,
+    headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const detail = data && data.detail !== undefined ? data.detail : data;
+    const err = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    err.status = res.status; err.detail = detail;
+    throw err;
+  }
+  return data;
+}
+
+const State = {
+  page: localStorage.getItem("an.page") || "settings",
+  novelId: localStorage.getItem("an.novel") || "",
+  chapterId: localStorage.getItem("an.chapter") || "",
+  lang: localStorage.getItem("an.lang") || "en-GB",
+  transformId: localStorage.getItem("an.transform") || "",
+  save() {
+    localStorage.setItem("an.page", this.page);
+    localStorage.setItem("an.novel", this.novelId);
+    localStorage.setItem("an.chapter", this.chapterId);
+    localStorage.setItem("an.lang", this.lang);
+    localStorage.setItem("an.transform", this.transformId);
+  },
+};
+
+const PAGES = [
+  {id:"settings", ico:"⚙", name:"设置", sub:"LLM 端点与能力路由"},
+  {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
+  {id:"world",    ico:"🌍", name:"世界观", sub:"映射 · 名物词表 · 人名"},
+  {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 翻译 → 审核 → 锁定"},
+  {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
+  {id:"tasks",    ico:"⚡", name:"任务", sub:"生成任务与成本"},
+];
+
+let logBuf = [];
+function log(msg, cls="") {
+  const t = new Date().toTimeString().slice(0,8);
+  logBuf.push(`<span class="d">${t}</span> <span class="${cls}">${h(msg)}</span>`);
+  if (logBuf.length > 200) logBuf.shift();
+  const el = $("#log");
+  if (el) { el.innerHTML = logBuf.join("\n"); el.scrollTop = el.scrollHeight; }
+}
+const logOk = m => log(m, "s"), logWarn = m => log(m, "w"), logErr = m => log(m, "e");
+
+async function run(btn, fn, label) {
+  const old = btn ? btn.innerHTML : null;
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${label||"处理中"}`; }
+  try { return await fn(); }
+  catch (e) { logErr(`${label||"操作"}失败：${e.message}`); throw e; }
+  finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
+}
+
+// ───────────────────────── 设置 ─────────────────────────
+const Settings = {
+  async render(v) {
+    const [eps, caps, routes] = await Promise.all([
+      api("GET", "/settings/endpoints"),
+      api("GET", "/settings/capabilities").catch(() => ({capabilities: [], unsupported: []})),
+      api("GET", "/settings/routes").catch(() => []),
+    ]);
+    this.eps = eps; this.caps = caps;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>能力中间层</h2>
+        <p class="hint">Core 只认能力，不认厂商。把你的网关地址填在这里，
+          换厂商时改这一处即可，Core 与后台零改动。</p>
+        <div class="tblwrap" style="margin-bottom:12px">
+          <table><thead><tr>
+            <th>名称</th><th>地址</th><th>鉴权</th><th>能力</th><th>状态</th><th></th>
+          </tr></thead><tbody>${
+            eps.length ? eps.map(e => `<tr>
+              <td><b>${h(e.name)}</b></td>
+              <td class="mono">${h(e.base_url)}</td>
+              <td class="mono">${h(e.auth_mode)}</td>
+              <td>${e.capabilities_count || 0}</td>
+              <td>${e.health ? (e.health.ok
+                    ? `<span class="tag t-ok">正常 v${h(e.health.version||"?")}</span>`
+                    : `<span class="tag t-bad">异常</span>`)
+                  : `<span class="tag t-mute">未测</span>`}</td>
+              <td class="row" style="gap:5px">
+                <button class="btn sm" onclick="Settings.test('${e.id}',this)">测试</button>
+                <button class="btn sm" onclick="Settings.sync('${e.id}',this)">拉能力</button>
+                <button class="btn sm danger" onclick="Settings.del('${e.id}',this)">删除</button>
+              </td></tr>`).join("")
+            : `<tr><td colspan="6" class="empty">还没有配置端点</td></tr>`
+          }</tbody></table>
+        </div>
+
+        <details ${eps.length ? "" : "open"}>
+          <summary style="cursor:pointer;color:var(--accent);font-size:13px;margin-bottom:10px">
+            + 添加端点</summary>
+          <div class="grid g2" style="margin-top:10px">
+            <div><label>名称</label><input id="ep-name" placeholder="prod"></div>
+            <div><label>Base URL</label>
+              <input id="ep-url" placeholder="https://your-gateway/cap/v1"></div>
+            <div><label>鉴权方式</label>
+              <select id="ep-mode">
+                <option value="bearer">Bearer Token</option>
+                <option value="header">自定义 Header</option>
+                <option value="none">无</option>
+              </select></div>
+            <div><label>Token / Key</label>
+              <input id="ep-token" type="password" placeholder="sk-..."></div>
+            <div><label>Header 名（仅 header 模式）</label>
+              <input id="ep-header" placeholder="X-API-Key"></div>
+          </div>
+          <div class="row" style="margin-top:11px">
+            <button class="btn pri" onclick="Settings.add(this)">添加并测试</button>
+            <span class="sub" style="color:var(--muted);font-size:12px">
+              添加后会自动探活并拉取能力目录</span>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>能力目录</h2>
+        <p class="hint">来自网关的 <code>GET /capabilities</code>。后台的参数表单由这里的
+          param_schema 自动渲染 —— 加模型不需要改前端。</p>
+        ${caps.capabilities.length ? `<div class="tblwrap"><table><thead><tr>
+          <th>能力</th><th>模型</th><th>单价</th><th>预估耗时</th><th>参数</th>
+        </tr></thead><tbody>${
+          caps.capabilities.map(c => c.models.map((m,i) => `<tr>
+            <td class="mono">${i===0 ? h(c.capability) : ""}</td>
+            <td>${h(m.display_name||m.id)} <span class="mono" style="color:var(--muted)">${h(m.id)}</span>
+                ${m.default ? '<span class="tag t-ok">默认</span>' : ""}
+                ${(m.supports&&m.supports.native_audio) ? '<span class="tag t-warn">原生音频</span>' : ""}</td>
+            <td class="mono">${m.pricing ? `$${m.pricing.cost}/${h(m.pricing.unit||"")}` : "-"}</td>
+            <td class="mono">${m.estimated_ms ? (m.estimated_ms/1000).toFixed(1)+"s" : "-"}</td>
+            <td class="mono" style="color:var(--muted)">${
+              Object.keys((m.param_schema||{}).properties||{}).join(", ") || "-"}</td>
+          </tr>`).join("")).join("")
+        }</tbody></table></div>
+        ${caps.unsupported.length ? `<p class="hint" style="margin:10px 0 0">
+          未提供：<span class="mono">${caps.unsupported.map(h).join(", ")}</span></p>` : ""}`
+        : `<div class="empty">还没有拉取能力目录</div>`}
+      </div>
+
+      <div class="card">
+        <h2>能力路由</h2>
+        <p class="hint">能力 × 用途 → 端点。译本线只需要
+          <code>text.chat</code>、<code>text.translate</code>、<code>audio.tts</code>
+          三个能力，图像与视频一个都不用。</p>
+        <div class="row" style="margin-bottom:11px">
+          <button class="btn pri" onclick="Settings.autoRoute(this)">按端点能力自动生成路由</button>
+          <span class="mono" style="color:var(--muted);font-size:12px">
+            当前 ${routes.length} 条</span>
+        </div>
+        ${routes.length ? `<div class="tblwrap"><table><thead><tr>
+          <th>能力</th><th>用途</th><th>端点</th><th>模型</th>
+        </tr></thead><tbody>${
+          routes.slice(0,40).map(r => `<tr>
+            <td class="mono">${h(r.capability)}</td>
+            <td class="mono">${h(r.purpose)}</td>
+            <td class="mono">${h((eps.find(e=>e.id===r.endpoint_id)||{}).name || r.endpoint_id)}</td>
+            <td class="mono">${h(r.model||"默认")}</td>
+          </tr>`).join("")
+        }</tbody></table></div>` : `<div class="empty">还没有路由</div>`}
+      </div>
+
+      <div class="card">
+        <h2>内置资产</h2>
+        <p class="hint">6 个世界观档案、3 对名物词表（198 条）、4 个导演包。幂等，可重复执行。</p>
+        <button class="btn" onclick="Settings.seed(this)">灌入内置资产</button>
+      </div>
+
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
+    `;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+
+  async add(btn) {
+    const name = $("#ep-name").value.trim(), url = $("#ep-url").value.trim();
+    if (!name || !url) return logErr("名称与地址必填");
+    const mode = $("#ep-mode").value, token = $("#ep-token").value.trim();
+    const auth = {mode};
+    if (mode !== "none") auth.token = token;
+    if (mode === "header") auth.header_name = $("#ep-header").value.trim() || "X-API-Key";
+    await run(btn, async () => {
+      const ep = await api("POST", "/settings/endpoints", {name, base_url: url, auth});
+      logOk(`端点 ${name} 已添加`);
+      const t = await api("POST", `/settings/endpoints/${ep.id}:test`);
+      t.ok ? logOk(`探活成功，契约 v${t.version}`) : logErr(`探活失败：${JSON.stringify(t.error)}`);
+      if (t.ok) {
+        const c = await api("POST", `/settings/endpoints/${ep.id}:refresh-caps`);
+        logOk(`能力目录 ${c.capabilities.length} 项`);
+        if (c.missing_required.length) logWarn(`缺主线必需能力：${c.missing_required.join(", ")}`);
+      }
+      App.refresh();
+    }, "添加中");
+  },
+  async test(id, btn) {
+    await run(btn, async () => {
+      const t = await api("POST", `/settings/endpoints/${id}:test`);
+      t.ok ? logOk(`探活成功 v${t.version}`) : logErr(`探活失败：${JSON.stringify(t.error)}`);
+      App.refresh();
+    }, "测试");
+  },
+  async sync(id, btn) {
+    await run(btn, async () => {
+      const c = await api("POST", `/settings/endpoints/${id}:refresh-caps`);
+      logOk(`能力 ${c.capabilities.length} 项：${c.capabilities.join(", ")}`);
+      if (c.missing_required.length) logWarn(`缺必需能力：${c.missing_required.join(", ")}`);
+      App.refresh();
+    }, "拉取");
+  },
+  async del(id, btn) {
+    if (!confirm("删除该端点？相关路由会失效。")) return;
+    await run(btn, async () => {
+      await api("DELETE", `/settings/endpoints/${id}`);
+      logOk("端点已删除"); App.refresh();
+    }, "删除");
+  },
+  async seed(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", "/worldview:seed");
+      logOk(`世界观 +${r.profiles}　词表 +${r.templates}　导演包 +${r.director_profiles}`);
+    }, "灌入");
+  },
+  async autoRoute(btn) {
+    await run(btn, async () => {
+      const eps = await api("GET", "/settings/endpoints");
+      const usable = eps.filter(e => e.enabled && e.capabilities_count > 0);
+      if (!usable.length) return logErr("没有可用端点，请先添加并拉取能力");
+      const PURPOSES = {
+        "text.chat": ["*","script","extract","naming","asset_variant","shot_plan",
+                      "lexicon","review"],
+        "text.translate": ["*","translate"],
+        "audio.tts": ["*","dialogue","narration","voice_ref"],
+        "audio.music": ["*","bgm"],
+        "audio.sfx": ["*","sfx","room_tone","ambience"],
+        "image.text_to_image": ["*","asset_ref","first_frame","scene_bg"],
+        "image.image_to_image": ["*","last_frame"],
+        "video.image_to_video": ["*"],
+      };
+      const routes = [];
+      for (const ep of usable) {
+        const caps = await api("GET", "/settings/capabilities");
+        for (const c of caps.capabilities) {
+          const has = c.models.some(m => m.endpoint_id === ep.id);
+          if (!has) continue;
+          for (const p of (PURPOSES[c.capability] || ["*"])) {
+            if (routes.some(r => r.capability===c.capability && r.purpose===p)) continue;
+            routes.push({capability: c.capability, purpose: p, endpoint_id: ep.id});
+          }
+        }
+      }
+      const r = await api("PUT", "/settings/routes", routes);
+      logOk(`生成 ${r.count} 条路由`);
+      App.refresh();
+    }, "生成中");
+  },
+};
+
+// ───────────────────────── 书架 ─────────────────────────
+const Library = {
+  async render(v) {
+    const novels = (await api("GET", "/novels")).items || [];
+    let chapters = [];
+    if (State.novelId && novels.some(n => n.id === State.novelId)) {
+      chapters = (await api("GET", `/novels/${State.novelId}/chapters`)).items || [];
+    } else if (novels.length) {
+      State.novelId = novels[0].id; State.save();
+      chapters = (await api("GET", `/novels/${State.novelId}/chapters`)).items || [];
+    }
+    v.innerHTML = `
+      <div class="card">
+        <h2>小说</h2>
+        <div class="tblwrap" style="margin-bottom:12px">
+          <table><thead><tr><th></th><th>标题</th><th>源语言</th><th>章节</th><th>字数</th></tr>
+          </thead><tbody>${
+            novels.length ? novels.map(n => `<tr style="cursor:pointer"
+              onclick="Library.pick('${n.id}')">
+              <td>${n.id===State.novelId ? '<span class="tag t-ok">当前</span>' : ""}</td>
+              <td><b>${h(n.title)}</b></td>
+              <td class="mono">${h(n.source_language_code)}</td>
+              <td>${n.chapter_count}</td><td>${n.word_count}</td></tr>`).join("")
+            : `<tr><td colspan="5" class="empty">还没有小说</td></tr>`}
+          </tbody></table>
+        </div>
+        <details ${novels.length ? "" : "open"}>
+          <summary style="cursor:pointer;color:var(--accent);font-size:13px">+ 新建小说</summary>
+          <div class="grid g2" style="margin-top:10px">
+            <div><label>标题</label><input id="nv-title" placeholder="小说名"></div>
+            <div><label>源语言</label>
+              <select id="nv-lang">
+                <option value="zh-CN">zh-CN 中文</option>
+                <option value="en-US">en-US 英语</option>
+                <option value="ja-JP">ja-JP 日语</option>
+              </select></div>
+          </div>
+          <button class="btn pri" style="margin-top:10px" onclick="Library.create(this)">创建</button>
+        </details>
+      </div>
+      ${State.novelId ? `
+      <div class="card">
+        <h2>导入章节</h2>
+        <p class="hint">按标题行自动分章。识别不到章节标记时按长度切分。纯规则，不调 LLM。</p>
+        <textarea id="imp-text" rows="7"
+          placeholder="第一章 标题&#10;&#10;正文…&#10;&#10;第二章 标题&#10;&#10;正文…"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" onclick="Library.imp(this,true)">预览分章</button>
+          <button class="btn pri" onclick="Library.imp(this,false)">导入</button>
+          <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
+                        font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px">
+            <input type="checkbox" id="imp-replace" style="width:auto"> 替换现有章节</label>
+        </div>
+        <div id="imp-out" style="margin-top:11px"></div>
+      </div>
+      <div class="card">
+        <h2>章节 <span class="sub mono" style="color:var(--muted)">${chapters.length} 章</span></h2>
+        <div class="tblwrap"><table><thead><tr>
+          <th></th><th>#</th><th>标题</th><th>字数</th><th>剧本</th><th>译文</th><th></th>
+        </tr></thead><tbody>${
+          chapters.length ? chapters.map(c => {
+            const tr = c.state && c.state.translation || {};
+            const langs = Object.entries(tr).map(([k,vv]) =>
+              `<span class="tag ${vv>=1?'t-ok':'t-warn'}">${h(k)} ${Math.round(vv*100)}%</span>`).join(" ");
+            return `<tr>
+              <td>${c.id===State.chapterId ? '<span class="tag t-ok">当前</span>' : ""}</td>
+              <td class="mono">${c.order_no}</td>
+              <td>${h(c.title||"")}</td>
+              <td class="mono">${c.word_count}</td>
+              <td><span class="tag ${c.state.script==='active'?'t-ok':'t-mute'}">${h(c.state.script)}</span></td>
+              <td>${langs || '<span class="tag t-mute">未译</span>'}</td>
+              <td><button class="btn sm" onclick="Library.open('${c.id}')">打开译本 →</button></td>
+            </tr>`}).join("")
+          : `<tr><td colspan="7" class="empty">还没有章节</td></tr>`}
+        </tbody></table></div>
+      </div>` : ""}
+    `;
+  },
+  pick(id) {
+    State.novelId = id; State.chapterId = ""; State.transformId = "";
+    State.save(); App.refresh();
+  },
+  open(id) { State.chapterId = id; State.save(); App.go("prose"); },
+  async create(btn) {
+    const title = $("#nv-title").value.trim();
+    if (!title) return logErr("标题必填");
+    await run(btn, async () => {
+      const n = await api("POST", "/novels",
+        {title, source_language_code: $("#nv-lang").value});
+      State.novelId = n.id; State.save(); logOk(`小说「${title}」已创建`); App.refresh();
+    }, "创建");
+  },
+  async imp(btn, dry) {
+    const text = $("#imp-text").value;
+    if (!text.trim()) return logErr("请粘贴正文");
+    await run(btn, async () => {
+      const r = await api("POST", `/novels/${State.novelId}/chapters:import`,
+        {text, dry_run: dry, replace: $("#imp-replace").checked});
+      $("#imp-out").innerHTML = `
+        <div class="row" style="margin-bottom:8px">
+          <span class="tag ${dry?'t-warn':'t-ok'}">${dry?"预览":"已导入"}</span>
+          <span class="mono" style="font-size:12px">策略 ${h(r.strategy)}　
+            ${r.chapter_count} 章　${r.total_words} 字</span></div>
+        <div class="tblwrap"><table><thead><tr><th>#</th><th>标题</th><th>字数</th>
+          <th>识别</th><th>开头</th></tr></thead><tbody>${
+          r.chapters.slice(0,12).map(c=>`<tr><td class="mono">${c.order_no}</td>
+            <td>${h(c.title||"")}</td><td class="mono">${c.word_count}</td>
+            <td class="mono" style="color:var(--muted)">${h(c.detected_by)}</td>
+            <td style="color:var(--muted)">${h(c.excerpt||"")}</td></tr>`).join("")
+        }</tbody></table></div>`;
+      logOk(`${dry?"预览":"导入"} ${r.chapter_count} 章`);
+      if (!dry) App.refresh();
+    }, dry?"分析中":"导入中");
+  },
+};
+
+// ───────────────────────── 世界观 ─────────────────────────
+const World = {
+  async render(v) {
+    if (!State.novelId) { v.innerHTML = `<div class="card"><div class="empty">
+      请先在「书架」选一本小说</div></div>`; return; }
+    const [profiles, transforms] = await Promise.all([
+      api("GET", "/world-profiles"),
+      api("GET", `/novels/${State.novelId}/transforms`),
+    ]);
+    if (transforms.length && !transforms.some(t=>t.id===State.transformId)) {
+      State.transformId = transforms[0].id; State.lang = transforms[0].target_language_code;
+      State.save();
+    }
+    const tf = transforms.find(t=>t.id===State.transformId);
+    let cov = null, lex = [], names = [], tpls = [];
+    if (tf) {
+      [cov, lex, names, tpls] = await Promise.all([
+        api("GET", `/transforms/${tf.id}/coverage`).catch(()=>null),
+        api("GET", `/transforms/${tf.id}/lexicon`).catch(()=>[]),
+        api("GET", `/transforms/${tf.id}/names`).catch(()=>[]),
+        api("GET", "/lexicon-templates").catch(()=>[]),
+      ]);
+    } else {
+      tpls = await api("GET", "/lexicon-templates").catch(()=>[]);
+    }
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>世界观映射</h2>
+        <p class="hint">决定「画面里有什么、名物怎么叫」。一本书可并存多个目标世界观，
+          各自一套人名与名物映射，互不影响。</p>
+        <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr>
+          <th></th><th>源世界观</th><th>目标世界观</th><th>语言</th><th>状态</th><th></th>
+        </tr></thead><tbody>${
+          transforms.length ? transforms.map(t=>`<tr>
+            <td>${t.id===State.transformId?'<span class="tag t-ok">当前</span>':""}</td>
+            <td>${h(t.source.display_name)}</td>
+            <td><b>${h(t.target.display_name)}</b></td>
+            <td class="mono">${h(t.target_language_code)}</td>
+            <td><span class="tag ${t.status==='active'?'t-ok':'t-mute'}">${h(t.status)}</span></td>
+            <td class="row" style="gap:5px">
+              <button class="btn sm" onclick="World.pick('${t.id}','${h(t.target_language_code)}')">选中</button>
+              ${t.status!=='active'?`<button class="btn sm" onclick="World.activate('${t.id}',this)">激活</button>`:""}
+            </td></tr>`).join("")
+          : `<tr><td colspan="6" class="empty">还没有世界观映射</td></tr>`}
+        </tbody></table></div>
+        <details ${transforms.length?"":"open"}>
+          <summary style="cursor:pointer;color:var(--accent);font-size:13px">+ 新建映射</summary>
+          <div class="grid g3" style="margin-top:10px">
+            <div><label>源世界观</label><select id="tf-src">${
+              profiles.map(p=>`<option value="${p.id}" ${p.code==='cn_wuxia'?'selected':''}>
+                ${h(p.display_name)}</option>`).join("")}</select></div>
+            <div><label>目标世界观</label><select id="tf-tgt">${
+              profiles.map(p=>`<option value="${p.id}" ${p.code==='eu_medieval_high'?'selected':''}>
+                ${h(p.display_name)}</option>`).join("")}</select></div>
+            <div><label>目标语言</label><input id="tf-lang" value="en-GB"></div>
+          </div>
+          <button class="btn pri" style="margin-top:10px" onclick="World.create(this)">
+            创建并激活</button>
+        </details>
+      </div>
+      ${tf ? `
+      <div class="card">
+        <h2>名物词表 <span class="sub mono" style="color:var(--muted)">${lex.length} 条</span></h2>
+        <p class="hint">同一语义在不同世界观下的具体叫法。审核通过的才会注入翻译 prompt，
+          <code>禁用词</code>出现在译文里即判违规。</p>
+        <div class="row" style="margin-bottom:11px">
+          <select id="lex-tpl" style="width:auto;min-width:220px">${
+            tpls.map(t=>`<option value="${h(t.pair_code)}">${h(t.display_name)}（${t.entry_count} 条）</option>`).join("")}</select>
+          <button class="btn" onclick="World.importTpl(this)">导入预置词表</button>
+          <button class="btn pri" onclick="World.approveHits(this)">审核并通过命中的词条</button>
+        </div>
+        ${cov ? `<div class="steps" style="margin-bottom:12px">
+          <div class="step ${cov.lexicon.approved+cov.lexicon.locked>0?'done':''}">
+            <div class="k">已通过</div><div class="v">${cov.lexicon.approved+cov.lexicon.locked}</div></div>
+          <div class="step ${cov.lexicon.candidate>0?'blocked':''}">
+            <div class="k">待审核</div><div class="v">${cov.lexicon.candidate}</div></div>
+          <div class="step"><div class="k">本书命中</div><div class="v">${cov.lexicon.hit_in_text}</div></div>
+          <div class="step"><div class="k">人名映射</div><div class="v">${cov.names.mapped}/${cov.names.entities}</div></div>
+          <div class="step ${cov.violations.high>0?'blocked':'done'}">
+            <div class="k">高危违规</div><div class="v">${cov.violations.high}</div></div>
+        </div>` : ""}
+        <div class="tblwrap" style="max-height:340px;overflow-y:auto"><table><thead><tr>
+          <th>类别</th><th>原文</th><th>译法</th><th>禁用词</th><th>状态</th><th>命中</th>
+        </tr></thead><tbody>${
+          lex.slice(0,60).map(r=>`<tr>
+            <td class="mono" style="color:var(--muted)">${h(r.category)}</td>
+            <td><b>${h(r.source_term)}</b></td>
+            <td>${h(r.target_term)||'<span style="color:var(--danger)">缺译法</span>'}
+                ${r.target_reading?`<span class="mono" style="color:var(--muted)">${h(r.target_reading)}</span>`:""}</td>
+            <td class="mono" style="color:var(--muted);font-size:11px">${
+              (r.forbidden_targets||[]).slice(0,3).map(h).join(", ")}</td>
+            <td><span class="tag ${r.status==='locked'?'t-ok':r.status==='approved'?'t-ok':'t-warn'}">${h(r.status)}</span></td>
+            <td class="mono">${r.hit_count||0}</td></tr>`).join("")
+        }</tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>人名映射 <span class="sub mono" style="color:var(--muted)">${names.length} 个</span></h2>
+        <p class="hint">按家族分组整族生成，同族共姓。锁定后任何重译都不会改动它。</p>
+        <div class="row" style="margin-bottom:11px">
+          <button class="btn" onclick="World.extractEntities(this)">从当前章节抽取实体</button>
+          <button class="btn" onclick="World.resolveSpeakers(this)">解析说话人</button>
+          <button class="btn pri" onclick="World.suggestNames(this)">生成译名（整族）</button>
+        </div>
+        <div class="tblwrap"><table><thead><tr>
+          <th>原名</th><th>译名</th><th>读音</th><th>家族</th><th>状态</th><th></th>
+        </tr></thead><tbody>${
+          names.length ? names.map(n=>`<tr>
+            <td><b>${h(n.entity_name||"")}</b></td>
+            <td>${h(n.target_name)}</td>
+            <td class="mono" style="color:var(--muted)">${h(n.target_reading||"")}</td>
+            <td class="mono" style="color:var(--muted)">${h(n.family_surname||n.family_key||"")}</td>
+            <td><span class="tag ${n.locked?'t-ok':'t-warn'}">${n.locked?"已锁定":h(n.status)}</span></td>
+            <td>${n.locked?"":`<button class="btn sm" onclick="World.lockName('${n.id}',this)">锁定</button>`}</td>
+          </tr>`).join("")
+          : `<tr><td colspan="6" class="empty">还没有人名映射</td></tr>`}
+        </tbody></table></div>
+      </div>` : ""}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
+    `;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  pick(id, lang) { State.transformId = id; State.lang = lang; State.save(); App.refresh(); },
+  async create(btn) {
+    await run(btn, async () => {
+      const t = await api("POST", `/novels/${State.novelId}/transforms`, {
+        target_language_code: $("#tf-lang").value.trim(),
+        source_profile_id: $("#tf-src").value,
+        target_profile_id: $("#tf-tgt").value,
+      });
+      await api("POST", `/transforms/${t.id}:activate`);
+      State.transformId = t.id; State.lang = t.target_language_code; State.save();
+      logOk(`映射已创建：${t.source.display_name} → ${t.target.display_name}`);
+      App.refresh();
+    }, "创建");
+  },
+  async activate(id, btn) {
+    await run(btn, async () => {
+      await api("POST", `/transforms/${id}:activate`); logOk("已激活"); App.refresh();
+    }, "激活");
+  },
+  async importTpl(btn) {
+    await run(btn, async () => {
+      const pair = $("#lex-tpl").value;
+      const r = await api("POST",
+        `/transforms/${State.transformId}/lexicon:import-template?pair_code=${pair}`);
+      logOk(`导入 ${r.created} 条，跳过已有 ${r.skipped} 条`); App.refresh();
+    }, "导入");
+  },
+  async approveHits(btn) {
+    await run(btn, async () => {
+      const pf = await api("GET", `/transforms/${State.transformId}/preflight`);
+      const hits = new Set((pf.coverage.top_hits||[]).map(x=>x.source));
+      const lex = await api("GET", `/transforms/${State.transformId}/lexicon`);
+      const ids = lex.filter(r=>hits.has(r.source_term) && r.target_term).map(r=>r.id);
+      if (!ids.length) return logWarn("没有命中的词条可审核");
+      const r = await api("POST",
+        `/transforms/${State.transformId}/lexicon:batch-approve`, {ids});
+      logOk(`通过 ${r.approved} 条（只审本书命中的，不是全表）`); App.refresh();
+    }, "审核中");
+  },
+  async extractEntities(btn) {
+    if (!State.chapterId) return logErr("请先在书架选一个章节");
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/entities:extract`, {});
+      logOk(`实体：新建 ${r.created}　更新 ${r.updated}　合计 ${r.total}`);
+      if (r.names && r.names.length) log(`  ${r.names.join("、")}`);
+      App.refresh();
+    }, "抽取中");
+  },
+  async resolveSpeakers(btn) {
+    if (!State.chapterId) return logErr("请先在书架选一个章节");
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/speakers:resolve`,
+        {use_llm: true});
+      logOk(`说话人：绑定 ${r.blocks_updated} 块（精确 ${r.resolved.exact} / 归一化 ${r.resolved.normalized} / 模型 ${r.resolved.llm}）`);
+      if (r.unresolved.length) logWarn(`未解析：${r.unresolved.join("、")}`);
+    }, "解析中");
+  },
+  async suggestNames(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/transforms/${State.transformId}/names:suggest`, {});
+      logOk(`译名：新建 ${r.created}　更新 ${r.updated}　跳过锁定 ${r.skipped_locked}`);
+      if (r.families && Object.keys(r.families).length)
+        log(`  家族共姓：${Object.entries(r.families).map(([k,v])=>`${k}→${v}`).join("、")}`);
+      (r.rejected||[]).forEach(x =>
+        logWarn(`  ${x.entity}：「${x.proposed}」被拒（${x.reason}），改用「${x.used_alternative||x.fallback}」`));
+      App.refresh();
+    }, "生成中");
+  },
+  async lockName(id, btn) {
+    await run(btn, async () => {
+      await api("POST", `/names/${id}:lock`); logOk("译名已锁定"); App.refresh();
+    }, "锁定");
+  },
+};
+
+// ───────────────────────── 译本工作台 ─────────────────────────
+const Prose = {
+  async render(v) {
+    if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
+      请先在「书架」打开一个章节</div></div>`; return; }
+    // 本地记的 id 可能已失效（数据被删、换了小说），每次进页面自愈一次
+    await App.ensureTransform();
+    const lang = State.lang;
+    const [ch, status] = await Promise.all([
+      api("GET", `/chapters/${State.chapterId}`),
+      api("GET", `/chapters/${State.chapterId}/prose/${lang}/status`).catch(()=>null),
+    ]);
+    let prose = null, violations = [];
+    if (status && status.stage !== "not_started") {
+      prose = await api("GET",
+        `/chapters/${State.chapterId}/prose/${lang}?with_source=true`).catch(()=>null);
+    }
+    if (State.transformId) {
+      violations = await api("GET",
+        `/transforms/${State.transformId}/violations?status=open`).catch(()=>[]);
+    }
+    const st = status || {};
+    const vByBlock = {};
+    violations.forEach(x => {
+      const b = (x.evidence||{}).block_id; if (b) (vByBlock[b] ||= []).push(x);
+    });
+
+    v.innerHTML = `
+      <div class="steps">
+        <div class="step ${st.blocks?'done':''}"><div class="k">分块</div>
+          <div class="v">${st.blocks ?? "—"}</div></div>
+        <div class="step ${st.translated?'done':''}"><div class="k">已译</div>
+          <div class="v">${st.translated ?? 0}</div></div>
+        <div class="step ${st.open_high_violations?'blocked':'done'}"><div class="k">高危违规</div>
+          <div class="v">${st.open_high_violations ?? 0}</div></div>
+        <div class="step ${st.locked?'done':''}"><div class="k">已锁定</div>
+          <div class="v">${st.locked ?? 0}</div></div>
+        <div class="step"><div class="k">有声书</div>
+          <div class="v">${st.audiobook ? `${st.audiobook.generated}/${st.audiobook.segments}` : "—"}</div></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <h2>${h(ch.title||"")} <span class="sub mono" style="color:var(--muted)">
+              ${ch.word_count} 字 · ${h(lang)}</span></h2>
+            <p class="hint" style="margin:2px 0 0">${h(st.next_step || "先执行分块")}</p>
+          </div>
+          <select id="pr-lang" style="width:auto" onchange="Prose.setLang(this.value)">
+            ${["en-GB","en-US","ja-JP","ko-KR","fr-FR"].map(l=>
+              `<option ${l===lang?"selected":""}>${l}</option>`).join("")}
+          </select>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" onclick="Prose.build(this)">1 分块</button>
+          <button class="btn" onclick="Prose.translate(this)">2 翻译</button>
+          <button class="btn" onclick="Prose.review(this)">3 二次审核</button>
+          <button class="btn" onclick="Prose.audit(this)">4 全书审计</button>
+          <button class="btn" onclick="Prose.lock(this)">5 锁定译文</button>
+          <span style="flex:1"></span>
+          <button class="btn pri" onclick="Prose.runAll(this)">▶ 一键跑完</button>
+        </div>
+        <p class="hint" style="margin:9px 0 0">分块是纯规则、零成本；翻译与审核会调用 LLM。
+          一键跑完按顺序执行前四步，不含锁定。</p>
+      </div>
+
+      ${State.transformId ? "" : `<div class="card" style="border-color:var(--warn)">
+        <h2 style="color:var(--warn)">尚未选定世界观映射</h2>
+        <p class="hint">翻译与审核都依赖它 —— 映射决定人名怎么转、名物怎么叫。</p>
+        <button class="btn pri" onclick="App.go('world')">去「世界观」创建 →</button>
+      </div>`}
+
+      <div id="audit-box"></div>
+
+      ${prose ? `<div class="card">
+        <h2>逐段对照 <span class="sub mono" style="color:var(--muted)">
+          ${prose.stats.translated}/${prose.stats.blocks} 段 ·
+          覆盖 ${Math.round(prose.stats.coverage*100)}%</span></h2>
+        ${prose.paragraphs.map(p => {
+          const vs = vByBlock[p.block_id] || [];
+          return `<div class="para ${p.text?'':'skip'}">
+            <div class="src">${h(p.source||"")}</div>
+            <div class="tgt">${p.text ? h(p.text) :
+              '<span style="color:var(--muted)">（未翻译）</span>'}</div>
+            <div class="meta">
+              <span class="tag t-mute">${h(p.type)}</span>
+              ${p.speaker?`<span class="tag t-mute">说话人 ${h(p.speaker)}</span>`:""}
+              ${p.locked?'<span class="tag t-ok">已锁定</span>':""}
+              ${vs.map(x=>`<span class="tag ${x.severity==='high'?'t-bad':'t-warn'}"
+                title="${h(x.suggested_fix||"")}">${h(x.kind)}${x.expected?` → ${h(x.expected)}`:""}</span>`).join("")}
+            </div></div>`;
+        }).join("")}
+      </div>` : ""}
+
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
+    `;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  setLang(l) { State.lang = l; State.save(); App.refresh(); },
+
+  async build(btn) {
+    return run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/prose:build`, {force:true});
+      logOk(`分块 ${r.blocks} 段（对白 ${r.dialogue}　旁白 ${r.narration}）`);
+      if (r.speakers.length) log(`  说话人：${r.speakers.join("、")}`);
+      App.refresh();
+    }, "分块中");
+  },
+  async translate(btn) {
+    return run(btn, async () => {
+      try {
+        const r = await api("POST",
+          `/chapters/${State.chapterId}/translation/${State.lang}:run`,
+          {only_missing:false, batch_size:8});
+        logOk(`翻译 ${r.translated} 段　重译 ${r.retried}　违规 ${r.violations}　跳过锁定 ${r.skipped_locked}`);
+        if (r.missing_names && r.missing_names.length)
+          logWarn(`缺译名：${r.missing_names.join("、")}`);
+      } catch (e) {
+        if (e.status === 409 && e.detail && e.detail.code === "PREFLIGHT_NOT_READY") {
+          logWarn("门禁未过：" + e.detail.message);
+          (e.detail.blocking||[]).forEach(b => logWarn(`  · ${b.message}`));
+          if (confirm("世界观映射尚未审核完。强制翻译？\n\n（建议先去「世界观」页审核名物词表）")) {
+            const r2 = await api("POST",
+              `/chapters/${State.chapterId}/translation/${State.lang}:run`,
+              {only_missing:false, batch_size:8, force:true});
+            logOk(`强制翻译 ${r2.translated} 段　违规 ${r2.violations}`);
+          }
+        } else throw e;
+      }
+      App.refresh();
+    }, "翻译中");
+  },
+  async review(btn) {
+    if (!State.transformId) return logErr("请先在「世界观」创建映射");
+    return run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/prose:review`,
+        {transform_id: State.transformId, batch_size: 8});
+      logOk(`审核 ${r.reviewed_blocks} 段　规则预筛 ${r.rule_prescreen}　发现 ${r.issues_found}　入库 ${r.recorded}`);
+      Object.entries(r.by_type||{}).forEach(([k,c]) => log(`  ${k}: ${c}`));
+      (r.samples||[]).slice(0,4).forEach(s =>
+        logWarn(`  [${s.severity}] ${s.issue_type}：${String(s.detected).slice(0,40)}`));
+      App.refresh();
+    }, "审核中");
+  },
+  async audit(btn) {
+    if (!State.transformId) return logErr("请先在「世界观」创建映射");
+    return run(btn, async () => {
+      const a = await api("GET", `/transforms/${State.transformId}/audit`);
+      logOk(`审计 ${a.chapters_scanned} 章 ${a.blocks_scanned} 段　` +
+            `高危 ${a.summary.high}　中 ${a.summary.medium}　通过=${a.passed}`);
+      $("#audit-box").innerHTML = `<div class="card">
+        <h2>全书一致性审计 ${a.passed
+          ? '<span class="tag t-ok">通过</span>'
+          : `<span class="tag t-bad">${a.summary.high} 项高危</span>`}</h2>
+        <p class="hint">单章看不出、跨章才现形的问题：译名漂移、名物分歧、音译残留。
+          不调 LLM —— 一致性是可枚举的事实。</p>
+        <div class="grid g3" style="margin-bottom:12px">
+          <div class="step"><div class="k">人名</div><div class="v">${
+            a.name_coverage.drifted_entities ?? "—"} 个漂移</div></div>
+          <div class="step"><div class="k">名物</div><div class="v">${
+            a.lexicon_coverage.drifted_terms ?? "—"} 条分歧</div></div>
+          <div class="step"><div class="k">残留</div><div class="v">${
+            (a.residue.han_blocks||0)} 段未译</div></div>
+        </div>
+        ${a.findings.length ? `<div class="tblwrap"><table><thead><tr>
+          <th>严重度</th><th>类型</th><th>对象</th><th>说明</th><th>涉及</th>
+        </tr></thead><tbody>${a.findings.slice(0,20).map(f=>`<tr>
+          <td><span class="tag ${f.severity==='high'?'t-bad':f.severity==='medium'?'t-warn':'t-mute'}">${h(f.severity)}</span></td>
+          <td class="mono">${h(f.kind)}</td>
+          <td><b>${h(f.subject)}</b></td>
+          <td style="color:var(--body)">${h(f.detail)}</td>
+          <td class="mono">${f.chapters.length} 章</td>
+        </tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty">未发现问题</div>`}
+      </div>`;
+      $("#audit-box").scrollIntoView({behavior:"smooth", block:"nearest"});
+    }, "审计中");
+  },
+  async lock(btn) {
+    return run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/prose:lock`,
+        {language: State.lang});
+      logOk(`锁定 ${r.locked} 段，跳过 ${r.skipped} 段 —— 锁定后重译不会覆盖`);
+      App.refresh();
+    }, "锁定中");
+  },
+  async runAll(btn) {
+    return run(btn, async () => {
+      log("── 一键跑完：分块 → 翻译 → 审核 → 审计 ──");
+      await this.build(null);
+      await this.translate(null);
+      await this.review(null);
+      await this.audit(null);
+      logOk("全部完成");
+    }, "执行中");
+  },
+};
+
+// ───────────────────────── 有声书 ─────────────────────────
+const Audio = {
+  async render(v) {
+    if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
+      请先在「书架」打开一个章节</div></div>`; return; }
+    await App.ensureTransform();
+    let tl = null;
+    try { tl = await api("GET", `/chapters/${State.chapterId}/audiobook`); } catch {}
+    v.innerHTML = `
+      <div class="card">
+        <h2>有声书</h2>
+        <p class="hint">译本审核锁定之后再配音。音色来自 voice 素材，
+          与分镜配音共用同一套 —— 同一角色在有声书和视频里必须是同一个嗓子。</p>
+        <div class="row">
+          <button class="btn" onclick="Audio.compile(this)">1 编译音频规格</button>
+          <button class="btn pri" onclick="Audio.gen(this)">2 生成 TTS</button>
+          <button class="btn" onclick="App.refresh()">刷新时间轴</button>
+        </div>
+      </div>
+      ${tl && tl.segments ? `<div class="card">
+        <h2>时间轴 <span class="sub mono" style="color:var(--muted)">
+          ${tl.stats.generated}/${tl.stats.segments} 段 ·
+          ${(tl.total_duration_ms/1000).toFixed(1)}s</span></h2>
+        <p class="hint">${h(tl.notes)}</p>
+        <div class="tblwrap"><table><thead><tr>
+          <th>#</th><th>类型</th><th>音色</th><th>起点</th><th>时长</th><th>文本</th><th>音频</th>
+        </tr></thead><tbody>${tl.segments.map(s=>`<tr>
+          <td class="mono">${s.seq_no ?? ""}</td>
+          <td><span class="tag t-mute">${h(s.kind)}</span></td>
+          <td class="mono" style="color:var(--muted)">${h(s.voice_asset_key||"-")}</td>
+          <td class="mono">${(s.start_ms/1000).toFixed(1)}s</td>
+          <td class="mono">${s.duration_ms?(s.duration_ms/1000).toFixed(1)+"s":"-"}</td>
+          <td style="max-width:340px">${h((s.text||"").slice(0,70))}</td>
+          <td>${s.file?`<audio controls preload="none" src="${h(s.file)}"
+                 style="height:26px;width:150px"></audio>`:'<span class="tag t-mute">未生成</span>'}</td>
+        </tr>`).join("")}</tbody></table></div>
+      </div>` : `<div class="card"><div class="empty">还没有音频规格，先执行编译</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
+    `;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async compile(btn) {
+    if (!State.transformId) return logErr("请先在「世界观」创建映射");
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/audiobook:compile`,
+        {transform_id: State.transformId});
+      logOk(`编译：旁白 ${r.narration}　对白 ${r.dialogue}`);
+      if (r.missing_voice && r.missing_voice.length)
+        logWarn(`缺音色素材：${r.missing_voice.join("、")}（会落到旁白音色兜底）`);
+      App.refresh();
+    }, "编译中");
+  },
+  async gen(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/audiobook:generate`,
+        {confirm_cost: true});
+      logOk(`TTS 提交 ${r.submitted} 段，预估 $${r.estimated_cost ?? 0}`);
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        await api("POST", "/gen-tasks:poll-due?limit=200").catch(()=>{});
+        const tl = await api("GET", `/chapters/${State.chapterId}/audiobook`).catch(()=>null);
+        if (tl && tl.stats.missing === 0) { logOk("全部音频已就绪"); break; }
+      }
+      App.refresh();
+    }, "生成中");
+  },
+};
+
+// ───────────────────────── 任务 ─────────────────────────
+const Tasks = {
+  async render(v) {
+    const [sum, list] = await Promise.all([
+      api("GET", "/gen-tasks/summary"),
+      api("GET", "/gen-tasks?size=40"),
+    ]);
+    v.innerHTML = `
+      <div class="steps">
+        ${["queued","submitted","running","succeeded","failed"].map(k=>`
+          <div class="step ${k==='failed'&&sum.by_status[k]?'blocked':k==='succeeded'?'done':''}">
+            <div class="k">${k}</div><div class="v">${sum.by_status[k]||0}</div></div>`).join("")}
+        <div class="step"><div class="k">累计成本</div><div class="v">$${sum.total_cost}</div></div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:11px">
+          <button class="btn" onclick="Tasks.poll(this)">轮询到期任务</button>
+          <span class="hint" style="margin:0">回调会丢（上游重试耗尽、网络抖动、服务重启），
+            轮询是契约里的兜底。</span>
+        </div>
+        <div class="tblwrap"><table><thead><tr>
+          <th>能力</th><th>状态</th><th>厂商</th><th>模型</th><th>引用</th><th>成本</th><th>错误</th>
+        </tr></thead><tbody>${
+          (list.items||[]).map(t=>`<tr>
+            <td class="mono">${h(t.capability)}</td>
+            <td><span class="tag ${t.status==='succeeded'?'t-ok':t.status==='failed'?'t-bad':'t-warn'}">${h(t.status)}</span></td>
+            <td class="mono" style="color:var(--muted)">${h(t.provider||"-")}</td>
+            <td class="mono" style="color:var(--muted)">${h(t.model||"-")}</td>
+            <td class="mono" style="color:var(--muted)">${h(t.ref_kind||"-")}</td>
+            <td class="mono">${t.usage&&t.usage.cost!=null?"$"+t.usage.cost:"-"}</td>
+            <td style="color:var(--danger);font-size:12px">${h((t.error||{}).message||"")}</td>
+          </tr>`).join("")
+        }</tbody></table></div>
+      </div>
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async poll(btn) {
+    await run(btn, async () => {
+      let total = 0;
+      for (let i=0;i<5;i++) {
+        const r = await api("POST", "/gen-tasks:poll-due?limit=200");
+        total += r.settled;
+        if (!r.checked) break;
+        await new Promise(x=>setTimeout(x,800));
+      }
+      logOk(`轮询结清 ${total} 个任务`); App.refresh();
+    }, "轮询中");
+  },
+};
+
+// ───────────────────────── App ─────────────────────────
+const App = {
+  async boot() {
+    $("#nav").innerHTML = PAGES.map(p =>
+      `<button data-p="${p.id}" onclick="App.go('${p.id}')">
+        <span class="ico">${p.ico}</span>${p.name}</button>`).join("");
+    await this.health();
+    setInterval(() => this.health(), 20000);
+    setInterval(() => this.badge(), 6000);
+    await this.refresh();
+  },
+  go(id) { State.page = id; State.save(); this.refresh(); },
+
+  /** 校验并修复本地记住的 transformId。
+   *  localStorage 里的 id 会因数据被删或换小说而失效，
+   *  失效后页面只会报 404，用户看不出该去哪补。这里静默自愈。 */
+  async ensureTransform() {
+    if (!State.novelId) return;
+    let list = [];
+    try { list = await api("GET", `/novels/${State.novelId}/transforms`); }
+    catch { return; }
+    if (State.transformId && list.some(t => t.id === State.transformId)) return;
+    const pick = list.find(t => t.target_language_code === State.lang && t.status === "active")
+              || list.find(t => t.status === "active")
+              || list[0];
+    State.transformId = pick ? pick.id : "";
+    if (pick) State.lang = pick.target_language_code;
+    State.save();
+  },
+  async refresh() {
+    const p = PAGES.find(x => x.id === State.page) || PAGES[0];
+    $("#page-title").textContent = p.name;
+    $("#page-sub").textContent = p.sub;
+    document.querySelectorAll("#nav button").forEach(b =>
+      b.classList.toggle("on", b.dataset.p === p.id));
+    const v = $("#view");
+    v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
+    const R = {settings:Settings, library:Library, world:World,
+               prose:Prose, audio:Audio, tasks:Tasks}[p.id];
+    try { await R.render(v); }
+    catch (e) {
+      v.innerHTML = `<div class="card"><h2 style="color:var(--danger)">加载失败</h2>
+        <p class="hint">${h(e.message)}</p>
+        <button class="btn" onclick="App.refresh()">重试</button>
+        <div class="log" style="margin-top:12px" id="log"></div></div>`;
+      const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+      logErr(`${p.name} 加载失败：${e.message}`);
+    }
+    this.badge();
+  },
+  async health() {
+    try {
+      const r = await fetch("/health").then(x=>x.json());
+      $("#dot-core").className = "dot " + (r.ok ? "ok" : "bad");
+      $("#st-core").textContent = r.ok ? "v"+r.version : "异常";
+    } catch { $("#dot-core").className="dot bad"; $("#st-core").textContent="离线"; }
+    try {
+      const eps = await api("GET", "/settings/endpoints");
+      const ok = eps.some(e => e.health && e.health.ok);
+      $("#dot-gw").className = "dot " + (ok ? "ok" : eps.length ? "bad" : "");
+      $("#st-gw").textContent = eps.length ? (ok ? `${eps.length} 个正常` : "未探活") : "未配置";
+    } catch { $("#dot-gw").className="dot bad"; $("#st-gw").textContent="—"; }
+  },
+  async badge() {
+    try {
+      const s = await api("GET", "/gen-tasks/summary");
+      const el = $("#task-badge");
+      el.innerHTML = s.active
+        ? `<span class="spin"></span> ${s.active} 个任务运行中`
+        : (s.failed ? `<span class="tag t-bad">${s.failed} 个失败</span>` : "");
+    } catch {}
+  },
+};
+App.boot();
+</script>
+</body>
+</html>
