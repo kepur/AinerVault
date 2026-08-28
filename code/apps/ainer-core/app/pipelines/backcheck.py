@@ -142,7 +142,7 @@ def back_check(
         for t in db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_([b.id for b in blocks]),
-                TranslationBlock.target_language_code == lang,
+                TranslationBlock.transform_id == transform.id,
             )
         ).scalars()
     }

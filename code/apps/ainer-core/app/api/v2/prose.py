@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.worldview import resolve
 from app.models import (
     Chapter, DocMode, DocStatus, Novel, ScriptDoc, TranslationBlock,
     TranslationBlockStatus, WorldTransform,
@@ -313,7 +314,9 @@ def lock_prose(chapter_id: str, body: LockIn,
         db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_(ids),
-                TranslationBlock.target_language_code == body.language,
+                TranslationBlock.transform_id.in_(
+                    resolve.transform_ids_for(db, c.novel_id, body.language)
+                ),
             )
         ).scalars()
     )

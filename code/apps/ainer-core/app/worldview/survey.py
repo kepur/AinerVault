@@ -346,18 +346,33 @@ def seed_defaults(db: Session) -> dict[str, int]:
     """把预置世界观档案与词表模板灌进库。幂等，可反复调用。"""
     from app.seed.director_profiles import DIRECTOR_PROFILES
     from app.seed.lexicon_templates import TEMPLATES
+    from app.seed.culture_packs import CULTURE_PACKS
     from app.seed.world_profiles import PROFILES
     from app.models import DirectorProfile, ProfileRole, ProfileStatus
 
-    created_p = created_t = created_d = 0
+    created_p = created_t = created_d = updated_p = 0
 
-    for p in PROFILES:
+    # PROFILES 是最早那批源/目标档案，CULTURE_PACKS 是按语言圈层铺开的那批。
+    # 两者结构相同，合起来灌 —— 分成两个文件只是为了各自能独立维护。
+    for p in [*PROFILES, *CULTURE_PACKS]:
         exists = db.execute(
             select(WorldProfile).where(
                 WorldProfile.code == p["code"], WorldProfile.version == 1
             )
         ).scalars().first()
         if exists:
+            # 只补空缺，不覆盖 —— 用户改过的档案不能被重灌种子吃掉。
+            # 需要这条是因为 language.code 是后加的字段：早先建的档案没有它，
+            # 纯「已存在就跳过」会让它们永远缺，而缺了就选不出 TTS 音色。
+            lang = dict(exists.language_json or {})
+            changed = False
+            for k, v in (p.get("language") or {}).items():
+                if v not in (None, "", {}, []) and not lang.get(k):
+                    lang[k] = v
+                    changed = True
+            if changed:
+                exists.language_json = lang
+                updated_p += 1
             continue
         db.add(WorldProfile(
             id=new_id("wp"),
@@ -412,5 +427,5 @@ def seed_defaults(db: Session) -> dict[str, int]:
         created_d += 1
 
     db.flush()
-    return {"profiles": created_p, "templates": created_t,
-            "director_profiles": created_d}
+    return {"profiles": created_p, "profiles_updated": updated_p,
+            "templates": created_t, "director_profiles": created_d}

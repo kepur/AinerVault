@@ -65,6 +65,7 @@ PROFILES: list[dict[str, Any]] = [
             ]
         },
         "language": {
+            "code": "zh-CN",
             "register": "classical_literary",
             "name_pattern": "family_given",
             "name_script": "hanzi",
@@ -120,6 +121,7 @@ PROFILES: list[dict[str, Any]] = [
             }
         },
         "language": {
+            "code": "zh-CN",
             "register": "wuxia_vernacular",
             "name_pattern": "family_given",
             "name_script": "hanzi",
@@ -166,6 +168,7 @@ PROFILES: list[dict[str, Any]] = [
             }
         },
         "language": {
+            "code": "en-US",
             "register": "contemporary_neutral",
             "name_pattern": "given_family",
             "name_script": "latin",
@@ -267,6 +270,7 @@ PROFILES: list[dict[str, Any]] = [
             ]
         },
         "language": {
+            "code": "en-GB",
             "register": "archaic_formal",
             "name_pattern": "given_of_place",
             "name_script": "latin",
@@ -339,6 +343,7 @@ PROFILES: list[dict[str, Any]] = [
             }
         },
         "language": {
+            "code": "ja-JP",
             "register": "archaic_formal",
             "name_pattern": "family_given",
             "name_script": "kanji+kana",
@@ -449,6 +454,7 @@ PROFILES: list[dict[str, Any]] = [
             ]
         },
         "language": {
+            "code": "ja-JP",
             "register": "literary_formal",
             "name_pattern": "family_given",
             "name_script": "kanji+kana",

@@ -115,14 +115,26 @@ class TranslationRun(Base, StdMixin):
 
 
 class TranslationBlock(Base, StdMixin):
+    """一个剧本块在一个**世界观映射**下的译文。
+
+    唯一键是 (块, 映射) 而不是 (块, 语言) —— 语言不足以区分译本。
+    同一本小说要出「维多利亚英国版」和「摄政英国版」时两者都是 en-GB，
+    按语言存会互相覆盖，第二版一翻就把第一版吃掉。
+    语言码保留下来是给 TTS 选音色和给前端筛选用的，不承担身份。
+    """
+
     __tablename__ = "translation_blocks"
     __table_args__ = (
-        UniqueConstraint("script_block_id", "target_language_code", name="uq_tb_block_lang"),
+        UniqueConstraint("script_block_id", "transform_id", name="uq_tb_block_transform"),
         Index("ix_translation_blocks_lang_status", "target_language_code", "status"),
+        Index("ix_translation_blocks_transform", "transform_id", "status"),
     )
 
     script_block_id: Mapped[str] = mapped_column(
         ForeignKey("script_blocks.id", ondelete="CASCADE"), nullable=False
+    )
+    transform_id: Mapped[str] = mapped_column(
+        ForeignKey("world_transforms.id", ondelete="CASCADE"), nullable=False
     )
     target_language_code: Mapped[str] = mapped_column(String(16), nullable=False)
     translated_text: Mapped[str | None] = mapped_column(Text)

@@ -26,6 +26,7 @@ from app.models import (
     WorldEntity, WorldProfile, WorldTransform,
 )
 from app.models.script import BlockType
+from app.worldview import resolve
 from app.pipelines.base import PipelineError
 
 log = logging.getLogger(__name__)
@@ -114,6 +115,12 @@ def compile_audio(
         raise PipelineError("分镜对应的章节不存在")
 
     lang = plan.target_language_code or transform.target_language_code
+    # 分镜计划可能指向别的语言版本，此时按语言回落到该语言的映射；
+    # 同语言下有多版时 active 优先。
+    tf_ids = (
+        [transform.id] if lang == transform.target_language_code
+        else resolve.transform_ids_for(db, chapter.novel_id, lang)
+    )
     variants = _audio_variants(db, chapter.novel_id, profile.id)
     result = AudioComposeResult()
 
@@ -137,10 +144,10 @@ def compile_audio(
         for t in db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_(all_block_ids),
-                TranslationBlock.target_language_code == lang,
+                TranslationBlock.transform_id.in_(tf_ids),
             )
         ).scalars()
-    } if all_block_ids and lang else {}
+    } if all_block_ids and tf_ids else {}
 
     existing = {
         (a.shot_id, a.block_id, a.kind): a

@@ -90,7 +90,7 @@ def _collect(db: Session, transform: WorldTransform) -> list[tuple[Chapter, Scri
         .join(
             TranslationBlock,
             (TranslationBlock.script_block_id == ScriptBlock.id)
-            & (TranslationBlock.target_language_code == lang),
+            & (TranslationBlock.transform_id == transform.id),
         )
         .where(
             Chapter.novel_id == transform.novel_id,

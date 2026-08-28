@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.worldview import resolve
 from app.ids import new_id
 from app.models import (
     Chapter, DocStatus, EntityKind, EntityWorldName, Novel,
@@ -444,7 +445,9 @@ def get_translation(chapter_id: str, lang: str,
         for t in db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_([b.id for b in blocks]),
-                TranslationBlock.target_language_code == lang,
+                TranslationBlock.transform_id.in_(
+                    resolve.transform_ids_for(db, c.novel_id, lang)
+                ),
             )
         ).scalars()
     }

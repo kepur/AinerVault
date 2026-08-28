@@ -150,7 +150,7 @@ def translate_chapter(
         for t in db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_([b.id for b in blocks]),
-                TranslationBlock.target_language_code == lang,
+                TranslationBlock.transform_id == transform.id,
             )
         ).scalars()
     }
@@ -269,6 +269,7 @@ def translate_chapter(
             if row is None:
                 row = TranslationBlock(
                     id=new_id("tb"), script_block_id=b.id,
+                    transform_id=transform.id,
                     target_language_code=lang, translated_text=text,
                     status=TranslationBlockStatus.draft,
                 )
@@ -400,7 +401,7 @@ def retranslate_affected(
         rows = db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_(affected_blocks),
-                TranslationBlock.target_language_code == transform.target_language_code,
+                TranslationBlock.transform_id == transform.id,
             )
         ).scalars().all()
         cleared = 0

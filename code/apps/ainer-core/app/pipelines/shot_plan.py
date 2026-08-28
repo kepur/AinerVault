@@ -25,6 +25,7 @@ from app.models import (
     WorldTransform,
 )
 from app.models.script import BlockType
+from app.worldview import resolve
 from app.pipelines.base import PipelineError, chat_json, fingerprint
 
 log = logging.getLogger(__name__)
@@ -149,19 +150,20 @@ def _text_duration_ms(text: str, is_cjk: bool = True) -> int:
 
 
 def _estimate_ms(
-    db: Session, blocks: Sequence[ScriptBlock], lang: str | None
+    db: Session, blocks: Sequence[ScriptBlock], lang: str | None,
+    transform_id: str | None = None,
 ) -> int:
     """按配音估算时长。有译文用译文，没有用原文。动作块不配音但占画面时间。"""
     if not blocks:
         return 0
     trans: dict[str, str] = {}
-    if lang:
+    if transform_id:
         trans = {
             t.script_block_id: t.translated_text or ""
             for t in db.execute(
                 select(TranslationBlock).where(
                     TranslationBlock.script_block_id.in_([b.id for b in blocks]),
-                    TranslationBlock.target_language_code == lang,
+                    TranslationBlock.transform_id == transform_id,
                 )
             ).scalars()
         }
@@ -189,6 +191,13 @@ def build_shot_plan(
     chapter = db.get(Chapter, script_doc.chapter_id)
     if chapter is None:
         raise PipelineError("剧本对应的章节不存在")
+
+    # 时长按译文长度估。译文按映射取 —— 同语言可能有多版，
+    # 按语言取会拿错版本，估出来的时长跟实际配音对不上。
+    tf_id = transform.id if transform else None
+    if tf_id is None and target_language:
+        tf = resolve.active_transform(db, chapter.novel_id, target_language)
+        tf_id = tf.id if tf else None
 
     scenes = list(
         db.execute(
@@ -222,7 +231,7 @@ def build_shot_plan(
             if scene is not None:
                 continue
             scene_blocks = blocks
-        dur = _estimate_ms(db, scene_blocks, target_language)
+        dur = _estimate_ms(db, scene_blocks, target_language, tf_id)
         count = max(1, round(dur / avg_shot_ms)) if dur else max(1, len(scene_blocks) // 2)
         scene_plan.append((scene, scene_blocks, dur, count))
         total_shots += count
@@ -275,7 +284,7 @@ def build_shot_plan(
             size = size_alloc.take() or "ms"
             move = move_alloc.take() or "static"
             shot_blocks = [b for b in scene_blocks if b.id in block_ids]
-            dur = _estimate_ms(db, shot_blocks, target_language) or avg_shot_ms
+            dur = _estimate_ms(db, shot_blocks, target_language, tf_id) or avg_shot_ms
 
             shot = Shot(
                 id=new_id("sh"), shot_plan_id=plan.id,

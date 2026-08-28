@@ -25,6 +25,7 @@ from app.models import (
     BlockType, Chapter, DocMode, DocStatus, ScriptBlock, ScriptDoc,
     TranslationBlock,
 )
+from app.worldview import resolve
 from app.pipelines.base import PipelineError, fingerprint
 
 log = logging.getLogger(__name__)
@@ -287,9 +288,13 @@ def active_prose_doc(db: Session, chapter_id: str) -> ScriptDoc | None:
 
 
 def render_translated(
-    db: Session, chapter: Chapter, language: str, *, with_source: bool = False
+    db: Session, chapter: Chapter, language: str, *,
+    with_source: bool = False, transform_id: str | None = None,
 ) -> dict[str, Any]:
-    """渲染译本。这是译本线的最终产出，可直接阅读或送 TTS。"""
+    """渲染译本。这是译本线的最终产出，可直接阅读或送 TTS。
+
+    未指定 transform_id 时按语言回落 —— 同语言多版并存时 active 优先。
+    """
     doc = active_prose_doc(db, chapter.id)
     if doc is None:
         raise PipelineError("该章节还没有译本分块，请先执行 prose:build")
@@ -300,15 +305,23 @@ def render_translated(
             .order_by(ScriptBlock.seq_no)
         ).scalars()
     )
-    trans = {
-        t.script_block_id: t
+    tf_ids = (
+        [transform_id] if transform_id
+        else resolve.transform_ids_for(db, chapter.novel_id, language)
+    )
+    trans: dict[str, Any] = {}
+    if tf_ids:
+        # 按 tf_ids 的优先序取，先到先得：active 那版的译文压住旧版
+        rank = {tid: i for i, tid in enumerate(tf_ids)}
         for t in db.execute(
             select(TranslationBlock).where(
                 TranslationBlock.script_block_id.in_([b.id for b in blocks]),
-                TranslationBlock.target_language_code == language,
+                TranslationBlock.transform_id.in_(tf_ids),
             )
-        ).scalars()
-    }
+        ).scalars():
+            cur = trans.get(t.script_block_id)
+            if cur is None or rank[t.transform_id] < rank[cur.transform_id]:
+                trans[t.script_block_id] = t
 
     paragraphs: list[dict[str, Any]] = []
     translated = locked = 0
