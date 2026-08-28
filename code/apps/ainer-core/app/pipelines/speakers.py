@@ -187,10 +187,29 @@ def resolve_speakers(
     if not entities:
         raise PipelineError("小说还没有实体，请先抽取实体")
 
+    # 称呼表里有抽取时采下的全部叫法（砚儿、姓沈的、沈镖头），
+    # 比 display_name + aliases 完整得多。不并进索引的话，
+    # 这些称呼每次都要落到第 3 层去问模型 ——
+    # 而答案早就在库里，只是没被查。
+    from app.models import EntityAppellation
+
+    appellations: dict[str, list[str]] = {}
+    if entities:
+        for a in db.execute(
+            select(EntityAppellation).where(
+                EntityAppellation.entity_id.in_([e.id for e in entities])
+            )
+        ).scalars():
+            surface = str(a.source_surface or "").strip()
+            if surface:
+                appellations.setdefault(a.entity_id, []).append(surface)
+
     by_exact: dict[str, WorldEntity] = {}
     by_norm: dict[str, WorldEntity] = {}
     for e in entities:
-        for surface in [e.display_name, *(e.aliases_json or [])]:
+        for surface in [
+            e.display_name, *(e.aliases_json or []), *appellations.get(e.id, []),
+        ]:
             s = str(surface or "").strip()
             if not s:
                 continue

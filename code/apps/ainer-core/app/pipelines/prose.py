@@ -109,6 +109,17 @@ _STRONG_VERBS = frozenset(
 #: 首字的数词是合法的（「三娘」「老六」），所以只从 index 2 起切。
 _NUMERALS = frozenset("零一二三四五六七八九十百千万两半几多0123456789")
 
+#: 紧跟在人名后面的叙述副词。「沈砚忽然问：」这类三刀都切不动 ——
+#: 「忽」「然」既不是动词也不是虚词更不是数词，可它们连起来是个副词。
+#: 这是最常见的一种形式（人名 + 副词 + 动词），单字表拦不住，要按词拦。
+_NARRATIVE_ADVERBS = (
+    "忽然", "突然", "猛然", "陡然", "蓦地", "霍然", "骤然",
+    "缓缓", "慢慢", "渐渐", "静静", "默默", "微微", "轻轻",
+    "这才", "才又", "又再", "终于", "始终", "依旧", "仍旧", "早已",
+    "分明", "居然", "竟然", "果然", "自然", "当即", "随即", "旋即",
+    "低声", "高声", "大声", "轻声", "小声", "厉声", "沉声", "冷冷",
+)
+
 
 def trim_speaker(who: str) -> str | None:
     """把「李格非从里屋走出」裁成「李格非」，裁不干净就返回 None。
@@ -166,14 +177,29 @@ def _trim_clause(clause: str) -> str | None:
     if ncut:
         w = w[: min(ncut)].strip()
 
+    # 第四刀：ABB 式副词。「老周慢悠悠」的「慢悠悠」是一个词，
+    # 按单字或 BB 切会切出「老周慢」这种半截。
+    # 判据是叠尾：末两字相同且长度 ≥4，则末三字整体是 ABB。
+    if len(w) >= 4 and w[-1] == w[-2]:
+        cut = w[:-3].strip()
+        # 切完不合法就整串作废 —— 「慢悠悠」本身不是称呼
+        w = cut if len(cut) >= 2 else ""
+        if not w:
+            return None
+    elif len(w) == 3 and w[-1] == w[-2]:
+        # 「慢悠悠」这类整串就是 ABB 副词，切完什么都不剩
+        return None
+
+    # 第五刀：双字叙述副词。「沈砚忽然」前几刀全切不动 ——
+    # 「忽」「然」单看都不在任何表里，连起来才是副词，所以要按词切。
+    acut = [w.find(a) for a in _NARRATIVE_ADVERBS if w.find(a) >= 2]
+    if acut:
+        w = w[: min(acut)].strip()
+
     if w in _PRONOUNS or not (2 <= len(w) <= 6):
         return None
     # 仍含残留虚词的一律作废
     if any(c in _NON_NAME_CHARS for c in w):
-        return None
-    # 叠字是副词/形容词的特征（慢悠悠、笑眯眯），称呼里几乎不出现在词尾。
-    # 「老周慢悠悠」三刀都切不动，只有这条挡得住。
-    if len(w) >= 4 and w[-1] == w[-2]:
         return None
     return w
 #: 章节标题行
