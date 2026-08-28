@@ -17,6 +17,9 @@ from app.models.narrative_device import (
     BackTranslationCheck, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
     NarrativeDevice, PlotLoad, Volatility, choose_strategy,
 )
+from app.models.performance import (
+    Facing, ShotPerformance, SpeechRole, StagePosition,
+)
 from app.models.script import (
     TRANSLATABLE_TYPES, BlockType, DocMode, DocStatus, Scene, ScriptBlock,
     ScriptDoc,
@@ -45,6 +48,7 @@ __all__ = [
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",
     "CultureReview", "CultureFinding", "GapKind", "Verdict", "ReviewRunStatus",
+    "ShotPerformance", "SpeechRole", "StagePosition", "Facing",
     "QualityTier", "DEFAULT_TIER",
     "PlotLoad", "Volatility", "choose_strategy",
     "Novel", "Chapter", "SourceFormat",

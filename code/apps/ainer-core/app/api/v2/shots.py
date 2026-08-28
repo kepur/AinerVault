@@ -198,6 +198,145 @@ class BindIn(BaseModel):
     shot_ids: list[str] = Field(default_factory=list)
 
 
+class DialogueIn(BaseModel):
+    batch_size: int = 20
+
+
+@router.post("/chapters/{chapter_id}/dialogue:resolve")
+def resolve_dialogue(chapter_id: str, body: DialogueIn,
+                     db: Session = Depends(get_db)) -> dict:
+    """标注对话指向与在场人物。
+
+    speaker 知道「谁在说」，不知道「对谁说」—— 而镜头该给谁、给几个人靠后者。
+    在场人物同样不能省：一段三人对话只记说话的两个，
+    分镜会切成两人对切，第三个人凭空消失。
+    """
+    from app.models import Chapter
+    from app.pipelines import performance as perf_pipe
+
+    c = db.get(Chapter, chapter_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    try:
+        return perf_pipe.resolve_dialogue(db, c, batch_size=body.batch_size).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class PerfIn(BaseModel):
+    batch_size: int = 6
+
+
+@router.post("/shot-plans/{plan_id}/performance:extract")
+def extract_performance(plan_id: str, body: PerfIn,
+                        db: Session = Depends(get_db)) -> dict:
+    """抽每个镜头的表演：站位、朝向、视线、表情、动作、手持物。
+
+    抽的是瞬时状态，与素材包的恒定属性分开存 ——
+    混在一起的话「他握紧了剑」会污染角色素材，下一镜松了手也还是攥着的。
+    """
+    from app.models import ShotPlan
+    from app.pipelines import performance as perf_pipe
+
+    plan = db.get(ShotPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    try:
+        return perf_pipe.extract_performance(db, plan, batch_size=body.batch_size).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/shot-plans/{plan_id}/performance")
+def list_performance(plan_id: str, db: Session = Depends(get_db)) -> dict:
+    """调度表。position_jump 标出站位跳变 —— 那是动画会穿帮的地方。"""
+    from app.models import Shot, ShotPerformance, ShotPlan, StagePosition, WorldEntity
+
+    if db.get(ShotPlan, plan_id) is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    shots = list(db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan_id).order_by(Shot.order_no)
+    ).scalars())
+    rows = list(db.execute(
+        select(ShotPerformance, WorldEntity)
+        .join(WorldEntity, WorldEntity.id == ShotPerformance.entity_id)
+        .where(ShotPerformance.shot_id.in_([s.id for s in shots]))
+    ))
+    by_shot: dict[str, list[dict]] = {}
+    for p, e in rows:
+        by_shot.setdefault(p.shot_id, []).append({
+            "id": p.id, "entity": e.display_name, "entity_id": e.id,
+            "speech_role": p.speech_role.value, "position": p.position.value,
+            "facing": p.facing.value, "gaze_target": p.gaze_target,
+            "expression": p.expression, "expression_end": p.expression_end,
+            "action": p.action, "action_end": p.action_end,
+            "props": p.props_json or [], "position_jump": p.position_jump,
+            "edited_by_human": p.edited_by_human,
+        })
+    items = []
+    for s in shots:
+        cast = by_shot.get(s.id, [])
+        static = bool(cast) and all(
+            c["expression"] == c["expression_end"] and c["action"] == c["action_end"]
+            for c in cast
+        )
+        items.append({
+            "shot_id": s.id, "order_no": s.order_no, "shot_size": s.shot_size,
+            "duration_ms": s.duration_ms, "description": s.description,
+            "cast": cast, "static": static,
+        })
+    return {
+        "plan_id": plan_id, "shots": len(items),
+        "with_cast": sum(1 for i in items if i["cast"]),
+        "static_shots": [i["order_no"] for i in items if i["static"]],
+        "position_jumps": [
+            {"shot": i["order_no"], "entity": c["entity"]}
+            for i in items for c in i["cast"] if c["position_jump"]
+        ],
+        "items": items,
+    }
+
+
+class PerfPatch(BaseModel):
+    position: str | None = None
+    facing: str | None = None
+    expression: str | None = None
+    expression_end: str | None = None
+    action: str | None = None
+    action_end: str | None = None
+    gaze_target: str | None = None
+
+
+@router.patch("/shot-performances/{perf_id}")
+def update_performance(perf_id: str, body: PerfPatch,
+                       db: Session = Depends(get_db)) -> dict:
+    """人工调整一条调度。改过即标 edited_by_human，重抽不会覆盖。"""
+    from app.models import Facing, ShotPerformance, StagePosition
+
+    p = db.get(ShotPerformance, perf_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="performance not found")
+    if body.position is not None:
+        try:
+            p.position = StagePosition(body.position)
+            p.position_jump = False
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"未知站位 {body.position}") from exc
+    if body.facing is not None:
+        try:
+            p.facing = Facing(body.facing)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"未知朝向 {body.facing}") from exc
+    for f in ("expression", "expression_end", "action", "action_end", "gaze_target"):
+        v = getattr(body, f)
+        if v is not None:
+            setattr(p, f, v.strip() or None)
+    p.edited_by_human = True
+    db.flush()
+    return {"id": p.id, "position": p.position.value, "facing": p.facing.value,
+            "edited_by_human": True}
+
+
 @router.post("/shot-plans/{plan_id}/shots:bind-assets")
 def bind_assets(plan_id: str, body: BindIn, db: Session = Depends(get_db)) -> dict:
     """绑定素材并拼好首尾帧 prompt。不调 LLM、不花钱。

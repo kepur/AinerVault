@@ -124,6 +124,57 @@ def _entity_look(
     return ", ".join(p for p in parts if p), refs
 
 
+#: 站位 → 英文提示词。九宫格而非坐标 —— 坐标在不同画幅下没有意义。
+_POS_EN = {
+    "far_left": "at the far left of frame", "left": "on the left of frame",
+    "center_left": "left of centre", "center": "centred in frame",
+    "center_right": "right of centre", "right": "on the right of frame",
+    "far_right": "at the far right of frame",
+    "foreground": "in the foreground", "background": "deep in the background",
+}
+_FACING_EN = {
+    "to_camera": "facing camera", "away": "seen from behind",
+    "profile_left": "in left profile", "profile_right": "in right profile",
+    "three_quarter": "in three-quarter view",
+}
+
+
+def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
+    """把这一镜的人物调度写成提示词。
+
+    首帧用 expression/action，尾帧用 expression_end/action_end ——
+    两者之差就是这一镜的运动，也正是尾帧 i2i 要改的那部分。
+    取错了字段，首尾帧会一模一样，生成出来是两张静止的画。
+    """
+    from app.models import Facing, FrameRole, ShotPerformance, StagePosition, WorldEntity
+
+    rows = list(db.execute(
+        select(ShotPerformance, WorldEntity)
+        .join(WorldEntity, WorldEntity.id == ShotPerformance.entity_id)
+        .where(ShotPerformance.shot_id == shot.id)
+    ))
+    if not rows:
+        return ""
+    is_last = frame.role == FrameRole.last
+    bits: list[str] = []
+    for p, e in rows:
+        if p.position is StagePosition.offscreen:
+            continue
+        seg = [_POS_EN.get(p.position.value, ""), _FACING_EN.get(p.facing.value, "")]
+        expr = (p.expression_end if is_last else p.expression) or p.expression
+        act = (p.action_end if is_last else p.action) or p.action
+        if expr:
+            seg.append(str(expr))
+        if act:
+            seg.append(str(act))
+        if p.gaze_target:
+            seg.append(f"looking at {p.gaze_target}")
+        seg = [x for x in seg if x]
+        if seg:
+            bits.append(", ".join(seg))
+    return "; ".join(bits)
+
+
 def compose_frame_prompt(
     db: Session,
     shot: Shot,
@@ -196,6 +247,14 @@ def compose_frame_prompt(
             role = "character" if spec.kind == AssetKindSpec.costume else "scene"
             refs.append({"ref": {"url": url}, "role": role, "weight": 0.6,
                          "tag": spec.canonical_key})
+
+    # ── 4.5 人物调度 ──
+    # 素材包给的是**恒定属性**（长什么样、穿什么），这里给**瞬时状态**
+    # （站哪、看谁、什么表情、在做什么）。两者分开来源、在提示词里拼合 ——
+    # 混着存的话，「他握紧了剑」会污染角色素材，下一镜松了手也还是攥着的。
+    staging = _staging_prompt(db, shot, frame)
+    if staging:
+        positive.append(staging)
 
     # ── 5 镜头语言 ──
     size = str(params.get("shot_size") or shot.shot_size or "ms")

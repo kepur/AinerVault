@@ -329,6 +329,7 @@ const GROUPS = [
   ]},
   {id:"g-media", name:"成品", pages:[
     {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
+    {id:"staging",  ico:"🎭", name:"分镜调度", sub:"站位 · 朝向 · 视线 · 表情 · 动作"},
     {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
   ]},
   {id:"g-sys", name:"系统", pages:[
@@ -1742,6 +1743,112 @@ const Review = {
   },
 };
 
+
+// ───────────────────────── 分镜调度 ─────────────────────────
+const POS_CN = {
+  far_left:"最左", left:"左", center_left:"中偏左", center:"中央",
+  center_right:"中偏右", right:"右", far_right:"最右",
+  foreground:"前景", background:"背景", offscreen:"画外",
+};
+const FACING_CN = {
+  to_camera:"正脸", away:"背影", profile_left:"左侧脸",
+  profile_right:"右侧脸", three_quarter:"四分之三侧",
+};
+const ROLE_CN = {
+  speaker:"说话", addressee:"被对说", listener:"旁听", silent:"在场", absent:"不在场",
+};
+
+const Staging = {
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一个章节</div></div>`;
+      return;
+    }
+    const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`).catch(()=>null);
+    const pid = plan && plan.plan_id;
+    const d = pid ? await api("GET", `/shot-plans/${pid}/performance`).catch(()=>null) : null;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>分镜调度
+          ${d?`<span class="sub mono" style="color:var(--muted)">${d.with_cast}/${d.shots} 镜有调度</span>`:""}
+          ${d&&d.static_shots.length?`<span class="tag t-warn">${d.static_shots.length} 镜首尾相同</span>`:""}
+          ${d&&d.position_jumps.length?`<span class="tag t-bad">${d.position_jumps.length} 处站位跳变</span>`:""}
+        </h2>
+        <p class="hint">剧本层知道<b>谁在说</b>，不知道<b>对谁说</b> ——
+          而镜头该给谁、给几个人，靠的是后者。<br>
+          这里抽的是<b>瞬时状态</b>（站哪、看谁、什么表情、在做什么），
+          与素材包的恒定属性（长什么样、穿什么）分开存 ——
+          混在一起的话「他握紧了剑」会污染角色素材，下一镜松了手也还是攥着的。<br>
+          两个告警各有含义：<b>首尾相同</b>意味着这一镜生成出来是两张静止的画，
+          首尾之差才是运动；<b>站位跳变</b>是同一角色在相邻镜里位置突变而中间没有走位，
+          动画到这里会穿帮。</p>
+        <div class="row">
+          <button class="btn" onclick="Staging.dialogue(this)">标注对话指向与在场</button>
+          <button class="btn pri" onclick="Staging.extract(this)" ${pid?"":"disabled"}
+            >抽取镜头表演</button>
+          ${pid?"":`<span class="sub" style="color:var(--warn);font-size:12px">
+            先在「剧本转换」生成分镜计划</span>`}
+        </div>
+      </div>
+      ${d && d.items.length ? d.items.map(s => `
+        <div class="card" style="padding:13px 15px">
+          <div class="row" style="margin-bottom:${s.cast.length?"9px":"0"}">
+            <span class="tag t-mute">#${s.order_no}</span>
+            <span class="tag t-info">${h(s.shot_size||"—")}</span>
+            <span class="mono" style="color:var(--muted);font-size:12px">
+              ${(s.duration_ms/1000).toFixed(1)}s</span>
+            ${s.static?`<span class="tag t-warn">首尾相同</span>`:""}
+            <span style="color:var(--body);font-size:12.5px">${h(s.description||"")}</span>
+          </div>
+          ${s.cast.length ? `<div class="tblwrap"><table><thead><tr>
+            <th>角色</th><th>身份</th><th>站位</th><th>朝向</th><th>视线</th>
+            <th>表情 首→尾</th><th>动作 首→尾</th><th>道具</th><th></th>
+          </tr></thead><tbody>${s.cast.map(c => `<tr>
+            <td><b>${h(c.entity)}</b></td>
+            <td><span class="tag ${c.speech_role==="speaker"?"t-ok":"t-mute"}"
+              >${h(ROLE_CN[c.speech_role]||c.speech_role)}</span></td>
+            <td>${c.position_jump
+              ? `<span class="tag t-bad" title="与上一镜相比位置突变，中间没有走位">
+                   ${h(POS_CN[c.position]||c.position)} ⚠</span>`
+              : `<span class="tag t-mute">${h(POS_CN[c.position]||c.position)}</span>`}</td>
+            <td class="mono" style="font-size:11.5px">${h(FACING_CN[c.facing]||c.facing)}</td>
+            <td class="mono" style="font-size:11.5px;color:var(--muted)">${h(c.gaze_target||"—")}</td>
+            <td style="font-size:12px">${h(c.expression||"—")}
+              <span style="color:var(--muted)">→</span> ${h(c.expression_end||"—")}</td>
+            <td style="font-size:12px;max-width:220px">${h(c.action||"—")}
+              <span style="color:var(--muted)">→</span> ${h(c.action_end||"—")}</td>
+            <td class="mono" style="font-size:11px">${h((c.props||[]).join("、")||"—")}</td>
+            <td>${c.edited_by_human?`<span class="tag t-ok">已改</span>`:""}</td>
+          </tr>`).join("")}</tbody></table></div>`
+          : `<div class="sub" style="color:var(--muted);font-size:12px">还没有调度</div>`}
+        </div>`).join("")
+      : `<div class="card"><div class="empty">${pid?"还没有抽取调度":"还没有分镜计划"}</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async dialogue(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/dialogue:resolve`, {});
+      logOk(`标注 ${r.blocks} 段，其中 ${r.with_addressee} 段有明确对象，`
+            + `单场最多 ${r.max_present} 人在场`);
+      App.refresh();
+    }, "标注中");
+  },
+  async extract(btn) {
+    const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`);
+    await run(btn, async () => {
+      const r = await api("POST", `/shot-plans/${plan.plan_id}/performance:extract`, {});
+      logOk(`${r.shots} 镜，${r.performances} 条调度`);
+      (r.static_shots||[]).forEach(x => logWarn(`镜 ${x.shot}：${x.note}`));
+      (r.position_jumps||[]).forEach(x =>
+        logWarn(`镜 ${x.shot}：${x.entity} 站位 ${POS_CN[x.from]}→${POS_CN[x.to]}，中间没有走位`));
+      (r.unresolved||[]).forEach(x => logWarn(`认不出的角色：${x}`));
+      App.refresh();
+    }, "抽取中");
+  },
+};
+
 // ───────────────────────── 任务 ─────────────────────────
 const Tasks = {
   async render(v) {
@@ -1854,7 +1961,7 @@ const App = {
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
-               culture:Culture, review:Review,
+               culture:Culture, review:Review, staging:Staging,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {

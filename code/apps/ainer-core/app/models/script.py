@@ -120,6 +120,12 @@ class ScriptBlock(Base, StdMixin):
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
     speaker_tag: Mapped[str | None] = mapped_column(String(128))
     speaker_entity_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    #: 这句话是对谁说的。speaker 知道「谁在说」，不知道「对谁说」——
+    #: 而镜头该给谁、给几个人，靠的是后者。
+    addressee_tags: Mapped[list | None] = mapped_column(JSONB)
+    #: 这一刻在场的全部角色（含不说话的）。不记录的话，
+    #: 一段三人对话会被切成两个人的对切镜头，第三个人凭空消失。
+    present_tags: Mapped[list | None] = mapped_column(JSONB)
     edited_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     meta_json: Mapped[dict | None] = mapped_column(JSONB)
 
