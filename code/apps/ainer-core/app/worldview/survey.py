@@ -345,7 +345,7 @@ def survey_chapter(
         if not batch and not direct:
             break
         _mine_batch(db, transform, chapter, src_profile, tgt_profile,
-                    batch, direct, excerpt, known_sample, covered, result)
+                    batch, direct, excerpt, known_sample, covered, result, texts)
     db.flush()
     return result
 
@@ -359,7 +359,7 @@ def _mine_batch(
     src_profile: WorldProfile | None, tgt_profile: WorldProfile | None,
     candidates: list[tuple[str, int]], direct: bool,
     excerpt: str, known_sample: str, covered: set[str],
-    result: SurveyResult,
+    result: SurveyResult, texts: list[str],
 ) -> None:
     data, _task = chat_json(
         db,

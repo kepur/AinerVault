@@ -10,7 +10,8 @@ Miss 在前者指未婚小姐、在后者还多一层雇佣关系。同为 pt，
 同一 language.code 下可以有任意多个圈层档案，靠 world_transform 区分 ——
 这也是 translation_blocks 按 transform_id 而非语言码存的原因。
 
-覆盖全球前十大语言：en / zh / hi / es / fr / ar / bn / pt / ru / ja。
+覆盖全球前十大语言 en / zh / hi / es / fr / ar / bn / pt / ru / ja，
+另加韩语 ko —— 东亚三语齐了，中日韩互译是本项目最常见的场景。
 每个语言至少一个圈层，历史跨度大的语言给多个。
 """
 from __future__ import annotations
@@ -18,6 +19,86 @@ from __future__ import annotations
 from typing import Any
 
 CULTURE_PACKS: list[dict[str, Any]] = [
+    {
+        "code": "kr_joseon",
+        "display_name": "韩语 · 朝鲜王朝 (1392–1897)",
+        "role": "target",
+        "axes": {
+            "region": "KR", "era": "joseon", "era_span": [1392, 1897],
+            "genre": "court_historical", "world_setting": "historical",
+            "social_context": "yangban_court", "tech_level": "pre_industrial"
+        },
+        "visual": {
+            "visual_do": ["韩服 한복", "笠帽 갓", "瓦屋与韩屋", "书院与祠堂",
+                          "青瓷与白瓷", "宫阙丹青", "轿子与马", "文房四宝"],
+            "visual_dont": ["和服", "汉式斗拱为主体", "西洋建筑", "现代服饰", "火器为常见"],
+            "signage_rules": {"language": "한국어", "script": "汉字/谚文",
+                              "style": "楷书", "material": "木匾",
+                              "avoid": "现代无衬线"},
+            "palette": ["#2F4F3E", "#8C2C2C", "#D9C9A8", "#1B3A5C", "丹青青", "朱漆", "素白"]
+        },
+        "language": {
+            "code": "ko-KR", "register": "classical_korean",
+            "name_pattern": "family_given", "name_script": "hangul",
+            "numerals": "hanja", "date_style": "reign_year",
+            "honorifics": {"noble": "대감", "scholar": "선생", "elder": "어르신",
+                           "peer": "공", "king": "전하"}
+        },
+        "description": "两班士大夫的世界。敬语层级极细，用错一层就是失礼 —— 与日语的敬语体系不同源，不能互套。"
+    },
+    {
+        "code": "kr_colonial",
+        "display_name": "韩语 · 日据时期 (1910–1945)",
+        "role": "target",
+        "axes": {
+            "region": "KR", "era": "colonial", "era_span": [1910, 1945],
+            "genre": "social_realism", "world_setting": "historical",
+            "social_context": "colonial_city", "tech_level": "early_industrial"
+        },
+        "visual": {
+            "visual_do": ["石造洋馆与韩屋并存", "电车与人力车", "改良韩服与西装",
+                          "咖啡馆 다방", "日式看板与谚文并列", "煤气灯转电灯", "市场 시장"],
+            "visual_dont": ["朝鲜王朝宫廷为主", "现代高楼", "中世纪欧洲"],
+            "signage_rules": {"language": "한국어", "script": "谚文/汉字/日文并列",
+                              "style": "美术字", "material": "搪瓷/木板",
+                              "avoid": "纯现代字体"},
+            "palette": ["#3C3C3C", "#7B4B2A", "#A8452F", "#D9CBA3", "煤灰", "旧木", "赭"]
+        },
+        "language": {
+            "code": "ko-KR", "register": "colonial_korean",
+            "name_pattern": "family_given", "name_script": "hangul",
+            "numerals": "arabic", "date_style": "calendar_year",
+            "honorifics": {"peer": "씨", "respect": "선생님", "elder": "어르신"}
+        },
+        "description": "殖民与现代化同时压过来。语言层本身就是冲突场 —— 谚文、汉字、日文同街并列。"
+    },
+    {
+        "code": "kr_modern",
+        "display_name": "韩语 · 现代首尔 (1990–2030)",
+        "role": "target",
+        "axes": {
+            "region": "KR", "era": "contemporary", "era_span": [1990, 2030],
+            "genre": "contemporary_drama", "world_setting": "modern",
+            "social_context": "urban", "tech_level": "digital"
+        },
+        "visual": {
+            "visual_do": ["便利店 편의점", "地铁与公寓", "咖啡连锁", "考试院与半地下房",
+                          "霓虹招牌", "汉江与桥", "校服", "配送摩托"],
+            "visual_dont": ["韩服日常化", "瓦屋为主", "中世纪欧洲", "西部荒原"],
+            "signage_rules": {"language": "한국어", "script": "hangul",
+                              "style": "고딕체", "material": "亚克力/LED",
+                              "avoid": "毛笔体"},
+            "palette": ["#F2F2F2", "#2B2B2B", "#3B6EA5", "#E5484D", "白", "钢灰", "霓虹蓝"]
+        },
+        "language": {
+            "code": "ko-KR", "register": "modern_polite",
+            "name_pattern": "family_given", "name_script": "hangul",
+            "numerals": "arabic", "date_style": "calendar_year",
+            "honorifics": {"peer": "씨", "senior": "선배", "junior": "후배",
+                           "respect": "님", "teacher": "선생님"}
+        },
+        "description": "现代韩国。敬语仍在但载体从身份变成年龄与场合，선배/후배 的一年之差就是一整套语体。"
+    },
     {
         "code": "cn_modern_net",
         "display_name": "中文 · 当代网络 (2010–2030)",

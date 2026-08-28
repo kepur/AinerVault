@@ -425,7 +425,7 @@ def run_translation(chapter_id: str, lang: str, body: RunIn,
 def get_translation(chapter_id: str, lang: str,
                     db: Session = Depends(get_db)) -> dict:
     """逐块原文 / 译文对照。action 与 scene_break 不进翻译线，标记出来。"""
-    _chapter(db, chapter_id)
+    c = _chapter(db, chapter_id)
     doc = db.execute(
         select(ScriptDoc).where(
             ScriptDoc.chapter_id == chapter_id, ScriptDoc.status == DocStatus.active

@@ -738,7 +738,7 @@ const World = {
       State.save();
     }
     const tf = transforms.find(t=>t.id===State.transformId);
-    let cov = null, lex = [], names = [], tpls = [], aps = null;
+    let cov = null, lex = [], names = [], tpls = [], aps = null, langs = {items:[]};
     if (tf) {
       [cov, lex, names, tpls, aps] = await Promise.all([
         api("GET", `/transforms/${tf.id}/coverage`).catch(()=>null),
@@ -747,8 +747,12 @@ const World = {
         api("GET", "/lexicon-templates").catch(()=>[]),
         api("GET", `/transforms/${tf.id}/appellations`).catch(()=>null),
       ]);
+      langs = await api("GET", "/languages").catch(()=>({items:[]}));
     } else {
-      tpls = await api("GET", "/lexicon-templates").catch(()=>[]);
+      [tpls, langs] = await Promise.all([
+        api("GET", "/lexicon-templates").catch(()=>[]),
+        api("GET", "/languages").catch(()=>({items:[]})),
+      ]);
     }
 
     v.innerHTML = `
@@ -777,11 +781,27 @@ const World = {
             <div><label>源世界观</label><select id="tf-src">${
               profiles.map(p=>`<option value="${p.id}" ${p.code==='cn_wuxia'?'selected':''}>
                 ${h(p.display_name)}</option>`).join("")}</select></div>
-            <div><label>目标世界观</label><select id="tf-tgt">${
-              profiles.map(p=>`<option value="${p.id}" ${p.code==='eu_medieval_high'?'selected':''}>
+            <div><label>目标世界观</label>
+              <select id="tf-tgt" onchange="World.syncLang()">${
+              profiles.map(p=>`<option value="${p.id}"
+                data-lang="${h((p.language||{}).code||"")}"
+                ${p.code==='eu_medieval_high'?'selected':''}>
                 ${h(p.display_name)}</option>`).join("")}</select></div>
-            <div><label>目标语言</label><input id="tf-lang" value="en-GB"></div>
+            <div><label>目标语言</label>
+              <select id="tf-lang" onchange="this.dataset.touched='1'">${
+                (langs.items||[]).map(l=>`<option value="${h(l.code)}"
+                  ${l.code==='en-GB'?'selected':''}>${h(l.code)}${
+                  l.profiles?`　${l.profiles} 圈层`:""}${
+                  l.has_fallback_pool?"":"　⚠无兜底姓名池"}</option>`).join("")
+              }</select></div>
           </div>
+          <p class="hint" style="margin:8px 0 0">
+            <b>世界观与语言是两个维度。</b>选目标世界观时语言会自动带出它的默认值，
+            但可以改：同一个「维多利亚英国」，可以出 en-GB 给英国读者，
+            也可以出 en-US 给美国读者；「昭和日本」的译本可以是 ja-JP，
+            也可以是给在日华人看的 zh-CN。<br>
+            标「无兜底姓名池」的语言仍可选，只是命名失败时无法自动兜底 ——
+            需要人工指定译名，而不是拿到一个别的语言的名字。</p>
           <button class="btn pri" style="margin-top:10px" onclick="World.create(this)">
             创建并激活</button>
         </details>
@@ -893,6 +913,16 @@ const World = {
     const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
   },
   pick(id, lang) { State.transformId = id; State.lang = lang; State.save(); App.refresh(); },
+  syncLang() {
+    // 选世界观时把语言带成它的默认值。只在语言仍是上一个默认时改 ——
+    // 用户手动挑过就不该被覆盖，那是他明确的选择。
+    const tgt = $("#tf-tgt"), lang = $("#tf-lang");
+    if (!tgt || !lang) return;
+    const want = tgt.options[tgt.selectedIndex]?.dataset.lang;
+    if (!want) return;
+    if (lang.dataset.touched === "1") return;
+    if ([...lang.options].some(o => o.value === want)) lang.value = want;
+  },
   async create(btn) {
     await run(btn, async () => {
       const t = await api("POST", `/novels/${State.novelId}/transforms`, {

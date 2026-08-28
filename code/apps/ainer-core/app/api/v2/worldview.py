@@ -49,6 +49,54 @@ def seed_assets(db: Session = Depends(get_db)) -> dict:
     return survey.seed_defaults(db)
 
 
+@router.get("/languages")
+def list_languages(db: Session = Depends(get_db)) -> dict:
+    """可选的目标语言。
+
+    **世界观与语言是两个维度，不该绑死。** 档案的 language.code 只是默认值：
+    同一个「维多利亚英国」世界观，可能要出 en-GB 给英国读者、
+    也可能出 en-US 给美国读者；「昭和日本」的译本可能是 ja-JP，
+    也可能是给在日华人看的 zh-CN。写死就少了这一层自由。
+
+    列表来自两处的并集：已建档案实际用到的语言（带各自的圈层数），
+    加上命名验证支持的全部语言 —— 后者能保证选了它至少校验不会崩。
+    """
+    from app.worldview.naming import _FALLBACK_POOLS, _LANG_SCRIPTS
+
+    rows = list(db.execute(select(WorldProfile).where(
+        WorldProfile.status == ProfileStatus.active)).scalars())
+    by_code: dict[str, dict] = {}
+    for p in rows:
+        code = (p.language_json or {}).get("code")
+        if not code:
+            continue
+        slot = by_code.setdefault(code, {
+            "code": code, "profiles": 0, "examples": [],
+            "name_pattern": (p.language_json or {}).get("name_pattern"),
+            "script": (p.language_json or {}).get("name_script"),
+        })
+        slot["profiles"] += 1
+        if len(slot["examples"]) < 4:
+            slot["examples"].append(p.display_name)
+
+    # 补上有档案但没圈层的语言变体，以及命名层支持的基础语言
+    for base in sorted(_LANG_SCRIPTS):
+        if not any(c.split("-")[0] == base for c in by_code):
+            by_code.setdefault(base, {
+                "code": base, "profiles": 0, "examples": [],
+                "name_pattern": None, "script": _LANG_SCRIPTS[base][0],
+            })
+
+    items = sorted(by_code.values(), key=lambda x: (-x["profiles"], x["code"]))
+    for it in items:
+        base = it["code"].split("-")[0].lower()
+        # 没有兜底姓名池的语言仍可选，但命名失败时无法自动兜底，
+        # 需要人工指定 —— 这一点必须让用户在选之前就知道
+        it["has_fallback_pool"] = base in _FALLBACK_POOLS
+        it["script"] = it.get("script") or (_LANG_SCRIPTS.get(base) or ("latin",))[0]
+    return {"total": len(items), "items": items}
+
+
 @router.get("/world-profiles")
 def list_profiles(role: str | None = Query(None), novel_id: str | None = Query(None),
                   db: Session = Depends(get_db)) -> list[dict]:
