@@ -24,6 +24,7 @@ from app.models import (
     WorldProfile, WorldTransform,
 )
 from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.entities import _NEEDS_PROPER_NAME
 from app.worldview import naming as nm
 
 log = logging.getLogger(__name__)
@@ -191,8 +192,10 @@ def suggest_names(
 
     q = select(WorldEntity).where(
         WorldEntity.novel_id == transform.novel_id,
-        WorldEntity.kind.in_([EntityKind.character, EntityKind.location,
-                              EntityKind.faction]),
+        # 与 entities._NEEDS_PROPER_NAME 共用同一份定义 ——
+        # 两处各写一份就会出现「命名管线不管、占位符却要求有」的死角，
+        # 表现是每次翻译都报一串永远消不掉的「缺译名」。
+        WorldEntity.kind.in_(sorted(_NEEDS_PROPER_NAME, key=lambda k: k.value)),
     )
     if entity_ids:
         q = q.where(WorldEntity.id.in_(entity_ids))

@@ -474,6 +474,13 @@ def _save_style_hints(db: Session, chapter: Chapter, items: list[dict]) -> int:
     return n
 
 
+#: 需要专名映射的实体类型。与 naming.suggest_names 处理的范围一致 ——
+#: 两处不一致就会出现「命名管线不管、占位符却要求有」的死角。
+_NEEDS_PROPER_NAME = frozenset({
+    EntityKind.character, EntityKind.location, EntityKind.faction,
+})
+
+
 def placeholder_map(
     db: Session, novel_id: str, transform_id: str, target_language: str
 ) -> tuple[list[tuple[str, str]], dict[str, str], list[str]]:
@@ -535,7 +542,14 @@ def placeholder_map(
         ph = f"{{{{{prefix}:{e.id[-10:].lower()}}}}}"
         mapped = names.get(e.id)
         if mapped is None or not mapped.target_name:
-            missing.append(e.display_name)
+            # 只有专名类实体缺译名才算问题。道具与风格**本来就不该有人名映射** ——
+            # 命名管线压根不处理它们（只做 character/location/faction），
+            # 它们由名物词表在翻译时转译：腰刀 → шашка 是名物层的事，
+            # 不需要占位符隔离（占位符是为了防人名被音译）。
+            # 不区分的话，每次翻译都会报一串「缺译名」，
+            # 而那串永远不会消失 —— 报警变成噪声，真正缺译名的角色就被淹掉了。
+            if e.kind in _NEEDS_PROPER_NAME:
+                missing.append(e.display_name)
             continue
         ph_to_target[ph] = mapped.target_name
         # LLM 有时会改写占位符内部 token，多留几个还原键兜底

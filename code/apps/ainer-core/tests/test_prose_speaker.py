@@ -256,3 +256,37 @@ class TestRoleTermSplit:
     def test_empty_lexicon_names_everything(self):
         """名物勘探还没跑时不该误跳过任何实体。"""
         assert role_term_hit({"总镖头"}, None, set()) is None
+
+
+class TestPlaceholderScope:
+    """占位符表与命名管线的范围必须一致。
+
+    不一致的表现是每次翻译都报一串「缺译名」，而那串永远不会消失 ——
+    因为命名管线压根不处理 prop/style，占位符却要求它们有译名。
+    报警变成噪声，真正缺译名的角色就被淹掉了。
+
+    第二轮端到端每章都报 ['镖单','镖箱','三簧锁','镖旗','镖车','腰牌','腰刀']，
+    七个全是道具。
+    """
+
+    def test_scopes_match(self):
+        from app.pipelines.entities import _NEEDS_PROPER_NAME as A
+        from app.pipelines.naming import _NEEDS_PROPER_NAME as B
+
+        assert A is B, "两处必须共用同一份定义，不能各写各的"
+
+    def test_props_excluded(self):
+        from app.models import EntityKind
+        from app.pipelines.entities import _NEEDS_PROPER_NAME
+
+        # 道具走名物词表（腰刀 → шашка），不需要占位符隔离 ——
+        # 占位符是为了防人名被音译
+        assert EntityKind.prop not in _NEEDS_PROPER_NAME
+        assert EntityKind.style not in _NEEDS_PROPER_NAME
+
+    def test_proper_nouns_included(self):
+        from app.models import EntityKind
+        from app.pipelines.entities import _NEEDS_PROPER_NAME
+
+        for k in (EntityKind.character, EntityKind.location, EntityKind.faction):
+            assert k in _NEEDS_PROPER_NAME
