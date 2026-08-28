@@ -351,6 +351,25 @@ def extract_performance(
     return result
 
 
+def is_position_jump(
+    prev: StagePosition | None, cur: StagePosition, *, moved: bool
+) -> bool:
+    """同一角色在相邻镜之间的站位是否跳变。
+
+    跳变 = 位置变了，但这一镜里没有走位动作来解释它。
+    动画放到这里，人会凭空出现在画面另一边 —— 观众立刻出戏。
+
+    两种情况不算跳变：
+      画外进出   offscreen ↔ 任意位置是正常的入画出画，不是跳变
+      有走位     action 与 action_end 不同说明这一镜里人在动，位置变了合理
+    """
+    if prev is None or prev is cur:
+        return False
+    if StagePosition.offscreen in (prev, cur):
+        return False
+    return not moved
+
+
 def _absorb(
     db: Session, items: list[dict], batch: list[Shot],
     by_name: dict[str, WorldEntity],
@@ -405,12 +424,7 @@ def _absorb(
             # 站位跳变：同一角色相邻镜位置突变且动作里没写走位
             prev = last_pos.get(entity.id)
             moved = bool(row.action_end and row.action_end != row.action)
-            jumped = (
-                prev is not None and prev is not pos
-                and pos is not StagePosition.offscreen
-                and prev is not StagePosition.offscreen
-                and not moved
-            )
+            jumped = is_position_jump(prev, pos, moved=moved)
             row.position_jump = jumped
             if jumped:
                 result.position_jumps.append({
