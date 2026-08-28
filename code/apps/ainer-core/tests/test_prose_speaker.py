@@ -41,6 +41,39 @@ class TestTrimSpeaker:
         assert trim_speaker(raw) == expect
 
     @pytest.mark.parametrize("raw", [
+        "高渐离", "莫大先生", "于正", "李向东", "王真", "张曾",
+    ])
+    def test_never_kills_a_real_name(self, raw):
+        """禁用字表只放铁定不能入名的字。
+
+        「渐」「正」「刚」「曾」「于」「莫」「真」「向」都是常见名字用字。
+        把它们列进禁用表会把真人名判成 None —— 而**误杀比漏挡更糟**：
+        漏挡的碎片还有后面几道检查，误杀的人名直接就没了，且沿途不报错。
+        """
+        assert trim_speaker(raw) == raw
+
+    @pytest.mark.parametrize("raw", [
+        "走到日头偏西",                      # 强动词开头 = 动词短语
+        "摸出个油纸包",
+    ])
+    def test_rejects_verb_phrases(self, raw):
+        assert trim_speaker(raw) is None
+
+    def test_only_first_clause_considered(self):
+        """冒号前有多个分句时只认第一句。
+
+        说话人可能在任何一句：「总镖头把镖单推过来，指节在桌上敲了两下」
+        在第一句，「走到日头偏西，前头出现一片屋檐。老周勒住马」在最后一句。
+        逐句试会挑中错的 —— 第二例的第二句能产出「前头」，
+        形状上完全合法，规则层面无从否定；「指节」同理。
+
+        所以宁可只认第一句：说话人不在第一句时返回 None，
+        由 speakers:resolve 用上下文补。漏一个可以补，错一个会一路传下去。
+        """
+        assert trim_speaker("总镖头把镖单推过来，指节在桌上敲了两下") == "总镖头"
+        assert trim_speaker("走到日头偏西，前头出现一片屋檐。老周勒住马") is None
+
+    @pytest.mark.parametrize("raw", [
         "他", "她", "众人", "有人",          # 代词不指向具体角色
         "老周慢悠悠",                        # 叠字是副词特征
         "把镖单推过来",                      # 虚词开头 = 整段不是称呼
