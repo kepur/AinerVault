@@ -788,20 +788,28 @@ const World = {
                 ${p.code==='eu_medieval_high'?'selected':''}>
                 ${h(p.display_name)}</option>`).join("")}</select></div>
             <div><label>目标语言</label>
-              <select id="tf-lang" onchange="this.dataset.touched='1'">${
-                (langs.items||[]).map(l=>`<option value="${h(l.code)}"
-                  ${l.code==='en-GB'?'selected':''}>${h(l.code)}${
+              <select id="tf-lang" disabled>${
+                (langs.items||[]).map(l=>`<option value="${h(l.code)}">${h(l.code)}${
                   l.profiles?`　${l.profiles} 圈层`:""}${
                   l.has_fallback_pool?"":"　⚠无兜底姓名池"}</option>`).join("")
-              }</select></div>
+              }</select>
+              <label style="text-transform:none;letter-spacing:0;margin-top:6px;
+                            display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="tf-lang-override" style="width:auto"
+                       onchange="World.toggleLangOverride(this.checked)">
+                <span style="font-size:11.5px;color:var(--muted)">用其他语言书写</span>
+              </label>
+            </div>
           </div>
           <p class="hint" style="margin:8px 0 0">
-            <b>世界观与语言是两个维度。</b>选目标世界观时语言会自动带出它的默认值，
-            但可以改：同一个「维多利亚英国」，可以出 en-GB 给英国读者，
-            也可以出 en-US 给美国读者；「昭和日本」的译本可以是 ja-JP，
-            也可以是给在日华人看的 zh-CN。<br>
-            标「无兜底姓名池」的语言仍可选，只是命名失败时无法自动兜底 ——
-            需要人工指定译名，而不是拿到一个别的语言的名字。</p>
+            <b>圈层已经决定了语言</b> —— 帝俄晚期就是俄语，摄政英国就是英式英语。
+            同语言的不同变体（en-GB／en-US、pt-PT／pt-BR）也已经由圈层分开了，
+            所以正常情况下这里不需要选。<br>
+            勾上「用其他语言书写」只为一种情况：<b>目标读者的语言与世界观的语言不同</b> ——
+            比如把武侠改编到帝俄背景，但成品是给中文读者看的中文小说。<br>
+            <span style="color:var(--warn)">这不是随便配的自由度。</span>
+            语言与圈层不一致时，命名按目标语言的书写系统校验，
+            而名物词表是按圈层挖的 —— 两者的落差要你自己心里有数。</p>
           <button class="btn pri" style="margin-top:10px" onclick="World.create(this)">
             创建并激活</button>
         </details>
@@ -914,14 +922,22 @@ const World = {
   },
   pick(id, lang) { State.transformId = id; State.lang = lang; State.save(); App.refresh(); },
   syncLang() {
-    // 选世界观时把语言带成它的默认值。只在语言仍是上一个默认时改 ——
-    // 用户手动挑过就不该被覆盖，那是他明确的选择。
+    // 语言跟随圈层。默认锁死 —— 允许自由组合会让人配出
+    // 「帝俄晚期 + 英语」这种矛盾：命名验证要求西里尔、模型给英语，全线失败。
     const tgt = $("#tf-tgt"), lang = $("#tf-lang");
     if (!tgt || !lang) return;
     const want = tgt.options[tgt.selectedIndex]?.dataset.lang;
     if (!want) return;
-    if (lang.dataset.touched === "1") return;
-    if ([...lang.options].some(o => o.value === want)) lang.value = want;
+    if (lang.disabled && [...lang.options].some(o => o.value === want)) {
+      lang.value = want;
+    }
+  },
+  toggleLangOverride(on) {
+    const lang = $("#tf-lang");
+    if (!lang) return;
+    lang.disabled = !on;
+    if (!on) this.syncLang();          // 取消勾选就退回圈层的语言
+    else logWarn("已解锁目标语言。仅当成品语言与世界观语言确实不同时才这么用");
   },
   async create(btn) {
     await run(btn, async () => {

@@ -1,6 +1,8 @@
 """世界观转译 API：档案 / 映射 / 名物词表 / 人名 / 违规 / 门禁。"""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -15,6 +17,8 @@ from app.models import (
 )
 from app.models.world import NamingPolicy, ProfileRole, ProfileStatus, TransformStatus
 from app.worldview import naming, preflight as pf, survey
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2", tags=["worldview"])
 
@@ -158,7 +162,10 @@ def update_profile(profile_id: str, body: ProfileIn, db: Session = Depends(get_d
 # ── 映射 ──────────────────────────────────────────────────────────────────────
 
 class TransformIn(BaseModel):
-    target_language_code: str
+    #: 不填则取目标圈层的语言 —— 圈层已经决定了语言，
+    #: 帝俄晚期就是俄语，摄政英国就是英式英语。
+    #: 同语言的不同变体（en-GB／en-US）也已由圈层分开。
+    target_language_code: str | None = None
     source_profile_id: str
     target_profile_id: str
     policy: dict = Field(default_factory=lambda: {
@@ -200,23 +207,55 @@ def create_transform(novel_id: str, body: TransformIn, db: Session = Depends(get
         if db.get(WorldProfile, pid) is None:
             raise HTTPException(status_code=400, detail=f"world profile {pid} not found")
 
+    tgt_profile = db.get(WorldProfile, body.target_profile_id)
+    profile_lang = (tgt_profile.language_json or {}).get("code")
+    lang = body.target_language_code or profile_lang
+    if not lang:
+        raise HTTPException(
+            status_code=400,
+            detail=f"目标圈层 {tgt_profile.code} 的档案没有 language.code，"
+                   f"请显式指定 target_language_code",
+        )
+
+    # 语言与圈层不一致是允许的，但只服务一种情况：
+    # 成品语言与世界观语言确实不同（武侠改编到帝俄背景、写给中文读者）。
+    # 除此之外都是配错了，而配错的后果很硬：命名按目标语言的书写系统校验，
+    # 名物词表却是按圈层挖的，两条线各说各话。所以记一条警告到 policy 里，
+    # 让它跟着这个映射走，而不是只在创建时闪一下。
+    mismatch = bool(
+        profile_lang and lang.split("-")[0] != profile_lang.split("-")[0]
+    )
+    policy = dict(body.policy)
+    if mismatch:
+        policy["language_override"] = {
+            "profile_language": profile_lang,
+            "chosen": lang,
+            "note": "成品语言与世界观语言不同。命名按成品语言的书写系统校验，"
+                    "名物词表按圈层挖 —— 两者的落差需要人工把关。",
+        }
+        log.warning("映射语言与圈层不一致：%s 的档案是 %s，选了 %s",
+                    tgt_profile.code, profile_lang, lang)
+
     version = int(db.execute(
         select(func.coalesce(func.max(WorldTransform.version), 0)).where(
             WorldTransform.novel_id == novel_id,
-            WorldTransform.target_language_code == body.target_language_code,
+            WorldTransform.target_language_code == lang,
         )
     ).scalar_one()) + 1
 
     t = WorldTransform(
         id=new_id("tf"), novel_id=novel_id,
-        target_language_code=body.target_language_code,
+        target_language_code=lang,
         source_profile_id=body.source_profile_id,
         target_profile_id=body.target_profile_id,
-        version=version, status=TransformStatus.draft, policy_json=body.policy,
+        version=version, status=TransformStatus.draft, policy_json=policy,
     )
     db.add(t)
     db.flush()
-    return _transform_out(t, db)
+    out = _transform_out(t, db)
+    if mismatch:
+        out["warning"] = policy["language_override"]["note"]
+    return out
 
 
 def _get_transform(db: Session, transform_id: str) -> WorldTransform:
