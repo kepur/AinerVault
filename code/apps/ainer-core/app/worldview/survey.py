@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
+    Novel,
     Chapter, LexiconCategory, LexiconSource, ReviewStatus, ScriptBlock, ScriptDoc,
     DocStatus, WorldLexicon, WorldLexiconTemplate, WorldProfile, WorldTransform, utcnow,
 )
@@ -172,11 +173,55 @@ MINE_SYSTEM = """你是跨文化改编的名物考据专家。
   已在【已有词表】中出现的词
 
 对每个词给出目标世界观下的地道说法，并说明依据。
-关键原则：目标世界观里没有对应物时（如中世纪欧洲没有茶），
-回退到功能等价的上位概念，而不是直译成一个时代外的词。
+
+关键原则：
+1. 目标世界观里没有对应物时（如中世纪欧洲没有茶），
+   回退到功能等价的上位概念，而不是直译成一个时代外的词。
+2. **年代必须对得上**。给的译法要属于目标世界观那个年代 ——
+   给摄政英国配一个工业时代的词，比不译更糟：读者一眼看出穿帮，
+   而且这种错藏在一个看似地道的英文词里，审校时最容易漏过。
+   下面会给出该世界观「不存在的东西」清单，那些词一个都不能用。
+3. 目标语言的书写系统要对。名物译法要用该世界观实际使用的文字，
+   不是拉丁转写。
 
 forbidden_targets 填「绝不能出现在译文里的错误译法」，
 通常是直译词与原文词本身。"""
+
+
+def _profile_constraints(profile: WorldProfile | None) -> str:
+    """把档案里的硬约束摊给模型。
+
+    这些字段一直存在库里却从没进过挖掘提示词 —— 于是模型只知道
+    「中世纪欧洲」四个字，年代边界、禁止物、书写系统全靠它自己猜。
+    v1 的 culture_packs_json 就是这么废掉的：存了，不用。
+    """
+    if profile is None:
+        return ""
+    axes = profile.axes_json or {}
+    visual = profile.visual_json or {}
+    lang = profile.language_json or {}
+    lines: list[str] = []
+    span = axes.get("era_span")
+    if isinstance(span, list) and len(span) == 2:
+        lines.append(f"【年代】{span[0]}–{span[1]}，此年代之后才有的事物一律不得使用")
+    if axes.get("social_context"):
+        lines.append(f"【社会背景】{axes['social_context']}")
+    if axes.get("tech_level"):
+        lines.append(f"【技术水平】{axes['tech_level']}")
+    dont = visual.get("visual_dont") or []
+    if dont:
+        lines.append(
+            "【该世界观不存在的东西】" + "、".join(str(x) for x in dont[:20])
+            + " —— 译法里绝不能出现这些，也不能出现同年代之外的等价物"
+        )
+    do = visual.get("visual_do") or []
+    if do:
+        lines.append("【该世界观的典型事物】" + "、".join(str(x) for x in do[:20]))
+    if lang.get("name_script"):
+        lines.append(f"【书写系统】{lang['name_script']}")
+    if lang.get("register"):
+        lines.append(f"【文体层级】{lang['register']}")
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 def _collect_blocks(db: Session, chapter: Chapter) -> list[ScriptBlock]:
@@ -196,14 +241,20 @@ def _collect_blocks(db: Session, chapter: Chapter) -> list[ScriptBlock]:
     )
 
 
-def _candidate_tokens(texts: list[str], covered: set[str], top_n: int) -> list[tuple[str, int]]:
+def _candidate_tokens(
+    texts: list[str], covered: set[str], top_n: int,
+    language_code: str | None = None,
+) -> list[tuple[str, int]]:
     """挑出送 LLM 判定的候选词。
 
-    用统计新词发现（凝固度 + 左右邻接熵）而非朴素频次切分 ——
-    朴素切分会产出「他推开客」「栈的门」这类碎片，送 LLM 纯属浪费 token。
-    统计层负责去碎片，LLM 层负责判定语义与译法，各司其职。
+    统计层负责去碎片和降噪，LLM 层负责判定语义与译法，各司其职。
+    按源语言分流两套算法：不分词的语言（中日）用凝固度 + 邻接熵，
+    空格语言用词频反选 + 搭配强度 —— 后者根本没有切分问题，
+    在它上面跑 n-gram 是把简单问题做复杂。
     """
-    return mine_candidates(texts, covered, min_freq=2, limit=top_n)
+    return mine_candidates(
+        texts, covered, language_code=language_code, min_freq=2, limit=top_n
+    )
 
 
 def survey_chapter(
@@ -257,9 +308,25 @@ def survey_chapter(
         covered.add(r.source_term)
         covered.update(r.source_aliases or [])
 
-    candidates = _candidate_tokens(texts, covered, max_candidates)
-    if not candidates:
-        return result
+    src_lang = None
+    novel = db.get(Novel, chapter.novel_id) if chapter.novel_id else None
+    if novel is not None:
+        src_lang = novel.source_language_code
+    if not src_lang:
+        src_profile_early = db.get(WorldProfile, transform.source_profile_id)
+        src_lang = (
+            (src_profile_early.language_json or {}).get("code")
+            if src_profile_early else None
+        )
+    candidates = _candidate_tokens(texts, covered, max_candidates, src_lang)
+    # 候选词是**降噪加速**手段，不是前置条件。
+    # 短章节、新书开头、名物密度低的段落，统计层本来就给不出候选 ——
+    # 此时若直接返回，LLM 层根本不被调用，用户只看到「勘探完成，0 条」，
+    # 完全不知道是没词还是没跑。所以退化为直接把原文交给模型找。
+    direct = not candidates
+    if direct:
+        log.info("统计层无候选（语料 %d 字），转为直接从原文挖掘",
+                 sum(len(t) for t in texts))
 
     src_profile = db.get(WorldProfile, transform.source_profile_id)
     tgt_profile = db.get(WorldProfile, transform.target_profile_id)
@@ -275,11 +342,19 @@ def survey_chapter(
                 "content": (
                     f"【源世界观】{src_profile.display_name if src_profile else '?'}\n"
                     f"【目标世界观】{tgt_profile.display_name if tgt_profile else '?'}\n"
+                    f"{_profile_constraints(tgt_profile)}"
                     f"【目标语言】{transform.target_language_code}\n\n"
                     f"【已有词表】{known_sample}\n\n"
-                    f"【高频候选词】"
-                    f"{', '.join(f'{t}({c})' for t, c in candidates)}\n\n"
-                    f"【原文节选】\n{excerpt}"
+                    + (
+                        "【候选词】统计层未能给出候选（语料太短或名物分散），"
+                        "请直接通读原文找出全部名物词。\n\n"
+                        if direct else
+                        f"【高频候选词】"
+                        f"{', '.join(f'{t}({c})' for t, c in candidates)}\n"
+                        "这是统计层筛出的高频词，仅供参考 —— "
+                        "原文里的名物不限于此表，看到别的也要收。\n\n"
+                    )
+                    + f"【原文节选】\n{excerpt}"
                 ),
             },
         ],
@@ -341,6 +416,96 @@ def _first_context(texts: list[str], term: str, width: int = 40) -> str | None:
 
 
 # ── 覆盖率 ────────────────────────────────────────────────────────────────────
+
+def promote_to_template(
+    db: Session, transform: WorldTransform, *,
+    min_status: ReviewStatus = ReviewStatus.approved,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """把这个映射下审定的词条沉淀成可复用模板。
+
+    「客栈 → inn」这个结论只取决于**源圈层 × 目标圈层**，与是哪本小说无关。
+    不沉淀的话，每本新书都要重挖一遍：烧钱，而且两次结果可能不一致 ——
+    同一个工作室的两本书里客栈译法不同，读者是会发现的。
+
+    25 个圈层两两配对有 600 种组合，不可能预置。所以路径是反的：
+    先挖，审定后沉淀，下一本书直接导入。用得越多，冷启动成本越低。
+
+    只收 approved 及以上的词条 —— candidate 是模型的猜测，
+    把没审过的东西沉淀成「模板」，等于把错误固化成标准。
+    """
+    src = db.get(WorldProfile, transform.source_profile_id)
+    tgt = db.get(WorldProfile, transform.target_profile_id)
+    if src is None or tgt is None:
+        raise PipelineError("world profile 缺失")
+
+    order = {ReviewStatus.candidate: 0, ReviewStatus.approved: 1, ReviewStatus.locked: 2}
+    rows = [
+        r for r in db.execute(
+            select(WorldLexicon).where(WorldLexicon.transform_id == transform.id)
+        ).scalars()
+        if r.target_term and order.get(r.status, 0) >= order[min_status]
+    ]
+    if not rows:
+        raise PipelineError(
+            f"没有达到 {min_status.value} 的词条可沉淀。"
+            f"模板是给别的书当起点用的 —— 未审的猜测沉淀进去等于固化错误。"
+        )
+
+    pair_code = f"{src.code}__{tgt.code}"
+    entries = [
+        {
+            "source_term": r.source_term,
+            "source_aliases": r.source_aliases or [],
+            "category": r.category.value,
+            "canonical_key": r.canonical_key,
+            "target_term": r.target_term,
+            "target_reading": r.target_reading,
+            "forbidden_targets": r.forbidden_targets or [],
+            "rationale": r.rationale,
+        }
+        for r in rows
+    ]
+
+    existing = db.execute(
+        select(WorldLexiconTemplate)
+        .where(WorldLexiconTemplate.pair_code == pair_code)
+        .order_by(WorldLexiconTemplate.version.desc())
+    ).scalars().first()
+
+    if existing is not None and not overwrite:
+        # 合并而非替换：别的书审出来的词条同样有效，不该被这一本覆盖掉。
+        # 冲突时保留已有的 —— 先到的那条经历过更多轮审校。
+        by_term = {e["source_term"]: e for e in existing.entries_json or []}
+        added = 0
+        for e in entries:
+            if e["source_term"] not in by_term:
+                by_term[e["source_term"]] = e
+                added += 1
+        existing.entries_json = sorted(by_term.values(), key=lambda x: x["source_term"])
+        db.flush()
+        return {
+            "template_id": existing.id, "pair_code": pair_code,
+            "action": "merged", "added": added,
+            "total": len(existing.entries_json),
+        }
+
+    version = (existing.version + 1) if existing is not None else 1
+    tpl = WorldLexiconTemplate(
+        id=new_id("lt"), pair_code=pair_code,
+        display_name=f"{src.display_name} → {tgt.display_name}",
+        source_profile_code=src.code, target_profile_code=tgt.code,
+        entries_json=sorted(entries, key=lambda x: x["source_term"]),
+        version=version,
+        description=f"由《{transform.novel_id}》的审定词条沉淀，{len(entries)} 条",
+    )
+    db.add(tpl)
+    db.flush()
+    return {
+        "template_id": tpl.id, "pair_code": pair_code,
+        "action": "created", "version": version, "total": len(entries),
+    }
+
 
 def seed_defaults(db: Session) -> dict[str, int]:
     """把预置世界观档案与词表模板灌进库。幂等，可反复调用。"""

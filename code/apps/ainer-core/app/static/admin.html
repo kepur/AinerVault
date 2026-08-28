@@ -794,7 +794,14 @@ const World = {
             tpls.map(t=>`<option value="${h(t.pair_code)}">${h(t.display_name)}（${t.entry_count} 条）</option>`).join("")}</select>
           <button class="btn" onclick="World.importTpl(this)">导入预置词表</button>
           <button class="btn pri" onclick="World.approveHits(this)">审核并通过命中的词条</button>
+          <button class="btn" onclick="World.promoteTpl(this)"
+            title="把审定的词条沉淀成模板，下一本同圈层的书直接导入">沉淀为模板</button>
         </div>
+        <p class="hint" style="margin-top:-4px">
+          25 个圈层两两配对有 600 种组合，不可能预置。所以路径是反的：
+          <b>先挖 → 审定 → 沉淀</b>，下一本同圈层的书直接导入，零 LLM 调用。
+          用得越多，冷启动成本越低。只有审定过的词条会被沉淀 ——
+          未审的猜测进了模板，等于把错误固化成标准。</p>
         ${cov ? `<div class="steps" style="margin-bottom:12px">
           <div class="step ${cov.lexicon.approved+cov.lexicon.locked>0?'done':''}">
             <div class="k">已通过</div><div class="v">${cov.lexicon.approved+cov.lexicon.locked}</div></div>
@@ -909,6 +916,16 @@ const World = {
         `/transforms/${State.transformId}/lexicon:import-template?pair_code=${pair}`);
       logOk(`导入 ${r.created} 条，跳过已有 ${r.skipped} 条`); App.refresh();
     }, "导入");
+  },
+  async promoteTpl(btn) {
+    await run(btn, async () => {
+      const r = await api("POST",
+        `/transforms/${State.transformId}/lexicon:promote-template`);
+      logOk(r.action === "created"
+        ? `已建模板 ${r.pair_code} v${r.version}，${r.total} 条`
+        : `已并入模板 ${r.pair_code}，新增 ${r.added} 条，共 ${r.total} 条`);
+      App.refresh();
+    }, "沉淀");
   },
   async approveHits(btn) {
     await run(btn, async () => {

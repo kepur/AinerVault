@@ -192,6 +192,7 @@ def translate_chapter(
             target_language=lang,
             hits=hits,
             target_axes=tgt_profile.axes_json,
+            target_visual=tgt_profile.visual_json,
             language_cfg=lang_cfg,
             glossary_lines=glossary,
             style_prompt=style_prompt,

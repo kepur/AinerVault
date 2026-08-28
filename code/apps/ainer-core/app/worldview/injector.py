@@ -26,8 +26,15 @@ def build_world_declaration(
     *,
     target_axes: dict[str, Any] | None = None,
     register: str | None = None,
+    forbidden_things: Sequence[str] | None = None,
 ) -> str:
-    """② 世界观声明。"""
+    """② 世界观声明。
+
+    forbidden_things 来自档案的 visual_dont。名字带 visual 是历史包袱 ——
+    它约束的其实是**名物**：摄政英国不该有电灯，中世纪欧洲不该有火器。
+    这类错误比译名漂移更刺眼（读者一眼看出年代穿帮），
+    而档案里早就写好了，之前只是没往提示词里送。
+    """
     axes = target_axes or {}
     span = axes.get("era_span")
     # display_name 里可能已带年份，避免「昭和 (1926–1989)（1926–1989）」这种重复
@@ -44,6 +51,12 @@ def build_world_declaration(
     ]
     if register:
         lines.append(f"文体层级：{register}。")
+    if forbidden_things:
+        lines.append(
+            "该世界观里**不存在**这些东西，译文不得出现，也不得用它们作比喻："
+            + "、".join(str(x) for x in list(forbidden_things)[:20])
+            + "。原文出现对应事物时，换成该世界观里功能相当的物件。"
+        )
     return "\n".join(lines)
 
 
@@ -114,6 +127,7 @@ def compose_system_prompt(
     target_language: str,
     hits: Sequence[LexRow],
     target_axes: dict[str, Any] | None = None,
+    target_visual: dict[str, Any] | None = None,
     language_cfg: dict[str, Any] | None = None,
     glossary_lines: str = "",
     style_prompt: str | None = None,
@@ -126,6 +140,7 @@ def compose_system_prompt(
         build_world_declaration(
             source_display, target_display,
             target_axes=target_axes, register=cfg.get("register"),
+            forbidden_things=(target_visual or {}).get("visual_dont"),
         ),
         build_honorific_section(cfg.get("honorifics")),
         build_lexicon_section(hits),

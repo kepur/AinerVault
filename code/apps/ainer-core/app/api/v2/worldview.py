@@ -293,6 +293,35 @@ def import_lexicon_template(transform_id: str, pair_code: str = Query(...),
             "skipped": res.skipped, "entries": res.entries[:20]}
 
 
+@router.post("/transforms/{transform_id}/lexicon:promote-template")
+def promote_lexicon_template(
+    transform_id: str,
+    overwrite: bool = Query(False, description="true 则新建版本替换，默认与已有模板合并"),
+    include_candidates: bool = Query(
+        False, description="连未审的候选一起沉淀。会把模型的猜测固化成标准，慎用"
+    ),
+    db: Session = Depends(get_db),
+) -> dict:
+    """把审定的名物词条沉淀成跨小说可复用的模板。
+
+    25 个圈层两两配对有 600 种组合，不可能预置。所以路径是反的：
+    先挖，审定后沉淀，下一本书直接导入 —— 用得越多冷启动成本越低。
+    """
+    from app.models import ReviewStatus
+    from app.pipelines.base import PipelineError
+
+    t = _get_transform(db, transform_id)
+    try:
+        return survey.promote_to_template(
+            db, t, overwrite=overwrite,
+            min_status=(
+                ReviewStatus.candidate if include_candidates else ReviewStatus.approved
+            ),
+        )
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/transforms/{transform_id}/lexicon:survey")
 def survey_lexicon(
     transform_id: str,
