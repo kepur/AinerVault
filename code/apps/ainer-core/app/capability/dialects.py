@@ -25,7 +25,9 @@ from typing import Any
 
 import httpx
 
-from app.capability.errors import CapabilityError, CapErrorCode
+from app.capability.errors import (
+    MAX_ATTEMPTS, RETRY_BACKOFF_SEC, CapabilityError, CapErrorCode,
+)
 from app.capability.schemas import (
     CONTRACT_VERSION, Capability, CapabilityCatalog, CapabilityEntry,
     HealthResult, ModelDescriptor, Task, TaskState, Usage,
@@ -101,6 +103,36 @@ class _Caller:
 
     def __call__(self, messages: list[dict[str, str]], *, temperature: float,
                  max_tokens: int, json_mode: bool) -> str:
+        """一次调用，带两种独立的重试。
+
+        **传输重试**：连接被断、超时、上游 5xx、被限流。
+        跑一本书是上百次调用，网络抖一下就让整步失败太脆 ——
+        而失败的那一步可能已经烧了三分钟。
+        错误码里早就标了 retryable，只是同步通道从没用上它：
+        那套退避只接在异步任务的 attempt 机制上。
+
+        **截断重试**：输出撞 max_tokens，抬高预算重来（见下）。
+
+        两者次数分开算 —— 一次网络抖动不该消耗掉截断重试的机会，反之亦然。
+        """
+        last: CapabilityError | None = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                return self._call_once(messages, temperature=temperature,
+                                       max_tokens=max_tokens, json_mode=json_mode)
+            except CapabilityError as exc:
+                if not exc.retryable or attempt == MAX_ATTEMPTS - 1:
+                    raise
+                last = exc
+                delay = RETRY_BACKOFF_SEC[min(attempt, len(RETRY_BACKOFF_SEC) - 1)]
+                log.warning("调用失败可重试（%s），%d 秒后第 %d 次重试：%s",
+                            exc.code, delay, attempt + 2, str(exc)[:120])
+                time.sleep(delay)
+        assert last is not None
+        raise last
+
+    def _call_once(self, messages: list[dict[str, str]], *, temperature: float,
+                   max_tokens: int, json_mode: bool) -> str:
         """一次调用。被 max_tokens 截断时自动抬高预算重来一次。
 
         契约要求返回可解析的 JSON，而被截断的 JSON 一定不可解析 ——
@@ -131,6 +163,9 @@ class _Caller:
                     CapErrorCode.BAD_RESPONSE,
                     f"输出两轮均被截断（已抬到 {bigger}）。"
                     f"这一次请求要生成的内容太多 —— 请减少单批条目数。",
+                    # 不可重试：同样的请求重试三次还是同样地被截断，
+                    # 只是白烧三倍 token。要解决得改调用方的批次大小。
+                    retryable=False,
                 ) from exc2
 
     def _once(self, messages: list[dict[str, str]], *, temperature: float,
@@ -263,7 +298,9 @@ def _run_chat(call: _Caller, payload: dict[str, Any]) -> dict[str, Any]:
         return {"json": _loads(fixed), "text": fixed}
     except ValueError as exc:
         raise CapabilityError(
-            CapErrorCode.BAD_RESPONSE, f"两轮均未取得合法 JSON: {exc}"
+            CapErrorCode.BAD_RESPONSE, f"两轮均未取得合法 JSON: {exc}",
+            # 已经带着坏输出让模型重写过一轮了，外层再重试意义不大
+            retryable=False,
         ) from exc
 
 
@@ -311,6 +348,7 @@ def _run_translate(call: _Caller, payload: dict[str, Any]) -> dict[str, Any]:
                 CapErrorCode.BAD_RESPONSE,
                 f"上游两轮后仍缺 {len(still)} 段译文（契约 §4.2 要求 id 一一对应）："
                 + "、".join(still[:5]),
+                retryable=False,
             )
     return {"segments": [{"id": str(s.get("id")), "text": out[str(s.get("id"))]}
                          for s in segments]}

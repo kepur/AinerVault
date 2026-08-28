@@ -176,3 +176,74 @@ class TestStrategyBrief:
     def test_target_display_interpolated(self):
         out = strategy_brief(DeviceStrategy.substitute, "摄政英国")
         assert "摄政英国" in out
+
+
+# ── 同步调用的传输重试 ────────────────────────────────────────────────────────
+
+import httpx
+
+from app.capability.dialects import _Caller
+from app.capability.errors import CapErrorCode, CapabilityError
+
+
+class _FlakyTransport:
+    """前 n 次抛传输错误，之后正常返回。"""
+
+    def __init__(self, fail_times: int, exc=None):
+        self.fail_times = fail_times
+        self.calls = 0
+        self.exc = exc or httpx.ReadError("peer closed connection")
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise self.exc
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"},
+                                    "finish_reason": "stop"}],
+                       "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+            request=httpx.Request("POST", url),
+        )
+
+
+class TestTransportRetry:
+    """跑一本书是上百次调用，网络抖一下就让整步失败太脆 ——
+    而失败的那一步可能已经烧了三分钟。
+    """
+
+    def _caller(self, transport):
+        return _Caller(transport, "http://x", {}, "m", 5)
+
+    def test_recovers_after_transient_failures(self, monkeypatch):
+        monkeypatch.setattr("app.capability.dialects.time.sleep", lambda _s: None)
+        t = _FlakyTransport(fail_times=2)
+        out = self._caller(t)([{"role": "user", "content": "hi"}],
+                              temperature=0, max_tokens=16, json_mode=False)
+        assert out == "ok"
+        assert t.calls == 3
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        monkeypatch.setattr("app.capability.dialects.time.sleep", lambda _s: None)
+        t = _FlakyTransport(fail_times=99)
+        with pytest.raises(CapabilityError) as ei:
+            self._caller(t)([{"role": "user", "content": "hi"}],
+                            temperature=0, max_tokens=16, json_mode=False)
+        assert ei.value.code == CapErrorCode.TRANSPORT_ERROR
+        assert t.calls == 3          # 不该无限重试
+
+    def test_does_not_retry_client_errors(self, monkeypatch):
+        """4xx 重试多少次都是一样的结果，只是白烧配额。"""
+        monkeypatch.setattr("app.capability.dialects.time.sleep", lambda _s: None)
+
+        class _Bad:
+            calls = 0
+
+            def post(self, url, json=None, headers=None, timeout=None):
+                _Bad.calls += 1
+                return httpx.Response(400, json={"error": {"message": "bad"}},
+                                      request=httpx.Request("POST", url))
+
+        with pytest.raises(CapabilityError):
+            self._caller(_Bad())([{"role": "user", "content": "hi"}],
+                                 temperature=0, max_tokens=16, json_mode=False)
+        assert _Bad.calls == 1
