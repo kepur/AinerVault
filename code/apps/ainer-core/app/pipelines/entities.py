@@ -23,6 +23,7 @@ from app.models import (
     Chapter, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.pipelines.base import PipelineError, chat_json
+from app.worldview import appellation_rules as ar
 from app.worldview.naming import cn_surname, infer_family_key
 
 log = logging.getLogger(__name__)
@@ -222,6 +223,8 @@ class ExtractResult:
     by_name_type: dict[str, int] = field(default_factory=dict)
     #: 归并进已有实体的（跨章的另一种叫法）
     merged: list[dict] = field(default_factory=list)
+    #: 规则推翻模型判断的记录。这一栏为空说明模型与规则一致
+    rule_corrections: list[dict] = field(default_factory=list)
     #: 被判为泛指、未建实体的（「那个人」「一把剑」）
     dropped_generic: list[str] = field(default_factory=list)
 
@@ -233,6 +236,7 @@ class ExtractResult:
             "by_kind": self.by_kind,
             "names": self.names, "families": self.families,
             "by_name_type": self.by_name_type, "merged": self.merged,
+            "rule_corrections": self.rule_corrections,
             "dropped_generic": self.dropped_generic,
         }
 
@@ -341,7 +345,8 @@ def extract_entities(
     data, _task = chat_json(
         db,
         [
-            {"role": "system", "content": EXTRACT_SYSTEM},
+            {"role": "system",
+             "content": f"{EXTRACT_SYSTEM}\n\n{ar.brief_for_prompt()}"},
             {"role": "user", "content": f"【原文】\n{text}{hint}"},
         ],
         EXTRACT_SCHEMA,
@@ -375,6 +380,18 @@ def extract_entities(
             name_type = NameType(item.get("name_type") or "proper")
         except ValueError:
             name_type = NameType.proper
+
+        # 规则复核。硬规则（构词法上几乎没有反例的）直接推翻模型 ——
+        # 让模型判「老周是专名还是名号」，换个模型就可能换个答案，
+        # 而管线的正确率不该随模型漂移。规则错了改一行代码，
+        # 模型错了只能重跑并祈祷。
+        verdict = ar.classify(name, kind)
+        if verdict is not None and verdict.decisive and verdict.name_type is not name_type:
+            result.rule_corrections.append({
+                "name": name, "model_said": name_type.value,
+                "rule_says": verdict.name_type.value, "why": verdict.reason,
+            })
+            name_type = verdict.name_type
         # 泛指不是实体。收进来只会占位置，然后拿到一个不存在的名字
         if name_type is NameType.generic:
             result.dropped_generic.append(name)
