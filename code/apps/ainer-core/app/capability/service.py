@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.capability.client import CapabilityClient, canonical_idempotency_key
@@ -82,7 +83,9 @@ def submit_task(
     route = route or resolve_one(db, cap, purpose)
 
     merged = {**route.default_params, **payload}
-    idem = canonical_idempotency_key(cap.value, merged)
+    idem = canonical_idempotency_key(
+        cap.value, merged, endpoint_id=route.endpoint.id, model=route.model
+    )
 
     existing = db.execute(
         select(GenTask).where(GenTask.idempotency_key == idem)
@@ -116,7 +119,23 @@ def submit_task(
     task.estimated_ms = route.estimated_ms()
     if existing is None:
         db.add(task)
-    db.flush()
+        try:
+            with db.begin_nested():
+                db.flush()
+        except IntegrityError:
+            # 幂等键唯一约束撞车：另一个请求在我们查完 existing 之后插了同一把键。
+            # 后台连点两次、或前一次请求还在跑就重发，都会走到这里。
+            # 这不是错误 —— 幂等的语义本就是「让后来者拿到同一个任务」。
+            db.expunge(task)
+            raced = db.execute(
+                select(GenTask).where(GenTask.idempotency_key == idem)
+            ).scalars().first()
+            if raced is None:
+                raise
+            log.info("幂等键并发撞车，复用已有任务 %s", raced.id)
+            return raced
+    else:
+        db.flush()
 
     options = TaskOptions(
         callback_url=f"{settings.public_base_url}/api/v2/gen-tasks/callback",
@@ -313,7 +332,10 @@ def poll_task(db: Session, task: GenTask) -> GenTask:
     if ep is None:
         return task
 
-    with CapabilityClient(ep.base_url, auth=ep.auth_json or {}, timeout_sec=ep.timeout_sec) as c:
+    with CapabilityClient(
+        ep.base_url, auth=ep.auth_json or {}, timeout_sec=ep.timeout_sec,
+        dialect=ep.dialect or "capability",
+    ) as c:
         try:
             result = c.get_task(task.provider_task_id)
         except CapabilityError as exc:

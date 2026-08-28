@@ -231,6 +231,12 @@ async function run(btn, fn, label) {
   finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
 }
 
+const REGISTER_CN = {
+  formal_full: "全名", formal_title: "头衔式", respectful: "敬称",
+  intimate: "亲昵", diminutive: "小名", kinship: "关系代称",
+  epithet: "名号", derogatory: "轻蔑", pronoun_like: "指代",
+};
+
 // ───────────────────────── 设置 ─────────────────────────
 const Settings = {
   async render(v) {
@@ -245,15 +251,21 @@ const Settings = {
       <div class="card">
         <h2>能力中间层</h2>
         <p class="hint">Core 只认能力，不认厂商。把你的网关地址填在这里，
-          换厂商时改这一处即可，Core 与后台零改动。</p>
+          换厂商时改这一处即可，Core 与后台零改动。<br>
+          <b>方言</b>决定 Core 怎么跟它说话：「能力契约」是本项目那套异步全能力协议；
+          「OpenAI 兼容」直连 <code>/chat/completions</code>，仅文本、同步，
+          中间层还没搭好时先用它跑翻译链。密钥只显示掩码，
+          编辑时留着掩码不动即表示不修改。</p>
         <div class="tblwrap" style="margin-bottom:12px">
           <table><thead><tr>
-            <th>名称</th><th>地址</th><th>鉴权</th><th>能力</th><th>状态</th><th></th>
+            <th>名称</th><th>地址</th><th>方言</th><th>密钥</th><th>能力</th><th>状态</th><th></th>
           </tr></thead><tbody>${
             eps.length ? eps.map(e => `<tr>
               <td><b>${h(e.name)}</b></td>
               <td class="mono">${h(e.base_url)}</td>
-              <td class="mono">${h(e.auth_mode)}</td>
+              <td><span class="tag ${e.dialect==="openai"?"t-warn":"t-ok"}">${
+                e.dialect==="openai"?"OpenAI 兼容":"能力契约"}</span></td>
+              <td class="mono" style="color:var(--muted)">${h(e.auth_preview||e.auth_mode)}</td>
               <td>${e.capabilities_count || 0}</td>
               <td>${e.health ? (e.health.ok
                     ? `<span class="tag t-ok">正常 v${h(e.health.version||"?")}</span>`
@@ -264,7 +276,7 @@ const Settings = {
                 <button class="btn sm" onclick="Settings.sync('${e.id}',this)">拉能力</button>
                 <button class="btn sm danger" onclick="Settings.del('${e.id}',this)">删除</button>
               </td></tr>`).join("")
-            : `<tr><td colspan="6" class="empty">还没有配置端点</td></tr>`
+            : `<tr><td colspan="7" class="empty">还没有配置端点</td></tr>`
           }</tbody></table>
         </div>
 
@@ -275,6 +287,11 @@ const Settings = {
             <div><label>名称</label><input id="ep-name" placeholder="prod"></div>
             <div><label>Base URL</label>
               <input id="ep-url" placeholder="https://your-gateway/cap/v1"></div>
+            <div><label>方言</label>
+              <select id="ep-dialect">
+                <option value="capability">能力契约（中间层，全能力、异步）</option>
+                <option value="openai">OpenAI 兼容（仅文本、同步）</option>
+              </select></div>
             <div><label>鉴权方式</label>
               <select id="ep-mode">
                 <option value="bearer">Bearer Token</option>
@@ -358,7 +375,9 @@ const Settings = {
     if (mode !== "none") auth.token = token;
     if (mode === "header") auth.header_name = $("#ep-header").value.trim() || "X-API-Key";
     await run(btn, async () => {
-      const ep = await api("POST", "/settings/endpoints", {name, base_url: url, auth});
+      const dialect = ($("#ep-dialect")||{}).value || "capability";
+      const ep = await api("POST", "/settings/endpoints",
+                           {name, base_url: url, auth, dialect});
       logOk(`端点 ${name} 已添加`);
       const t = await api("POST", `/settings/endpoints/${ep.id}:test`);
       t.ok ? logOk(`探活成功，契约 v${t.version}`) : logErr(`探活失败：${JSON.stringify(t.error)}`);
@@ -563,13 +582,14 @@ const World = {
       State.save();
     }
     const tf = transforms.find(t=>t.id===State.transformId);
-    let cov = null, lex = [], names = [], tpls = [];
+    let cov = null, lex = [], names = [], tpls = [], aps = null;
     if (tf) {
-      [cov, lex, names, tpls] = await Promise.all([
+      [cov, lex, names, tpls, aps] = await Promise.all([
         api("GET", `/transforms/${tf.id}/coverage`).catch(()=>null),
         api("GET", `/transforms/${tf.id}/lexicon`).catch(()=>[]),
         api("GET", `/transforms/${tf.id}/names`).catch(()=>[]),
         api("GET", "/lexicon-templates").catch(()=>[]),
+        api("GET", `/transforms/${tf.id}/appellations`).catch(()=>null),
       ]);
     } else {
       tpls = await api("GET", "/lexicon-templates").catch(()=>[]);
@@ -666,6 +686,44 @@ const World = {
           </tr>`).join("")
           : `<tr><td colspan="6" class="empty">还没有人名映射</td></tr>`}
         </tbody></table></div>
+      </div>
+
+      <div class="card">
+        <h2>称呼变体
+          <span class="sub mono" style="color:var(--muted)">${aps?aps.total:0} 条</span>
+          ${aps&&aps.needs_review?`<span class="tag t-warn">${aps.needs_review} 待确认</span>`:""}
+          ${aps&&aps.unmapped?`<span class="tag t-mute">${aps.unmapped} 未定形</span>`:""}
+        </h2>
+        <p class="hint">同一个人在不同人嘴里叫什么。师父叫「小天」是亲昵，
+          仇家叫「姓李的」是轻蔑 —— 中文这里承载的是关系不是名字。
+          全部译成全名，句子照样通顺，但读者感觉不到亲疏，
+          这类丢失不报错、只会让书变淡。译名生成时一并定形。</p>
+        <div class="tblwrap"><table><thead><tr>
+          <th>人物</th><th>原文称呼</th><th>语域</th><th>谁这么叫</th>
+          <th>目标称呼</th><th>次数</th><th></th>
+        </tr></thead><tbody>${
+          aps && aps.items.length ? aps.items.map(a=>`<tr>
+            <td><b>${h(a.entity_name)}</b>
+              <div class="sub mono" style="color:var(--muted);font-size:11px">
+                ${h(a.base_target_name||"")}</div></td>
+            <td>${h(a.source_surface)}</td>
+            <td><span class="tag t-mute">${h(REGISTER_CN[a.register]||a.register)}</span></td>
+            <td class="mono" style="color:var(--muted)">${h(a.speaker_hint||"—")}</td>
+            <td>
+              <input value="${h(a.target_surface||"")}" id="ap-${a.id}"
+                     placeholder="未定形" style="min-width:150px">
+              ${a.risk_note?`<div class="sub" style="color:var(--warn);font-size:11px;margin-top:3px">
+                 ⚠ ${h(a.risk_note)}</div>`:""}
+              ${a.relation_note?`<div class="sub" style="color:var(--muted);font-size:11px">
+                 ${h(a.relation_note)}</div>`:""}
+            </td>
+            <td class="mono">${a.occurrences||0}</td>
+            <td>${a.locked
+              ? `<span class="tag t-ok">已锁定</span>`
+              : `<button class="btn sm" onclick="World.saveAppellation('${a.id}',this)">定稿</button>`}</td>
+          </tr>`).join("")
+          : `<tr><td colspan="7" class="empty">还没有称呼变体。抽取实体时自动采集</td></tr>`}
+        </tbody></table></div>
       </div>` : ""}
       <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
     `;
@@ -738,6 +796,15 @@ const World = {
         logWarn(`  ${x.entity}：「${x.proposed}」被拒（${x.reason}），改用「${x.used_alternative||x.fallback}」`));
       App.refresh();
     }, "生成中");
+  },
+  async saveAppellation(id, btn) {
+    const el = $(`#ap-${id}`);
+    const v = (el ? el.value : "").trim();
+    if (!v) return logErr("目标称呼不能为空");
+    await run(btn, async () => {
+      await api("PATCH", `/appellations/${id}`, {target_surface: v, locked: true});
+      logOk(`称呼已定稿：${v}`); App.refresh();
+    }, "保存");
   },
   async lockName(id, btn) {
     await run(btn, async () => {

@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.ids import new_id
@@ -44,6 +44,28 @@ EXTRACT_SCHEMA: dict[str, Any] = {
                         "enum": ["character", "location", "prop", "faction"],
                     },
                     "aliases": {"type": "array", "items": {"type": "string"}},
+                    # 称呼变体：谁这么叫、属于哪种语域。
+                    # 只收字面会把「小天」和全名压成一个词，关系信息当场丢掉。
+                    "appellations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["surface", "register"],
+                            "properties": {
+                                "surface": {"type": "string"},
+                                "register": {
+                                    "type": "string",
+                                    "enum": [
+                                        "formal_full", "formal_title", "respectful",
+                                        "intimate", "diminutive", "kinship",
+                                        "epithet", "derogatory", "pronoun_like",
+                                    ],
+                                },
+                                "speaker": {"type": "string"},
+                                "evidence": {"type": "string"},
+                            },
+                        },
+                    },
                     "summary": {"type": "string"},
                     "family_hint": {"type": "string"},
                     "importance": {"type": "integer"},
@@ -114,6 +136,15 @@ style_hints — 风格提示
 2. aliases 收全同一实体的其他叫法：小名、尊称、绰号、单用的名。
    「李清照 / 易安居士 / 清照 / 李娘子」是同一人，必须并成一条。
    别名收不全，后续占位符就替不干净，人名会漏译成原文。
+2b. appellations 逐条登记每个称呼**是谁在叫、属于哪种语域**。
+   中文里「小天」承载的不是名字是关系 —— 师父叫「小天」是亲昵，
+   仇家叫「姓李的」是轻蔑，朝堂上「李大人」是距离。
+   全归成一个名字，译文就只剩信息、没有关系，读者会觉得淡而说不出哪淡。
+   语域：formal_full 全名／formal_title 头衔式／respectful 敬称／
+   intimate 亲昵／diminutive 小名／kinship 以关系代名（师兄、三弟）／
+   epithet 名号绰号／derogatory 轻蔑／pronoun_like 指代性称呼。
+   同一个字面在不同人嘴里语域不同时，拆成多条，用 speaker 区分。
+   speaker 填原文里的称呼者，判断不出就留空。
 3. 人物必须填 appearance（原文里的外貌描写）与 voice_hints
    （语气、语速、口头禅）—— 前者是画面的输入，后者是配音的输入。
    原文没写就留空，不要编。
@@ -131,6 +162,7 @@ class ExtractResult:
     total: int = 0
     beats: int = 0
     style_hints: int = 0
+    appellations: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
     names: list[str] = field(default_factory=list)
     families: dict[str, list[str]] = field(default_factory=dict)
@@ -139,6 +171,7 @@ class ExtractResult:
         return {
             "created": self.created, "updated": self.updated, "total": self.total,
             "beats": self.beats, "style_hints": self.style_hints,
+            "appellations": self.appellations,
             "by_kind": self.by_kind,
             "names": self.names, "families": self.families,
         }
@@ -209,6 +242,7 @@ def extract_entities(
     }
 
     result = ExtractResult()
+    pending_appellations: list[tuple[str, list[dict]]] = []
     for item in data.get("entities") or []:
         name = str(item.get("display_name") or "").strip()
         if not name:
@@ -247,6 +281,12 @@ def extract_entities(
                 str(e).strip() for e in (item.get("evidence") or []) if str(e).strip()
             ][:3] or None,
         }
+
+        appellations = [
+            a for a in (item.get("appellations") or []) if isinstance(a, dict)
+        ]
+        if appellations:
+            pending_appellations.append((key, appellations))
 
         row = existing.get(key)
         if row is not None:
@@ -290,6 +330,8 @@ def extract_entities(
         result.names.append(name)
         result.by_kind[kind.value] = result.by_kind.get(kind.value, 0) + 1
 
+    db.flush()  # 新建实体先拿到 id，称呼才挂得上
+    result.appellations = _save_appellations(db, chapter, existing, pending_appellations)
     result.beats = _save_beats(db, chapter, data.get("beats") or [])
     result.style_hints = _save_style_hints(db, chapter, data.get("style_hints") or [])
     db.flush()
@@ -304,6 +346,69 @@ def extract_entities(
         if e.family_key:
             result.families.setdefault(e.family_key, []).append(e.display_name)
     return result
+
+
+def _save_appellations(
+    db: Session, chapter: Chapter, by_key: dict[str, WorldEntity],
+    pending: list[tuple[str, list[dict]]],
+) -> int:
+    """登记称呼变体。按 (实体, 字面) 累积，跨章合并出现次数与证据。
+
+    不覆盖已定的 target_surface —— 那是命名阶段与人工审核的产物，
+    重跑抽取不该把定好的称呼冲掉。
+    """
+    from app.models import EntityAppellation, Register
+
+    if not pending:
+        return 0
+    touched = 0
+    for key, items in pending:
+        entity = by_key.get(key)
+        if entity is None:
+            continue
+        rows = {
+            r.source_surface: r
+            for r in db.execute(
+                select(EntityAppellation).where(
+                    EntityAppellation.entity_id == entity.id,
+                    EntityAppellation.transform_id.is_(None),
+                )
+            ).scalars()
+        }
+        for item in items:
+            surface = str(item.get("surface") or "").strip()
+            if not surface:
+                continue
+            try:
+                register = Register(item.get("register") or "formal_full")
+            except ValueError:
+                register = Register.formal_full
+            speaker = (str(item.get("speaker") or "").strip() or None)
+            quote = str(item.get("evidence") or "").strip()
+            row = rows.get(surface)
+            if row is None:
+                row = EntityAppellation(
+                    id=new_id("ap"), entity_id=entity.id, source_surface=surface,
+                    register=register, speaker_hint=speaker, occurrences=1,
+                    evidence_json=[{"chapter_id": chapter.id, "quote": quote}] if quote else None,
+                )
+                db.add(row)
+                rows[surface] = row
+                touched += 1
+                continue
+            if row.locked:
+                continue
+            row.occurrences = (row.occurrences or 0) + 1
+            if speaker and not row.speaker_hint:
+                row.speaker_hint = speaker
+            if quote:
+                ev = list(row.evidence_json or [])
+                if not any(e.get("chapter_id") == chapter.id for e in ev):
+                    ev.append({"chapter_id": chapter.id, "quote": quote})
+                    row.evidence_json = ev[:5]
+            touched += 1
+    db.flush()
+    return touched
 
 
 def _save_beats(db: Session, chapter: Chapter, items: list[dict]) -> int:
@@ -380,9 +485,15 @@ def placeholder_map(
       · 占位符 token 稳定，与 entity id 绑定
       · 锁定语言缺译名时硬失败，不静默降级成原文
 
+    第五点是 v1 没有的：**称呼变体各占一个占位符**。
+    定了目标形式的称呼拿 {{CHAR:xxx/ap}}，还原成「Tom」而不是「Thomas Ashford」。
+    否则师父嘴里的「小天」和叙述里的全名会还原成同一个词，
+    亲昵感在替换那一步就没了 —— 后面再怎么改编也救不回来。
+    没定目标形式的称呼仍回落到本名，宁可正式，不能漏译成原文。
+
     返回 (替换表, 还原表, 缺译名的实体名)。
     """
-    from app.models import EntityWorldName
+    from app.models import EntityAppellation, EntityWorldName
 
     kind_prefix = {
         EntityKind.character: "CHAR", EntityKind.location: "LOC",
@@ -401,6 +512,19 @@ def placeholder_map(
             select(EntityWorldName).where(EntityWorldName.transform_id == transform_id)
         ).scalars()
     }
+    # 称呼取本映射下已定形的，回落到未绑定映射的登记条目
+    appellations: dict[str, list[EntityAppellation]] = {}
+    for a in db.execute(
+        select(EntityAppellation).where(
+            # SQL 里 NULL 不等于任何值，IN (x, NULL) 永远匹配不到未绑定的行。
+            # 写成 in_([id, None]) 读着对，跑起来是静默返回空。
+            or_(
+                EntityAppellation.transform_id == transform_id,
+                EntityAppellation.transform_id.is_(None),
+            )
+        ).order_by(EntityAppellation.transform_id.is_(None))
+    ).scalars():
+        appellations.setdefault(a.entity_id, []).append(a)
 
     source_to_ph: list[tuple[str, str]] = []
     ph_to_target: dict[str, str] = {}
@@ -417,9 +541,24 @@ def placeholder_map(
         # LLM 有时会改写占位符内部 token，多留几个还原键兜底
         for variant in _mutation_variants(prefix, mapped.target_name):
             ph_to_target.setdefault(variant, mapped.target_name)
+        # 先放定形的称呼变体。同一字面只认第一条（已按「本映射优先」排过序）。
+        claimed: set[str] = set()
+        for idx, ap in enumerate(appellations.get(e.id, [])):
+            surface = str(ap.source_surface or "").strip()
+            if not surface or surface in claimed:
+                continue
+            claimed.add(surface)
+            if not ap.target_surface:
+                continue  # 未定形，留给下面按本名兜底
+            ap_ph = f"{{{{{prefix}:{e.id[-10:].lower()}/a{idx}}}}}"
+            ph_to_target[ap_ph] = ap.target_surface
+            for variant in _mutation_variants(f"{prefix}", ap.target_surface):
+                ph_to_target.setdefault(variant, ap.target_surface)
+            source_to_ph.append((surface, ap_ph))
+
         for surface in [e.display_name, *(e.aliases_json or [])]:
             surface = str(surface or "").strip()
-            if surface:
+            if surface and surface not in claimed:
                 source_to_ph.append((surface, ph))
 
     source_to_ph.sort(key=lambda kv: len(kv[0]), reverse=True)

@@ -10,10 +10,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.ids import new_id
@@ -49,6 +50,18 @@ NAME_SCHEMA: dict[str, Any] = {
                                 "target_name": {"type": "string"},
                                 "target_reading": {"type": "string"},
                                 "rationale": {"type": "string"},
+                                "appellations": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["source_surface", "target_surface"],
+                                        "properties": {
+                                            "source_surface": {"type": "string"},
+                                            "target_surface": {"type": "string"},
+                                            "relation_note": {"type": "string"},
+                                        },
+                                    },
+                                },
                                 "alternatives": {
                                     "type": "array",
                                     "items": {
@@ -83,8 +96,50 @@ NAME_SYSTEM = """你是跨文化影视本地化的命名顾问，专长是【文
    书香门第与市井混混的名字风格必须不同。
 4. 【时代匹配】名字要属于目标世界观的年代。昭和日本不能用平成才流行的名字，
    中世纪欧洲不能用现代教名。
-5. 每人给 2–3 个备选（alternatives），各有侧重。
-6. rationale 说明为什么这个名字在目标文化里等效，不要泛泛而谈。"""
+5. 【称呼同源】成员若带 appellations 清单，必须逐条给出目标形式。
+   这些不是另一个名字，是同一个人的不同叫法，**必须与 target_name 同源**：
+   Thomas → Tom / Tommy / Master Ashford，绝不能冒出个 Jack —— 那就成两个人了。
+   给的是目标文化里承担同样社交功能的形式，按每条标注的语域来定：
+     formal_full 全名　formal_title 头衔+姓，有距离
+     respectful 敬而不远　intimate 亲昵短形，只有亲近的人这样叫
+     diminutive 昵称小形，带幼时残留　kinship 以关系代名，不用本名
+     epithet 名号绰号，按目标文化的名号习惯重铸、不音译
+     derogatory 要能读出敌意　pronoun_like 指代性称呼，不点名
+   中文的「小天」承载的是关系不是信息。全部译成全名，
+   译文照样通顺，但读者感觉不到亲疏 —— 这种丢失不报错，只会让书变淡。
+   relation_note 一句话说明它与本名的关系，供人工审核一眼判断是否同源。
+6. 每人给 2–3 个备选（alternatives），各有侧重。
+7. rationale 说明为什么这个名字在目标文化里等效，不要泛泛而谈。"""
+
+
+def _pending_appellations(
+    db: Session, transform: WorldTransform, entity_ids: list[str],
+) -> dict[str, list[dict]]:
+    """取还没定目标形式的称呼，连语域说明一起交给模型。
+
+    已定形且锁定的不再送 —— 人工定过的称呼不能被重跑改掉。
+    """
+    from app.models import REGISTER_BRIEF, EntityAppellation
+
+    if not entity_ids:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for a in db.execute(
+        select(EntityAppellation).where(
+            EntityAppellation.entity_id.in_(entity_ids),
+            EntityAppellation.locked.is_(False),
+        )
+    ).scalars():
+        if a.transform_id not in (None, transform.id):
+            continue
+        out.setdefault(a.entity_id, []).append({
+            "source_surface": a.source_surface,
+            "register": a.register.value,
+            "register_brief": REGISTER_BRIEF.get(a.register, ""),
+            "speaker": a.speaker_hint or "",
+            "occurrences": a.occurrences,
+        })
+    return out
 
 
 @dataclass
@@ -92,6 +147,7 @@ class NamingResult:
     created: int = 0
     updated: int = 0
     skipped_locked: int = 0
+    appellations: int = 0
     rejected: list[dict] = field(default_factory=list)
     families: dict[str, str] = field(default_factory=dict)
 
@@ -99,6 +155,7 @@ class NamingResult:
         return {
             "created": self.created, "updated": self.updated,
             "skipped_locked": self.skipped_locked,
+            "appellations": self.appellations,
             "rejected": self.rejected, "families": self.families,
         }
 
@@ -149,6 +206,7 @@ def suggest_names(
     for e in pending:
         groups.setdefault(e.family_key or f"solo:{e.id}", []).append(e)
 
+    aps = _pending_appellations(db, transform, [e.id for e in pending])
     payload = [
         {
             "family_key": key,
@@ -159,6 +217,7 @@ def suggest_names(
                     "kind": e.kind.value,
                     "aliases": e.aliases_json or [],
                     "summary": e.summary or "",
+                    **({"appellations": aps[e.id]} if aps.get(e.id) else {}),
                 }
                 for e in members
             ],
@@ -168,6 +227,45 @@ def suggest_names(
 
     lang_cfg = tgt.language_json or {}
     axes = tgt.axes_json or {}
+    pattern = str(lang_cfg.get("name_pattern") or "family_given")
+    by_id = {e.id: e for e in pending}
+
+    # 分批：一次一族、累计成员到上限即发。
+    # 整本书一次性塞进去必然撞 max_tokens —— 每人还要带备选与称呼，
+    # 输出量是输入的好几倍，60 个实体一次调用一定被截断。
+    # 家族不能拆：整族一起才谈得上共姓，那是这个 pipeline 存在的理由。
+    batches: list[list[dict]] = []
+    cur: list[dict] = []
+    cur_n = 0
+    for group in payload:
+        n = len(group["members"])
+        if cur and cur_n + n > _NAMING_BATCH_MEMBERS:
+            batches.append(cur)
+            cur, cur_n = [], 0
+        cur.append(group)
+        cur_n += n
+    if cur:
+        batches.append(cur)
+
+    for batch in batches:
+        _name_one_batch(
+            db, transform, src, tgt, lang_cfg, axes, batch,
+            by_id, existing, pattern, result,
+        )
+    db.flush()
+    return result
+
+
+#: 单次命名调用的成员数上限。输出含备选与称呼，比输入长几倍。
+_NAMING_BATCH_MEMBERS = 8
+
+
+def _name_one_batch(
+    db: Session, transform: WorldTransform, src: WorldProfile, tgt: WorldProfile,
+    lang_cfg: dict, axes: dict, payload: list[dict],
+    by_id: dict[str, WorldEntity], existing: dict[str, EntityWorldName],
+    pattern: str, result: NamingResult,
+) -> None:
     data, _task = chat_json(
         db,
         [
@@ -189,13 +287,11 @@ def suggest_names(
         ],
         NAME_SCHEMA,
         purpose="naming",
+        max_tokens=16384,
         novel_id=transform.novel_id,
         ref_kind="naming",
         ref_id=transform.id,
     )
-
-    pattern = str(lang_cfg.get("name_pattern") or "family_given")
-    by_id = {e.id: e for e in pending}
 
     for group in data.get("groups") or []:
         family_key = str(group.get("family_key") or "")
@@ -275,8 +371,95 @@ def suggest_names(
                 row.status = ReviewStatus.candidate
                 result.updated += 1
 
-    db.flush()
-    return result
+            result.appellations += _apply_appellations(
+                db, transform, entity, target_name, member.get("appellations") or []
+            )
+
+
+def _apply_appellations(
+    db: Session, transform: WorldTransform, entity: WorldEntity,
+    base_name: str, items: list[dict],
+) -> int:
+    """把称呼的目标形式落到本映射下。
+
+    这里**不做**字面同源校验。英语的昵称与本名常常没有共同词根 ——
+    John→Jack、Edward→Ned、Margaret→Peggy 都是标准形式，
+    按前缀比对会把它们全判成「另一个人」，同时又拦不住真正的乱配。
+    字面判不了，只能靠文化知识判，那就不是正则的活。
+
+    所以策略是标记而非拦截：字面无关联的记一条 risk_note，
+    留给二次审核（模型判 + 人工过目）。宁可多看一眼，不可误杀。
+    kinship / pronoun_like / epithet 天然不含本名（brother、那位公子、
+    北地剑客），连标记都不需要。
+    """
+    from app.models import EntityAppellation, Register
+
+    if not items:
+        return 0
+    rows = {
+        r.source_surface: r
+        for r in db.execute(
+            select(EntityAppellation).where(
+                EntityAppellation.entity_id == entity.id,
+                or_(
+                    EntityAppellation.transform_id == transform.id,
+                    EntityAppellation.transform_id.is_(None),
+                ),
+            )
+        ).scalars()
+    }
+    roots = {t.lower() for t in re.findall(r"[A-Za-z]{3,}", base_name)}
+    free = {Register.kinship, Register.pronoun_like, Register.epithet}
+    n = 0
+    for item in items:
+        surface = str(item.get("source_surface") or "").strip()
+        target = str(item.get("target_surface") or "").strip()
+        row = rows.get(surface)
+        if not surface or not target or row is None or row.locked:
+            continue
+        risk = None
+        if row.register not in free and roots and not _shares_root(target, roots):
+            risk = (
+                f"「{target}」与本名「{base_name}」无字面关联。"
+                f"若是目标语言里的标准昵称形式（如 John→Jack）属正常，"
+                f"若是另起的名字则会被读者当成另一个角色 —— 请确认。"
+            )
+        if row.transform_id is None:
+            # 未绑定的登记条目留作跨映射的源，本映射另存一条
+            row = EntityAppellation(
+                id=new_id("ap"), entity_id=entity.id, transform_id=transform.id,
+                source_surface=surface, register=row.register,
+                speaker_hint=row.speaker_hint, occurrences=row.occurrences,
+                evidence_json=row.evidence_json,
+            )
+            db.add(row)
+        row.target_surface = target
+        row.relation_note = str(item.get("relation_note") or "") or None
+        row.risk_note = risk
+        row.status = ReviewStatus.candidate
+        n += 1
+    return n
+
+
+def _shares_root(target: str, roots: set[str]) -> bool:
+    """目标称呼与本名是否有字面关联（共同前缀 ≥3 字，或整词包含）。
+
+    只用于决定要不要提请人工看一眼，**不用于拒绝**。
+    Master Ashford 含 Ashford → 有关联；Tom 与 Thomas 无共同前缀 → 没关联，
+    但那是正确的昵称 —— 所以这个函数返回 False 只意味着「值得确认」。
+    """
+    for token in re.findall(r"[A-Za-z]{2,}", target.lower()):
+        for root in roots:
+            if token == root or token in root or root in token:
+                return True
+            common = 0
+            for a, b in zip(token, root):
+                if a != b:
+                    break
+                common += 1
+            if common >= 3:
+                return True
+    return False
 
 
 def _dump(payload: list[dict]) -> str:

@@ -4,6 +4,7 @@ from app.models.asset_pack import (
     AssetKindSpec, AssetOrigin, AssetSpec, AssetVariant, DirectorProfile,
     ShotAssetBinding,
 )
+from app.models.appellation import EntityAppellation, REGISTER_BRIEF, Register
 from app.models.content import Chapter, Novel, SourceFormat
 from app.models.entity import EntityChapterState, EntityKind, WorldEntity
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
@@ -36,6 +37,7 @@ from app.models.world import (
 
 __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
+    "EntityAppellation", "Register", "REGISTER_BRIEF",
     "Novel", "Chapter", "SourceFormat",
     "AssetSpec", "AssetVariant", "ShotAssetBinding", "DirectorProfile",
     "AssetKindSpec", "AssetOrigin",

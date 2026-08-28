@@ -13,6 +13,9 @@ from typing import Any
 
 import httpx
 
+from app.capability.dialects import (
+    DIALECT_OPENAI, openai_catalog, openai_health, openai_invoke,
+)
 from app.capability.errors import CapabilityError, CapErrorCode
 from app.capability.router import ResolvedRoute
 from app.capability.schemas import (
@@ -24,15 +27,23 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 
-def canonical_idempotency_key(capability: str, payload: dict[str, Any]) -> str:
-    """幂等键 = sha256(capability + 规范化 input)。
+def canonical_idempotency_key(
+    capability: str, payload: dict[str, Any], *,
+    endpoint_id: str | None = None, model: str | None = None,
+) -> str:
+    """幂等键 = sha256(capability + 端点 + 模型 + 规范化 input)。
 
     同 key 重复提交必须返回同一 task_id、不重复计费 —— 生成很贵，
     重试/重复点击/任务重放都不能烧两次钱。
+
+    端点与模型必须进 key：不进的话，把路由从 mock 切到真模型、
+    或把 flash 换成 pro，同一段提示词会直接命中旧任务、秒回上一家的答案。
+    换模型的当下是最不该拿到缓存的时刻，而这种命中不报错、只是结果不对。
     """
     blob = json.dumps(
-        {"capability": capability, "input": payload}, sort_keys=True, ensure_ascii=False,
-        separators=(",", ":"),
+        {"capability": capability, "endpoint": endpoint_id, "model": model,
+         "input": payload},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
     )
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -57,11 +68,13 @@ class CapabilityClient:
         *,
         auth: dict[str, Any] | None = None,
         timeout_sec: int = 60,
+        dialect: str = "capability",
         client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.auth = auth or {}
         self.timeout_sec = timeout_sec
+        self.dialect = dialect or "capability"
         self._client = client
         self._owns_client = client is None
 
@@ -86,14 +99,16 @@ class CapabilityClient:
     @classmethod
     def from_route(cls, route: ResolvedRoute, **kw: Any) -> CapabilityClient:
         ep = route.endpoint
-        return cls(ep.base_url, auth=ep.auth_json or {}, timeout_sec=ep.timeout_sec, **kw)
+        return cls(
+            ep.base_url, auth=ep.auth_json or {}, timeout_sec=ep.timeout_sec,
+            dialect=ep.dialect or "capability", **kw,
+        )
 
     # ── 传输 ─────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
-        h = {
-            "Content-Type": "application/json",
-            "X-Capability-Version": CONTRACT_VERSION,
-        }
+        h = {"Content-Type": "application/json"}
+        if self.dialect != DIALECT_OPENAI:
+            h["X-Capability-Version"] = CONTRACT_VERSION
         mode = str(self.auth.get("mode") or "none").lower()
         token = self.auth.get("token")
         if mode == "bearer" and token:
@@ -143,9 +158,13 @@ class CapabilityClient:
 
     # ── Discovery ─────────────────────────────────────────────
     def health(self) -> HealthResult:
+        if self.dialect == DIALECT_OPENAI:
+            return openai_health(self.client, self.base_url, self._headers(), 10)
         return HealthResult.model_validate(self._request("GET", "/health", timeout=10))
 
     def capabilities(self) -> CapabilityCatalog:
+        if self.dialect == DIALECT_OPENAI:
+            return openai_catalog(self.client, self.base_url, self._headers(), 20)
         return CapabilityCatalog.model_validate(self._request("GET", "/capabilities", timeout=20))
 
     def voices(self, *, language: str | None = None, gender: str | None = None) -> list[Voice]:
@@ -182,6 +201,12 @@ class CapabilityClient:
         idempotency_key: str | None = None,
     ) -> TaskAccepted:
         """异步提交。同 idempotency_key 重复提交返回同一 task_id。"""
+        if self.dialect == DIALECT_OPENAI:
+            raise CapabilityError(
+                CapErrorCode.INVALID_REQUEST,
+                "openai 方言没有任务队列，文本能力请走 invoke()（sync=True）；"
+                "图像/音频请指向说 Capability 契约的中间层端点。",
+            )
         req = self._build_request(
             capability, payload, model=model, options=options, idempotency_key=idempotency_key
         )
@@ -214,6 +239,13 @@ class CapabilityClient:
         req = self._build_request(
             cap, payload, model=model, options=options, idempotency_key=idempotency_key
         )
+        if self.dialect == DIALECT_OPENAI:
+            return openai_invoke(
+                self.client, self.base_url, self._headers(),
+                capability=cap, payload=req.input, model=model,
+                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                task_id=req.idempotency_key,
+            )
         data = self._request(
             "POST", "/invoke", json_body=req.model_dump(mode="json"),
             timeout=min(req.options.timeout_ms / 1000, 60),

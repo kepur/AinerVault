@@ -211,7 +211,10 @@ def cancel(task_id: str, db: Session = Depends(get_db)) -> dict:
     if t.provider_task_id and t.endpoint_id:
         ep = db.get(CapabilityEndpoint, t.endpoint_id)
         if ep:
-            with CapabilityClient(ep.base_url, auth=ep.auth_json or {}) as c:
+            with CapabilityClient(
+                ep.base_url, auth=ep.auth_json or {},
+                dialect=ep.dialect or "capability",
+            ) as c:
                 try:
                     c.cancel(t.provider_task_id)
                 except CapabilityError as exc:

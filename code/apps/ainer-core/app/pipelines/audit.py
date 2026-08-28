@@ -18,7 +18,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -130,7 +130,12 @@ def _audit_names(
     db: Session, transform: WorldTransform,
     data: list[tuple[Chapter, ScriptBlock, str]], report: AuditReport,
 ) -> None:
-    """译名漂移：原文出现某实体，译文却没用锁定译名。"""
+    """译名漂移：原文出现某实体，译文却没用锁定译名。
+
+    称呼变体各自对自己的目标形式负责：原文写「小天」时该出现的是 Tom，
+    不是全名 Thomas Ashford。若按本名一把尺子量，正确的亲昵译法反而被判成漂移，
+    而真正的问题（亲昵称呼被拍平成全名）一条都查不出来。
+    """
     rows = db.execute(
         select(EntityWorldName, WorldEntity)
         .join(WorldEntity, WorldEntity.id == EntityWorldName.entity_id)
@@ -140,26 +145,53 @@ def _audit_names(
         report.name_coverage = {"entities": 0, "note": "尚未建立人名映射"}
         return
 
-    surfaces: dict[str, tuple[str, str]] = {}
+    from app.models import EntityAppellation
+
+    #: 字面 → (实体名, 期望译法, 是否为称呼变体)
+    surfaces: dict[str, tuple[str, str, bool]] = {}
     for name_row, entity in rows:
         for s in [entity.display_name, *(entity.aliases_json or [])]:
             s = str(s or "").strip()
             if s:
-                surfaces[s] = (entity.display_name, name_row.target_name)
+                surfaces[s] = (entity.display_name, name_row.target_name, False)
+
+    # 称呼变体覆盖同名字面 —— 它们有更精确的期望值
+    entity_ids = [e.id for _n, e in rows]
+    if entity_ids:
+        by_entity = {e.id: n.target_name for n, e in rows}
+        display = {e.id: e.display_name for _n, e in rows}
+        for a in db.execute(
+            select(EntityAppellation).where(
+                EntityAppellation.entity_id.in_(entity_ids),
+                or_(
+                    EntityAppellation.transform_id == transform.id,
+                    EntityAppellation.transform_id.is_(None),
+                ),
+                EntityAppellation.target_surface.is_not(None),
+            )
+        ).scalars():
+            surface = str(a.source_surface or "").strip()
+            if not surface or a.entity_id not in by_entity:
+                continue
+            surfaces[surface] = (display[a.entity_id], a.target_surface, True)
 
     miss: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"chapters": set(), "samples": [], "expected": "", "hits": 0}
+        lambda: {"chapters": set(), "samples": [], "expected": "", "hits": 0,
+                 "surface": "", "appellation": False}
     )
     total_hits = 0
     for ch, blk, text in data:
-        for surface, (canonical, target) in surfaces.items():
+        for surface, (canonical, target, is_appellation) in surfaces.items():
             if surface not in (blk.source_text or ""):
                 continue
             total_hits += 1
             if contains_token(text, target):
                 continue
-            slot = miss[canonical]
+            key = f"{canonical}／{surface}" if is_appellation else canonical
+            slot = miss[key]
             slot["expected"] = target
+            slot["surface"] = surface
+            slot["appellation"] = is_appellation
             slot["hits"] += 1
             slot["chapters"].add(ch.id)
             if len(slot["samples"]) < 4:
@@ -171,6 +203,19 @@ def _audit_names(
 
     for canonical, slot in miss.items():
         chapters = sorted(slot["chapters"])
+        if slot.get("appellation"):
+            report.findings.append(AuditFinding(
+                kind="appellation_flattened",
+                severity="medium",
+                subject=canonical,
+                detail=(
+                    f"原文用称呼「{slot['surface']}」{slot['hits']} 处，"
+                    f"译文未用对应形式「{slot['expected']}」，涉及 {len(chapters)} 章。"
+                    f"多半被拍平成了全名 —— 信息还在，亲疏关系没了"
+                ),
+                chapters=chapters, samples=slot["samples"],
+            ))
+            continue
         report.findings.append(AuditFinding(
             kind="name_drift",
             severity="high" if len(chapters) > 1 else "medium",

@@ -1,9 +1,11 @@
 """翻译与实体：抽取 → 命名 → 翻译 → 校对。"""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -68,6 +70,109 @@ def extract_entities(
         return ent_pipe.extract_entities(db, c, min_importance=min_importance).as_dict()
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/transforms/{transform_id}/appellations")
+def list_appellations(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """称呼变体对照表：同一个人在不同人嘴里叫什么，译成了什么。
+
+    带 risk_note 的排在最前 —— 那些是模型给的目标形式与本名字面无关联的，
+    可能是标准昵称（John→Jack），也可能是模型另起了个名字。字面判不了，
+    只能人看一眼。
+    """
+    from app.models import EntityAppellation, WorldEntity
+
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    rows = list(db.execute(
+        select(EntityAppellation, WorldEntity)
+        .join(WorldEntity, WorldEntity.id == EntityAppellation.entity_id)
+        .where(
+            WorldEntity.novel_id == t.novel_id,
+            or_(
+                EntityAppellation.transform_id == transform_id,
+                EntityAppellation.transform_id.is_(None),
+            ),
+        )
+        .order_by(EntityAppellation.entity_id, EntityAppellation.occurrences.desc())
+    ))
+    # 一个称呼有两行：抽取时的源登记（transform_id 为空）与本映射下的定形。
+    # 两行都列出来，界面上就是一条称呼显示两遍 —— 定形的那条覆盖登记的。
+    collapsed: dict[tuple[str, str], tuple[Any, Any]] = {}
+    for a, e in rows:
+        key = (a.entity_id, a.source_surface)
+        prev = collapsed.get(key)
+        if prev is None or (prev[0].transform_id is None and a.transform_id is not None):
+            collapsed[key] = (a, e)
+    rows = list(collapsed.values())
+    names = {
+        n.entity_id: n.target_name
+        for n in db.execute(
+            select(EntityWorldName).where(EntityWorldName.transform_id == transform_id)
+        ).scalars()
+    }
+    items = [
+        {
+            "id": a.id, "entity_id": a.entity_id,
+            "entity_name": e.display_name,
+            "base_target_name": names.get(a.entity_id),
+            "source_surface": a.source_surface,
+            "register": a.register.value,
+            "speaker_hint": a.speaker_hint,
+            "target_surface": a.target_surface,
+            "relation_note": a.relation_note,
+            "risk_note": a.risk_note,
+            "occurrences": a.occurrences,
+            "status": a.status.value, "locked": a.locked,
+        }
+        for a, e in rows
+    ]
+    items.sort(key=lambda x: (
+        x["risk_note"] is None, x["target_surface"] is not None, x["entity_name"]
+    ))
+    return {
+        "transform_id": transform_id, "total": len(items),
+        "needs_review": sum(1 for i in items if i["risk_note"]),
+        "unmapped": sum(1 for i in items if not i["target_surface"]),
+        "items": items,
+    }
+
+
+class AppellationIn(BaseModel):
+    # 字段叫 register 会遮蔽 BaseModel 自己的属性，改用 register_value
+    model_config = {"populate_by_name": True}
+
+    target_surface: str | None = None
+    register_value: str | None = Field(default=None, alias="register")
+    locked: bool | None = None
+
+
+@router.patch("/appellations/{appellation_id}")
+def update_appellation(appellation_id: str, body: AppellationIn,
+                       db: Session = Depends(get_db)) -> dict:
+    """人工定稿一条称呼。改过即锁 —— 重跑命名不该把人定的称呼冲掉。"""
+    from app.models import EntityAppellation, Register
+
+    a = db.get(EntityAppellation, appellation_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="appellation not found")
+    if body.target_surface is not None:
+        a.target_surface = body.target_surface.strip() or None
+        a.risk_note = None
+        a.status = ReviewStatus.approved
+    if body.register_value is not None:
+        try:
+            a.register = Register(body.register_value)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"未知语域 {body.register_value}"
+            ) from exc
+    a.locked = True if body.locked is None else body.locked
+    db.flush()
+    return {"id": a.id, "target_surface": a.target_surface,
+            "register": a.register.value, "locked": a.locked,
+            "status": a.status.value}
 
 
 @router.get("/chapters/{chapter_id}/world-model")

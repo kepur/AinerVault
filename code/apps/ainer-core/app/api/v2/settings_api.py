@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.capability.client import CapabilityClient
+from app.capability.dialects import DIALECTS
 from app.capability.errors import CapabilityError
 from app.capability.schemas import Capability, CapabilityCatalog
 from app.db import get_db
@@ -19,12 +20,25 @@ from app.models import CapabilityEndpoint, CapabilityRoute, utcnow
 router = APIRouter(prefix="/api/v2/settings", tags=["settings"])
 
 
+#: 回给前端的密钥掩码。前端原样回传即表示「不改」。
+MASK = "••••••••"
+
+
+def _mask(token: str | None) -> str | None:
+    """只露首尾，中间打码 —— 够辨认是哪把钥匙，不够拿去用。"""
+    if not token:
+        return None
+    t = str(token)
+    return t if len(t) <= 8 else f"{t[:5]}{MASK}{t[-4:]}"
+
+
 class EndpointIn(BaseModel):
     name: str
     base_url: str
     auth: dict = Field(default_factory=dict)
     enabled: bool = True
     timeout_sec: int = 60
+    dialect: str = "capability"
 
 
 class EndpointOut(BaseModel):
@@ -34,6 +48,8 @@ class EndpointOut(BaseModel):
     enabled: bool
     timeout_sec: int
     auth_mode: str
+    dialect: str = "capability"
+    auth_preview: str | None = None
     health: dict | None = None
     contract_version: str | None = None
     capabilities_count: int = 0
@@ -46,6 +62,8 @@ class EndpointOut(BaseModel):
             id=e.id, name=e.name, base_url=e.base_url, enabled=e.enabled,
             timeout_sec=e.timeout_sec,
             auth_mode=str((e.auth_json or {}).get("mode") or "none"),
+            dialect=e.dialect or "capability",
+            auth_preview=_mask((e.auth_json or {}).get("token")),
             health=e.health_json, contract_version=e.contract_version,
             capabilities_count=len(caps),
             caps_fetched_at=e.caps_fetched_at.isoformat() if e.caps_fetched_at else None,
@@ -60,6 +78,13 @@ class RouteIn(BaseModel):
     default_params: dict = Field(default_factory=dict)
     priority: int = 0
     enabled: bool = True
+
+
+def _check_dialect(d: str) -> None:
+    if d not in DIALECTS:
+        raise HTTPException(
+            status_code=400, detail=f"方言只能是 {'/'.join(DIALECTS)}，收到 {d}"
+        )
 
 
 # ── 端点 ──────────────────────────────────────────────────────────────────────
@@ -77,9 +102,11 @@ def create_endpoint(body: EndpointIn, db: Session = Depends(get_db)) -> dict:
     ).scalars().first()
     if dup:
         raise HTTPException(status_code=409, detail=f"端点名 {body.name} 已存在")
+    _check_dialect(body.dialect)
     ep = CapabilityEndpoint(
         id=new_id("ep"), name=body.name, base_url=body.base_url.rstrip("/"),
         auth_json=body.auth, enabled=body.enabled, timeout_sec=body.timeout_sec,
+        dialect=body.dialect,
     )
     db.add(ep)
     db.flush()
@@ -91,11 +118,20 @@ def update_endpoint(endpoint_id: str, body: EndpointIn, db: Session = Depends(ge
     ep = db.get(CapabilityEndpoint, endpoint_id)
     if ep is None:
         raise HTTPException(status_code=404, detail="endpoint not found")
+    _check_dialect(body.dialect)
     ep.name = body.name
     ep.base_url = body.base_url.rstrip("/")
-    ep.auth_json = body.auth
     ep.enabled = body.enabled
     ep.timeout_sec = body.timeout_sec
+    ep.dialect = body.dialect
+    # 密钥从不回明文，前端拿到的是掩码。原样传回来只能理解为「没改」——
+    # 照抄就会把真钥匙覆盖成一串圆点，而且要等到下一次调用才暴雷。
+    auth = dict(body.auth or {})
+    old_token = (ep.auth_json or {}).get("token")
+    incoming = auth.get("token")
+    if old_token and (not incoming or MASK in str(incoming)):
+        auth["token"] = old_token
+    ep.auth_json = auth
     db.flush()
     return EndpointOut.of(ep).model_dump()
 
@@ -114,7 +150,10 @@ def test_endpoint(endpoint_id: str, db: Session = Depends(get_db)) -> dict:
     ep = db.get(CapabilityEndpoint, endpoint_id)
     if ep is None:
         raise HTTPException(status_code=404, detail="endpoint not found")
-    with CapabilityClient(ep.base_url, auth=ep.auth_json or {}, timeout_sec=10) as c:
+    with CapabilityClient(
+        ep.base_url, auth=ep.auth_json or {}, timeout_sec=10,
+        dialect=ep.dialect or "capability",
+    ) as c:
         try:
             h = c.health()
             result = {"ok": h.ok, "version": h.version, "upstreams": h.upstreams,
@@ -134,7 +173,10 @@ def refresh_caps(endpoint_id: str, db: Session = Depends(get_db)) -> dict:
     ep = db.get(CapabilityEndpoint, endpoint_id)
     if ep is None:
         raise HTTPException(status_code=404, detail="endpoint not found")
-    with CapabilityClient(ep.base_url, auth=ep.auth_json or {}, timeout_sec=20) as c:
+    with CapabilityClient(
+        ep.base_url, auth=ep.auth_json or {}, timeout_sec=20,
+        dialect=ep.dialect or "capability",
+    ) as c:
         try:
             cat = c.capabilities()
         except CapabilityError as exc:

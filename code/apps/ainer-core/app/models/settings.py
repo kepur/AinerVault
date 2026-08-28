@@ -26,6 +26,8 @@ class CapabilityEndpoint(Base, StdMixin):
     auth_json: Mapped[dict | None] = mapped_column(JSONB)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     timeout_sec: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    # capability = 说本项目契约的中间层；openai = 直连 OpenAI 兼容的文本服务
+    dialect: Mapped[str] = mapped_column(String(16), default="capability", nullable=False)
     health_json: Mapped[dict | None] = mapped_column(JSONB)
     # GET /capabilities 的缓存 —— 后台据此自动渲染参数表单
     caps_cache_json: Mapped[dict | None] = mapped_column(JSONB)
