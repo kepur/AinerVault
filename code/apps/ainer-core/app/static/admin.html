@@ -190,6 +190,7 @@ const State = {
   novelId: localStorage.getItem("an.novel") || "",
   chapterId: localStorage.getItem("an.chapter") || "",
   lang: localStorage.getItem("an.lang") || "en-GB",
+  mTab: localStorage.getItem("an.mtab") || "characters",
   transformId: localStorage.getItem("an.transform") || "",
   save() {
     localStorage.setItem("an.page", this.page);
@@ -197,6 +198,7 @@ const State = {
     localStorage.setItem("an.chapter", this.chapterId);
     localStorage.setItem("an.lang", this.lang);
     localStorage.setItem("an.transform", this.transformId);
+    localStorage.setItem("an.mtab", this.mTab);
   },
 };
 
@@ -204,6 +206,8 @@ const PAGES = [
   {id:"settings", ico:"⚙", name:"设置", sub:"LLM 端点与能力路由"},
   {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
   {id:"world",    ico:"🌍", name:"世界观", sub:"映射 · 名物词表 · 人名"},
+  {id:"model",    ico:"🧩", name:"世界模型", sub:"人物 · 场景 · 道具 · 节拍 · 风格"},
+  {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
   {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 翻译 → 审核 → 锁定"},
   {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
   {id:"tasks",    ico:"⚡", name:"任务", sub:"生成任务与成本"},
@@ -742,6 +746,172 @@ const World = {
   },
 };
 
+
+// ───────────────────────── 世界模型抽离 ─────────────────────────
+const Model = {
+  async render(v) {
+    if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
+      请先在「书架」打开一个章节</div></div>`; return; }
+    const [ch, wm] = await Promise.all([
+      api("GET", `/chapters/${State.chapterId}`),
+      api("GET", `/chapters/${State.chapterId}/world-model`).catch(()=>null),
+    ]);
+    const c = wm ? wm.counts : {};
+    const tab = State.mTab || "characters";
+
+    const ev = (rows) => (rows||[]).slice(0,2).map(x=>h(x)).join("；") || "—";
+    const TABS = {
+      characters: {n:"人物", cols:["名称","外貌","声音","别名","原文证据"],
+        row:r=>[`<b>${h(r.name)}</b>${r.family_key?`<br><span class="mono" style="color:var(--muted);font-size:11px">${h(r.family_key)}</span>`:""}`,
+                h(r.appearance||"—"), h(r.voice_hints||"—"),
+                (r.aliases||[]).map(h).join("、")||"—", ev(r.evidence)]},
+      locations:  {n:"场景", cols:["名称","视觉关键词","摘要","原文证据"],
+        row:r=>[`<b>${h(r.name)}</b>`, (r.visual_keywords||[]).map(h).join("、")||"—",
+                h(r.summary||"—"), ev(r.evidence)]},
+      props:      {n:"道具", cols:["名称","持有者","用途","原文证据"],
+        row:r=>[`<b>${h(r.name)}</b>`, h(r.owner||"—"), h(r.usage||r.summary||"—"),
+                ev(r.evidence)]},
+      beats:      {n:"剧情节拍", cols:["#","节拍","张力","地点","出场","原文证据"],
+        row:r=>[`<span class="mono">${r.order_no}</span>`,
+                `<b>${h(r.title)}</b>${r.summary?`<br><span style="color:var(--muted)">${h(r.summary)}</span>`:""}`,
+                `<span class="tag ${r.tension_level>=4?'t-bad':r.tension_level>=3?'t-warn':'t-mute'}">${r.tension_level}</span>`,
+                h(r.location||"—"), (r.entities||[]).map(h).join("、")||"—", ev(r.evidence)]},
+      style_hints:{n:"风格提示", cols:["光影","色板","情绪","镜头","质感","原文证据"],
+        row:r=>[h(r.lighting_style||"—"), (r.color_palette||[]).map(h).join("、")||"—",
+                h(r.mood||"—"), h(r.camera_hint||"—"), h(r.texture||"—"), ev(r.evidence)]},
+    };
+    const data = wm ? {characters:wm.characters, locations:wm.locations,
+      props:wm.props, beats:wm.beats, style_hints:wm.style_hints} : {};
+    const T = TABS[tab], rows = data[tab] || [];
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>${h(ch.title||"")} <span class="sub mono" style="color:var(--muted)">
+          ${ch.word_count} 字</span></h2>
+        <p class="hint">从原文抽出后续制作要用的全部结构。每条都带原文证据 ——
+          任何判断都要能回到原文复核。人物的外貌是画面的输入，声音是配音的输入，
+          节拍的张力值决定分镜密度。</p>
+        <div class="row">
+          <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
+                        font-size:12.5px;color:var(--muted)">提取级别</label>
+          <select id="wm-level" style="width:auto">
+            <option value="2">丰富 rich（importance ≥ 2）</option>
+            <option value="3">普通 normal（≥ 3）</option>
+            <option value="4">仅核心（≥ 4）</option>
+          </select>
+          <button class="btn pri" onclick="Model.extract(this)">开始抽离</button>
+          <button class="btn" onclick="Model.extract(this,true)"
+            style="border-color:var(--warn);color:var(--warn)">重新抽离（消耗 Token）</button>
+          <span style="flex:1"></span>
+          <button class="btn" onclick="App.go('world')">写入世界观映射 →</button>
+        </div>
+      </div>
+      ${wm ? `
+      <div class="steps">
+        ${["characters","locations","props","beats","style_hints"].map(k=>`
+          <div class="step ${tab===k?'done':''}" style="cursor:pointer"
+               onclick="Model.tab('${k}')">
+            <div class="k">${TABS[k].n}</div><div class="v">${c[k]||0}</div></div>`).join("")}
+      </div>
+      <div class="card">
+        <h2>${T.n} <span class="sub mono" style="color:var(--muted)">${rows.length} 条</span></h2>
+        ${rows.length ? `<div class="tblwrap"><table><thead><tr>${
+          T.cols.map(x=>`<th>${h(x)}</th>`).join("")}</tr></thead><tbody>${
+          rows.map(r=>`<tr>${T.row(r).map(cell=>`<td>${cell}</td>`).join("")}</tr>`).join("")
+        }</tbody></table></div>` : `<div class="empty">这一类还没有内容</div>`}
+      </div>` : `<div class="card"><div class="empty">还没有抽离过，点「开始抽离」</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  tab(k) { State.mTab = k; State.save(); App.refresh(); },
+  async extract(btn, force) {
+    const lvl = $("#wm-level") ? $("#wm-level").value : 2;
+    await run(btn, async () => {
+      const r = await api("POST",
+        `/chapters/${State.chapterId}/entities:extract?min_importance=${lvl}`, {});
+      logOk(`抽离完成：实体 新建 ${r.created} / 更新 ${r.updated} / 合计 ${r.total}　`
+            + `节拍 ${r.beats}　风格 ${r.style_hints}`);
+      if (r.by_kind && Object.keys(r.by_kind).length)
+        log(`  分类：${Object.entries(r.by_kind).map(([k,n])=>`${k} ${n}`).join("、")}`);
+      if (r.names && r.names.length) log(`  新增：${r.names.join("、")}`);
+      App.refresh();
+    }, force ? "重新抽离" : "抽离中");
+  },
+};
+
+// ───────────────────────── 剧本转换 ─────────────────────────
+const Script = {
+  async render(v) {
+    if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
+      请先在「书架」打开一个章节</div></div>`; return; }
+    const [ch, doc] = await Promise.all([
+      api("GET", `/chapters/${State.chapterId}`),
+      api("GET", `/chapters/${State.chapterId}/script`).catch(()=>null),
+    ]);
+    v.innerHTML = `
+      <div class="card">
+        <h2>${h(ch.title||"")} <span class="sub mono" style="color:var(--muted)">
+          ${ch.word_count} 字</span></h2>
+        <p class="hint">把章节拆成场景与内容块，带时间、地点、天气、氛围。
+          与译本分块的区别：译本是纯规则按段落切，剧本要 LLM 理解场景边界与说话人。</p>
+        <div class="row">
+          <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
+                        font-size:12.5px;color:var(--muted)">切分粒度</label>
+          <select id="sc-gran" style="width:auto">
+            <option value="medium">普通 normal</option>
+            <option value="fine">细 fine</option>
+            <option value="coarse">粗 coarse</option>
+          </select>
+          <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
+                        font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px">
+            <input type="checkbox" id="sc-keep" checked style="width:auto"> 保留人工编辑</label>
+          <button class="btn pri" onclick="Script.gen(this)">剧本转换</button>
+          <button class="btn" onclick="Script.gen(this,true)"
+            style="border-color:var(--warn);color:var(--warn)">重新生成（消耗 Token）</button>
+        </div>
+      </div>
+      ${doc && doc.scenes ? `
+      <div class="steps">
+        <div class="step done"><div class="k">版本</div><div class="v">v${doc.version}</div></div>
+        <div class="step done"><div class="k">场景</div><div class="v">${doc.scenes.length}</div></div>
+        <div class="step done"><div class="k">内容块</div>
+          <div class="v">${doc.scenes.reduce((n,s)=>n+(s.blocks||[]).length,0)}</div></div>
+        <div class="step"><div class="k">状态</div><div class="v">${h(doc.status||"")}</div></div>
+      </div>
+      ${doc.scenes.map(sc=>`<div class="card">
+        <h2>${h(sc.title||`场景 ${sc.order_no}`)}</h2>
+        <div class="tblwrap" style="margin-bottom:12px"><table><tbody>
+          <tr><th style="width:90px">地点</th><td>${h(sc.location_text||"—")}</td>
+              <th style="width:90px">时间</th><td>${h(sc.time_of_day||"—")}</td></tr>
+          <tr><th>天气</th><td>${h(sc.weather||"—")}</td>
+              <th>氛围</th><td>${h(sc.mood||"—")}</td></tr>
+        </tbody></table></div>
+        ${sc.summary?`<p class="hint" style="margin:0 0 12px">${h(sc.summary)}</p>`:""}
+        ${(sc.blocks||[]).map(b=>`<div style="display:flex;gap:10px;padding:5px 0;
+             border-bottom:1px solid var(--line-soft)">
+          <span class="tag ${b.type==='dialogue'?'t-ok':'t-mute'}"
+                style="flex:none;min-width:74px;text-align:center">${h(b.type)}</span>
+          ${b.speaker?`<span class="mono" style="flex:none;min-width:56px;color:var(--accent)">${h(b.speaker)}</span>`:""}
+          <span style="color:var(--ink)">${h(b.source_text||b.text||"")}</span>
+        </div>`).join("")}
+      </div>`).join("")}
+      ` : `<div class="card"><div class="empty">还没有剧本，点「剧本转换」</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async gen(btn, force) {
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/script:generate`, {
+        scene_granularity: $("#sc-gran").value,
+        keep_human_edits: $("#sc-keep").checked,
+      });
+      logOk(`剧本 v${r.version}：场景 ${(r.scenes||[]).length}　`
+            + `块 ${(r.scenes||[]).reduce((n,s)=>n+(s.blocks||[]).length,0)}`);
+      App.refresh();
+    }, force ? "重新生成" : "转换中");
+  },
+};
+
 // ───────────────────────── 译本工作台 ─────────────────────────
 const Prose = {
   async render(v) {
@@ -1096,8 +1266,8 @@ const App = {
       b.classList.toggle("on", b.dataset.p === p.id));
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
-    const R = {settings:Settings, library:Library, world:World,
-               prose:Prose, audio:Audio, tasks:Tasks}[p.id];
+    const R = {settings:Settings, library:Library, world:World, model:Model,
+               script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {
       v.innerHTML = `<div class="card"><h2 style="color:var(--danger)">加载失败</h2>

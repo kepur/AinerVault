@@ -326,21 +326,21 @@ def _name_candidates(source: str) -> dict[str, int]:
     return counts
 
 
-def _synth_entities(user_text: str) -> dict:
-    """从原文里挑人名作为实体。
+def _sentences(text: str) -> list[str]:
+    return [x.strip() for x in re.split(r"[。！？\n]+", text) if len(x.strip()) > 6]
 
-    真实模型靠语义理解，mock 只能靠启发式，但两条线索足够可靠：
-      1 姓氏起头、按人名构成生成的候选
-      2 句子边界后、冒号前的说话人标记
+
+def _synth_entities(user_text: str) -> dict:
+    """世界模型抽离：五类产出，每条带原文证据。
+
+    真实模型靠语义理解，mock 只能靠启发式，但产出的**形状**必须真实 ——
+    少一类字段，调用方的落库分支就测不到。
     """
     source = _extract_source_text(user_text)
     counts = _name_candidates(source)
-
     for m in _SPEAKER_HINT.finditer(source):
-        tag = m.group(1)
-        counts[tag] = counts.get(tag, 0) + 5
+        counts[m.group(1)] = counts.get(m.group(1), 0) + 5
 
-    # 同姓氏的多个候选只留最长的：「李清」被「李清照」吸收
     picks: list[str] = []
     for name in sorted(counts, key=lambda x: (-counts[x], -len(x))):
         if any(name != k and (name in k or k in name) for k in picks):
@@ -349,23 +349,83 @@ def _synth_entities(user_text: str) -> dict:
         if len(picks) >= 6:
             break
 
-    return {
-        "entities": [
-            {
-                "kind": "character",
-                "canonical_key": f"character.{name}",
-                "display_name": name,
-                "aliases": [],
-                "family_hint": (
-                    name[:2] if name[:2] in _MOCK_SURNAMES_2
-                    else (name[0] if name[0] in _MOCK_SURNAMES_1 else "")
-                ),
-                "importance": min(5, 2 + counts[name] // 3),
-                "summary": f"mock 实体：{name}",
-            }
-            for name in picks
-        ]
-    }
+    sents = _sentences(source)
+
+    def evidence_for(term: str) -> list[str]:
+        hits = [s_ for s_ in sents if term in s_][:2]
+        return hits or (sents[:1] if sents else [])
+
+    entities = []
+    for name in picks:
+        ev = evidence_for(name)
+        entities.append({
+            "kind": "character",
+            "canonical_key": f"character.{name}",
+            "display_name": name,
+            "aliases": [],
+            "family_hint": (
+                name[:2] if name[:2] in _MOCK_SURNAMES_2
+                else (name[0] if name[0] in _MOCK_SURNAMES_1 else "")
+            ),
+            "importance": min(5, 2 + counts[name] // 3),
+            "summary": f"mock 实体：{name}",
+            # 从含该人名的句子里截一段当外貌/声音线索
+            "appearance": (ev[0][:40] if ev else ""),
+            "voice_hints": (f"语气参考：{ev[-1][:24]}" if ev else ""),
+            "evidence": ev,
+        })
+
+    # 场景与道具：取高频名词性短语，形状真实即可
+    place_words = [w for w in re.findall(r"[\u4e00-\u9fa5]{2,4}", source)
+                   if w.endswith(("栈", "门", "院", "楼", "铺", "城", "村", "堂"))]
+    for w in dict.fromkeys(place_words[:3]):
+        entities.append({
+            "kind": "location", "canonical_key": f"location.{w}",
+            "display_name": w, "aliases": [], "importance": 3,
+            "summary": f"mock 场景：{w}",
+            "visual_keywords": ["木构", "夜色", "雨"],
+            "evidence": evidence_for(w),
+        })
+    prop_words = [w for w in re.findall(r"[\u4e00-\u9fa5]{2,3}", source)
+                  if w.endswith(("剑", "刀", "钱", "酒", "衣", "灯", "马"))]
+    for w in dict.fromkeys(prop_words[:3]):
+        entities.append({
+            "kind": "prop", "canonical_key": f"prop.{w}",
+            "display_name": w, "aliases": [], "importance": 3,
+            "summary": f"mock 道具：{w}",
+            "owner": picks[0] if picks else "",
+            "usage": "剧情道具",
+            "evidence": evidence_for(w),
+        })
+
+    # 剧情节拍：按句群切，张力给个起伏
+    beats = []
+    chunk = max(1, len(sents) // 3) or 1
+    for i in range(0, min(len(sents), chunk * 3), chunk):
+        group = sents[i : i + chunk]
+        if not group:
+            continue
+        idx = len(beats) + 1
+        beats.append({
+            "order": idx,
+            "title": group[0][:24],
+            "summary": "；".join(g[:20] for g in group[:2]),
+            "tension_level": [2, 4, 3][len(beats) % 3],
+            "location": place_words[0] if place_words else "",
+            "entities": picks[:2],
+            "evidence": group[:2],
+        })
+
+    style_hints = [{
+        "lighting_style": "低照度，暖色室内光对冷色外光",
+        "color_palette": ["藏青", "赭石", "灰白"],
+        "mood": "沉郁、克制",
+        "camera_hint": "多用固定机位与中景",
+        "texture": "颗粒感胶片",
+        "evidence": sents[:1],
+    }] if sents else []
+
+    return {"entities": entities, "beats": beats, "style_hints": style_hints}
 
 
 _LEXICON_LINE = re.compile(r"^\s{2}(?P<src>\S+)\s*→\s*(?P<tgt>[^（(]+)", re.MULTILINE)

@@ -7,6 +7,7 @@ from app.models.asset_pack import (
 from app.models.content import Chapter, Novel, SourceFormat
 from app.models.entity import EntityChapterState, EntityKind, WorldEntity
 from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
+from app.models.narrative import StoryBeat, StyleHint
 from app.models.script import (
     TRANSLATABLE_TYPES, BlockType, DocMode, DocStatus, Scene, ScriptBlock,
     ScriptDoc,
@@ -46,6 +47,7 @@ __all__ = [
     "LexiconCategory", "LexiconSource", "NamingPolicy",
     "ViolationKind", "ViolationScope", "ViolationStatus", "Severity",
     "WorldEntity", "EntityChapterState", "EntityKind",
+    "StoryBeat", "StyleHint",
     "ShotPlan", "Shot", "FrameSpec", "AudioSpec", "FrameRole", "AudioKind", "SpecStatus",
     "GenTask", "Asset", "TaskStatus", "AssetKind", "AssetSource",
     "CapabilityEndpoint", "CapabilityRoute", "PromptTemplate", "User",

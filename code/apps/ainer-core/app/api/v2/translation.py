@@ -70,6 +70,73 @@ def extract_entities(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/chapters/{chapter_id}/world-model")
+def get_world_model(chapter_id: str, db: Session = Depends(get_db)) -> dict:
+    """世界模型：一章抽出的五类结构，每条带原文证据。
+
+    人物的 appearance / voice_hints 分别是画面与配音的输入；
+    beats 的 tension_level 是分镜密度的依据。
+    """
+    from app.models import StoryBeat, StyleHint
+
+    c = _chapter(db, chapter_id)
+    ents = list(
+        db.execute(
+            select(WorldEntity).where(WorldEntity.novel_id == c.novel_id)
+            .order_by(WorldEntity.kind, WorldEntity.display_name)
+        ).scalars()
+    )
+    here = [e for e in ents if chapter_id in (e.appear_chapters_json or [])] or ents
+
+    def pack(e: WorldEntity) -> dict:
+        return {
+            "id": e.id, "name": e.display_name, "kind": e.kind.value,
+            "aliases": e.aliases_json or [], "summary": e.summary,
+            "appearance": e.appearance, "voice_hints": e.voice_hints,
+            "visual_keywords": e.visual_keywords or [],
+            "owner": e.owner_hint, "usage": e.usage_hint,
+            "family_key": e.family_key, "locked": e.locked,
+            "evidence": e.evidence_json or [],
+        }
+
+    beats = [
+        {
+            "id": b.id, "order_no": b.order_no, "title": b.title,
+            "summary": b.summary, "tension_level": b.tension_level,
+            "location": b.location_text, "entities": b.entity_names or [],
+            "evidence": b.evidence_json or [],
+        }
+        for b in db.execute(
+            select(StoryBeat).where(StoryBeat.chapter_id == chapter_id)
+            .order_by(StoryBeat.order_no)
+        ).scalars()
+    ]
+    hints = [
+        {
+            "id": s_.id, "lighting_style": s_.lighting_style,
+            "color_palette": s_.color_palette or [], "mood": s_.mood,
+            "camera_hint": s_.camera_hint, "texture": s_.texture,
+            "evidence": s_.evidence_json or [],
+        }
+        for s_ in db.execute(
+            select(StyleHint).where(StyleHint.chapter_id == chapter_id)
+        ).scalars()
+    ]
+
+    by = lambda k: [pack(e) for e in here if e.kind.value == k]
+    return {
+        "chapter_id": chapter_id, "chapter_title": c.title,
+        "characters": by("character"), "locations": by("location"),
+        "props": by("prop"), "factions": by("faction"),
+        "beats": beats, "style_hints": hints,
+        "counts": {
+            "characters": len(by("character")), "locations": len(by("location")),
+            "props": len(by("prop")), "factions": len(by("faction")),
+            "beats": len(beats), "style_hints": len(hints),
+        },
+    }
+
+
 class ResolveIn(BaseModel):
     use_llm: bool = True
     overwrite: bool = False

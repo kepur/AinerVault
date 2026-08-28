@@ -48,6 +48,19 @@ class WorldEntity(Base, StdMixin):
     # 家族分组 —— 驱动姓氏一致性命名
     family_key: Mapped[str | None] = mapped_column(String(64), index=True)
 
+    #: 原文里的外貌描写。首帧 prompt 与视觉变体都以它为素材 ——
+    #: 与 visual_prompt（给图像模型的英文提示）区分：这一条是原文事实。
+    appearance: Mapped[str | None] = mapped_column(Text)
+    #: 声音特征：语气、语速、口头禅。TTS 音色绑定的依据。
+    voice_hints: Mapped[str | None] = mapped_column(Text)
+    #: 抽取依据的原文片段。任何判断都要能回到原文复核。
+    evidence_json: Mapped[list | None] = mapped_column(JSONB)
+    #: 场景类的视觉关键词
+    visual_keywords: Mapped[list | None] = mapped_column(JSONB)
+    #: 道具类的持有者与用途
+    owner_hint: Mapped[str | None] = mapped_column(String(128))
+    usage_hint: Mapped[str | None] = mapped_column(Text)
+
     # 基础视觉（目标世界观下的变体在 entity_world_visual）
     visual_prompt: Mapped[str | None] = mapped_column(Text)
     negative_prompt: Mapped[str | None] = mapped_column(Text)
