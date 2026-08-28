@@ -342,3 +342,63 @@ class TestPlaceholderScope:
 
         for k in (EntityKind.character, EntityKind.location, EntityKind.faction):
             assert k in _NEEDS_PROPER_NAME
+
+
+# ── 实体跨章归并 ──────────────────────────────────────────────────────────────
+
+from types import SimpleNamespace
+
+from app.models import EntityKind
+from app.pipelines.entities import _resolve_by_alias, _resolve_same_as
+
+
+def _ent(name, kind, aliases=()):
+    return SimpleNamespace(kind=kind, display_name=name, aliases_json=list(aliases))
+
+
+class TestEntityMerge:
+    """同一个东西被建成两条实体，各自拿一个译名 ——
+    译文里她前半本叫一个名字、后半本叫另一个。
+    """
+
+    EXISTING = {
+        "character.三娘": _ent("三娘", EntityKind.character),
+        "character.沈砚": _ent("沈砚", EntityKind.character, ["砚儿"]),
+        "prop.三簧锁": _ent("三簧锁", EntityKind.prop),
+    }
+
+    def test_alias_contains_existing_name(self):
+        """模型常常正确地把「三娘」列进「柳三娘」的 aliases，却仍新建一条 ——
+        aliases 管的是这一次抽取内的归并，它不知道「三娘」上一章已经建过。
+        """
+        got = _resolve_by_alias("柳三娘", ["三娘"], EntityKind.character, self.EXISTING)
+        assert got and got.display_name == "三娘"
+
+    def test_name_in_existing_aliases(self):
+        got = _resolve_by_alias("砚儿", [], EntityKind.character, self.EXISTING)
+        assert got and got.display_name == "沈砚"
+
+    def test_unrelated_creates_new(self):
+        assert _resolve_by_alias("裴无咎", [], EntityKind.character, self.EXISTING) is None
+
+    def test_kind_must_match(self):
+        """「三娘客栈」（地点）不该并进「三娘」（人）。
+
+        并错比不并更难修：两个不同的东西合成一条之后，
+        要拆开得先发现它们本来是两个，而译文里只会看到一个名字。
+        """
+        assert _resolve_by_alias(
+            "三娘客栈", ["三娘"], EntityKind.location, self.EXISTING) is None
+
+    def test_same_as_resolves_by_name_or_alias(self):
+        got = _resolve_same_as("三娘", "柳三娘", EntityKind.character, self.EXISTING)
+        assert got and got.display_name == "三娘"
+        got = _resolve_same_as("砚儿", "沈镖头", EntityKind.character, self.EXISTING)
+        assert got and got.display_name == "沈砚"
+
+    def test_same_as_ignores_wrong_kind(self):
+        assert _resolve_same_as(
+            "三娘", "三娘客栈", EntityKind.location, self.EXISTING) is None
+
+    def test_same_as_pointing_at_self_is_ignored(self):
+        assert _resolve_same_as("三娘", "三娘", EntityKind.character, self.EXISTING) is None

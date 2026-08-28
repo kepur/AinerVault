@@ -150,6 +150,16 @@ style_hints — 风格提示
    判据是**「换一个人／一件物，这个称呼还成立吗」**：
    「掌柜」换个人还是掌柜 → role；「沈砚」换个人就不是沈砚了 → proper。
 
+   **「老周」「小林」「阿强」是 proper，不是 epithet。**
+   它们虽然不是全名，但指代的是特定的那一个人 ——
+   换个人就成了「老李」，称呼不成立。
+   判成 epithet 会让它走意译，译出 Old Zhou 这种东西；
+   正确的做法是给他一个目标文化的名字，再把「老周」
+   登记成 intimate 的称呼变体（见 2a）。
+
+   epithet 留给**真正描述性的**称号：灰衣汉子、独臂老人、北地剑客 ——
+   那些换个人仍然成立，靠特征而非身份指认。
+
    为什么要紧：proper 会去目标文化里造一个专名，
    role 走名物词表。给「总镖头」造专名，它就变成了一个凭空出现的角色，
    而译文里「总镖头把镖单推过来」从此由那个人来做。
@@ -244,6 +254,31 @@ def _resolve_same_as(
         if row.kind is not kind:
             continue
         if target == row.display_name or target in (row.aliases_json or []):
+            return row
+    return None
+
+
+def _resolve_by_alias(
+    name: str, aliases: list[str], kind: "EntityKind",
+    existing: dict[str, "WorldEntity"],
+) -> "WorldEntity | None":
+    """靠别名交叉认出同一个实体。
+
+    两个方向都要看：
+      新条目的别名里有已建实体的主名  —— 「柳三娘」的 aliases 含「三娘」
+      新条目的主名在已建实体的别名里  —— 反过来的情况
+
+    这是纯规则的一半。模型往往能正确地把「三娘」列进「柳三娘」的 aliases，
+    却仍然新建一条 —— aliases 字段管的是「这一次抽取内」的归并，
+    它并不知道「三娘」上一章已经独立建过了。
+    """
+    if not name:
+        return None
+    alias_set = {a for a in aliases if a}
+    for row in existing.values():
+        if row.kind is not kind:
+            continue
+        if row.display_name in alias_set or name in set(row.aliases_json or []):
             return row
     return None
 
@@ -379,8 +414,14 @@ def extract_entities(
         if appellations:
             pending_appellations.append((key, appellations))
 
-        # same_as 指向已建实体时，把这次的名字并成它的别名，不建新条
-        merged_into = _resolve_same_as(item.get("same_as"), name, kind, existing)
+        # 两条归并路径，各管一半：
+        #   same_as   语义判断，处理无字面关联的（三娘客栈 / 柳三娘的客栈）
+        #   别名交叉  纯规则，处理有字面关联的 —— 模型常常把「三娘」
+        #             正确地列进「柳三娘」的 aliases，却还是新建了一条
+        merged_into = (
+            _resolve_same_as(item.get("same_as"), name, kind, existing)
+            or _resolve_by_alias(name, aliases, kind, existing)
+        )
         if merged_into is not None:
             if not merged_into.locked:
                 # 括号不能省：`-` 的优先级高于 `|`，写成
