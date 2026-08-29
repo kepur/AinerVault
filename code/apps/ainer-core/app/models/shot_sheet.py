@@ -60,8 +60,12 @@ class CrewSheet(Base, StdMixin):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     #: 按该工种的必填维度组织的结构化产出
     payload_json: Mapped[dict | None] = mapped_column(JSONB)
-    #: payload 拼成的提示词片段，落库以便直接取用与比对
+    #: payload 拼成的提示词片段，中文，**给人审核**
     prompt: Mapped[str | None] = mapped_column(Text)
+    #: 英文那一份，**直接交给图像／视频模型**。
+    #: 图像模型不认中文 —— 喂中文出来的是一整版汉字纹样，不是画面。
+    #: 制作单是本系统对下游的主要交付物，只有中文等于交不出去
+    prompt_en: Mapped[str | None] = mapped_column(Text)
     #: 缺了哪些必填维度。空列表 = 完整。
     #: **不是警告而是验收标准** —— 缺项的单子不该进入生成
     missing_json: Mapped[list | None] = mapped_column(JSONB)

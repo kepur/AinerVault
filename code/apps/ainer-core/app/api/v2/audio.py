@@ -285,3 +285,25 @@ def patch_casting(casting_id: str, body: CastPatch,
         row.locked = body.locked
     db.flush()
     return {"ok": True, "id": row.id, "edited_by_human": row.edited_by_human}
+
+
+@router.post("/shot-plans/{plan_id}/soundscape:compile")
+def compile_soundscape(plan_id: str, transform_id: str = Query(...),
+                       db: Session = Depends(get_db)) -> dict:
+    """把声音制作单编译成环境音／配乐／音效的生成规格。
+
+    这一步修的是一处「存了没人读」：声音那一份制作单里每一镜都写清了
+    环境底噪、音效点、画外声、配乐，而音频编译走的是另一条路 ——
+    它去找音频素材，找不到就静默跳过。于是全库跑下来
+    AudioSpec 里只有对白和旁白。
+    """
+    from app.pipelines import soundscape
+
+    plan = _plan(db, plan_id)
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    try:
+        return soundscape.compile_soundscape(db, plan, t).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

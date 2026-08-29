@@ -56,14 +56,22 @@ def _spec_schema(spec: CrewSpec) -> dict[str, Any]:
 
     字段名取维度冒号前的部分并转成 key —— 维度表就是 schema 的唯一来源，
     加一个维度不需要另外改 schema，两边不会走偏。
+
+    **每个维度两份**：中文给人审核，`_en` 给图像／视频模型。
+    图像模型不认中文 —— 喂中文出来的是一整版汉字纹样，不是画面。
+    制作单是本系统交给下游的**主要交付物**，只有中文等于交不出去。
     """
     props: dict[str, Any] = {}
+    required: list[str] = []
     for dim in spec.dimensions:
         key = _dim_key(dim)
         props[key] = {"type": "string", "description": dim}
+        props[f"{key}_en"] = {"type": "string",
+                              "description": f"{dim}（英文，直接进提示词）"}
+        required += [key, f"{key}_en"]
     return {
         "type": "object",
-        "required": list(props),
+        "required": required,
         "properties": props,
     }
 
@@ -123,7 +131,7 @@ def _check(spec: CrewSpec, payload: dict[str, Any]) -> tuple[list[str], list[str
 
 
 def _compose(spec: CrewSpec, payload: dict[str, Any]) -> str:
-    """把结构化产出拼成提示词片段，按维度顺序。"""
+    """中文那一份，给人审核。按维度顺序。"""
     bits = []
     for dim in spec.dimensions:
         head = dim.split("：")[0].split(":")[0]
@@ -131,6 +139,30 @@ def _compose(spec: CrewSpec, payload: dict[str, Any]) -> str:
         if val:
             bits.append(f"{head}：{val}")
     return "；".join(bits)
+
+
+def _compose_en(spec: CrewSpec, payload: dict[str, Any]) -> str:
+    """英文那一份，**直接进出图提示词**。
+
+    不带维度名前缀 —— 「Framing: medium close-up」里的 Framing
+    对图像模型没有意义，它只会把这个词也画进去（或当噪声）。
+    逗号分隔的短语串才是提示词的样子。
+
+    术语先查双语表：模型现翻会得到「medium close shot」与
+    「medium close-up」混用，而下游按字面匹配的工具会当成两个值。
+    """
+    glossary = spec.glossary()
+    bits: list[str] = []
+    for dim in spec.dimensions:
+        val = as_text(payload.get(f"{_dim_key(dim)}_en")).strip()
+        if not val:
+            # 英文缺了就拿中文查表兜一下 —— 拿得到多少是多少，
+            # 拿不到的由 cjk 守门报出来，而不是静默留一段中文进提示词
+            cn = as_text(payload.get(_dim_key(dim))).strip()
+            val = " ".join(en for term, en in glossary.items() if term in cn)
+        if val:
+            bits.append(val.strip().rstrip("。.；;"))
+    return ", ".join(b for b in bits if b)
 
 
 @dataclass
@@ -226,7 +258,8 @@ def generate_sheets(
                     db,
                     [
                         {"role": "system",
-                         "content": spec.brief() + "\n\n只输出 JSON 对象。"},
+                         "content": spec.brief(bilingual=True)
+                         + "\n\n只输出 JSON 对象。"},
                         {"role": "user", "content": user},
                     ],
                     schema,
@@ -246,6 +279,7 @@ def generate_sheets(
                 existing[(shot.id, spec.role)] = row
             row.payload_json = data
             row.prompt = _compose(spec, data)
+            row.prompt_en = _compose_en(spec, data)
             row.missing_json = missing or None
             row.rejected_json = rejected or None
             row.model = task.model
@@ -259,6 +293,11 @@ def generate_sheets(
                 })
             if row.prompt:
                 prior.append(f"【{spec.display_name}】{row.prompt}")
+            if not row.prompt_en:
+                result.incomplete.append({
+                    "shot": shot.order_no, "role": spec.role,
+                    "missing": ["英文提示词"], "rejected": [],
+                })
 
     db.flush()
     return result

@@ -369,7 +369,8 @@ def list_crew_sheets(plan_id: str, db: Session = Depends(get_db)) -> dict:
             "description": s.description,
             "sheets": {
                 role: {
-                    "prompt": r.prompt, "payload": r.payload_json or {},
+                    "prompt": r.prompt, "prompt_en": r.prompt_en,
+                    "payload": r.payload_json or {},
                     "missing": r.missing_json or [],
                     "rejected": r.rejected_json or [],
                     "status": r.status.value,

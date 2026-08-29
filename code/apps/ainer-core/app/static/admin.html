@@ -2036,7 +2036,7 @@ const Prompts = {
 
 // ───────────────────────── 制作单 ─────────────────────────
 // 与分镜调度页的 ROLE_CN（对话身份）同名会撞车，这里叫 CREW_CN
-const CREW_CN = {
+const CREW_CN = {costume_makeup:"服化", color_grading:"调色", vfx:"视效",
   cinematography:"摄影", lighting:"灯光", production_design:"美术",
   sound:"声音", editing:"剪辑",
 };
@@ -2068,6 +2068,8 @@ const Crew = {
         <p class="hint">这是本系统对下游（图像／视频／音频生成）的<b>主要交付物</b>。
           本系统不生成画面与声音，但要把「该生成什么」说到不留空白 ——
           否则那些模块只能自己猜，猜出来的东西没法跨镜保持一致。<br>
+          <b>每份两种语言</b>：中文给人审核，英文直接交给图像／视频模型 ——
+          图像模型不认中文，喂中文出来的是一整版汉字纹样，不是画面。<br>
           按工种分开出单而不是一次填完：这些维度的判据完全不同 ——
           灯光要方位与光质，剪辑要秒数与切点，一次填完模型会平均用力、每项写两句。<br>
           <b>缺项是验收结果不是警告</b>：下游拿到「柔和侧光」出来的图没法用，
@@ -2075,6 +2077,7 @@ const Crew = {
         <div class="row">
           <button class="btn pri" onclick="Crew.gen(this)" ${pid?"":"disabled"}>逐工种出单</button>
           <button class="btn" onclick="Crew.motion(this)" ${pid?"":"disabled"}>生成运动描述</button>
+          <button class="btn" onclick="Crew.sound(this)" ${pid?"":"disabled"}>编译声景</button>
           ${pid?"":`<span class="sub" style="color:var(--warn);font-size:12px">
             先在「剧本转换」生成分镜计划</span>`}
         </div>
@@ -2133,6 +2136,11 @@ const Crew = {
               </div>
               <div class="sub" style="font-size:12px;color:var(--body);line-height:1.6">
                 ${h(sh.prompt||"—")}</div>
+              ${sh.prompt_en?`<div class="sub mono"
+                style="font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:2px">
+                → ${h(sh.prompt_en)}</div>`
+               :`<div class="sub" style="font-size:11px;color:var(--warn)">
+                 缺英文 —— 图像模型不认中文，这一条交不出去</div>`}
             </div>`).join("")}
           ${s.motion ? `
             <div class="prop" style="margin-top:8px">
@@ -2161,6 +2169,20 @@ const Crew = {
         logWarn(`镜 ${x.shot} ${CREW_CN[x.role]||x.role}：缺 ${x.missing.join("、")}`));
       App.refresh();
     }, "出单中");
+  },
+  async sound(btn) {
+    await run(btn, async () => {
+      const pid = await this._plan();
+      const ts = await api("GET", `/novels/${State.novelId}/transforms`);
+      const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+      if (!tf) throw new Error("还没有世界观映射");
+      const r = await api("POST",
+        `/shot-plans/${pid}/soundscape:compile?transform_id=${tf.id}`, {});
+      logOk(`声景：环境床 ${r.ambience}　配乐 ${r.music}　音效 ${r.sfx}　画外声 ${r.offscreen}`);
+      (r.silence||[]).forEach(x => log(`镜 ${x.shot} 有设计的静默：${x.note}`, "warn"));
+      (r.not_done||[]).forEach(logWarn);
+      App.refresh();
+    }, "编译中");
   },
   async motion(btn) {
     await run(btn, async () => {
