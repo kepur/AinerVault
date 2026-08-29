@@ -154,10 +154,93 @@ class Volatility(str, Enum):
     months = "months"        # 短命网络梗
 
 
+class Fidelity(str, Enum):
+    """转译力度 —— 整本书的总基调，偏置每一处的策略选择。
+
+    这是翻译学里的异化↔归化光谱，落到实际决策上是三种不同的书：
+
+      preserve_world   **存真**。原著的体系原样保留，音译加导读。
+                       修仙的境界、科幻的自造词，粉丝要的就是那套原物。
+                       代价：读者要先学一套词汇 —— 所以这一档**必须配导读**，
+                       否则正文每个术语都得就地解释，节奏全毁。
+
+      anchored         **折中**。体系保留，但关键处给一个目标文化的锚点，
+                       让读者能挂靠。大众向的默认档。
+
+      transplant_world **移植**。整体搬进目标圈层，读者读到的像一本
+                       本土作品。武侠改编到帝俄走的就是这一档。
+                       代价：原著的体系痕迹会被抹掉。
+
+    **它不替代九档阶梯，只是给阶梯一个偏置。** 每一处的具体判断
+    仍由文化依赖度 × 情节承载 × 时效性决定 ——
+    力度只回答「同样这处，这本书该往哪边挪一格」。
+    这样报表能说清楚「因为选了存真档，这处从 substitute 提到了 preserve」，
+    而不是给出一个没法追问的结果。
+    """
+
+    preserve_world = "preserve_world"
+    anchored = "anchored"
+    transplant_world = "transplant_world"
+
+
+#: 「不出戏」的四档按归化程度排成一条线。力度就在这条线上左右挪。
+#: 解释类（gloss_inline/footnote）与止损类（compensate/relocate/omit）
+#: 不在这条线上 —— 它们回答的是别的问题，另行处理。
+_DOMESTICATION: tuple[DeviceStrategy, ...] = (
+    DeviceStrategy.preserve,
+    DeviceStrategy.substitute,
+    DeviceStrategy.transplant,
+    DeviceStrategy.naturalize,
+)
+_SHIFT = {
+    Fidelity.preserve_world: -1,
+    Fidelity.anchored: 0,
+    Fidelity.transplant_world: 1,
+}
+
+
+def apply_fidelity(
+    strategy: DeviceStrategy, fidelity: Fidelity, *, explained: bool = False,
+) -> DeviceStrategy:
+    """把整本书的力度基调加到单处策略上。
+
+    explained 表示这个词条**导读里已经讲过**。它改变的是解释类的去留：
+    讲过了就不必在正文里再解释一次，可以直接用原物 ——
+    这正是导读存在的意义，也是存真档能成立的前提。
+    没有导读却选存真档，读者会撞上一堆没有来处的词。
+
+    止损三档（compensate/relocate/omit）在存真档下要往回提一格：
+    存真的取向是「宁可出戏也不丢」，所以认赔之前先试脚注。
+    移植档不动它们 —— 已经决定认赔的地方，再归化也救不回来。
+    """
+    if strategy in _DOMESTICATION:
+        i = _DOMESTICATION.index(strategy) + _SHIFT[fidelity]
+        return _DOMESTICATION[max(0, min(len(_DOMESTICATION) - 1, i))]
+
+    if strategy is DeviceStrategy.gloss_inline:
+        if explained:
+            # 导读讲过了，正文里就用原物 —— 再解释一次是重复，且拖慢节奏
+            return DeviceStrategy.preserve
+        if fidelity is Fidelity.transplant_world:
+            # 移植档不解释，直接换成目标文化里的东西
+            return DeviceStrategy.transplant
+        return strategy
+
+    if strategy is DeviceStrategy.footnote and explained:
+        return DeviceStrategy.preserve
+
+    if fidelity is Fidelity.preserve_world and strategy in (
+        DeviceStrategy.compensate, DeviceStrategy.relocate, DeviceStrategy.omit
+    ):
+        return DeviceStrategy.footnote
+    return strategy
+
+
 def choose_strategy(
     load: CulturalLoad, plot: PlotLoad, vol: Volatility,
+    fidelity: Fidelity = Fidelity.anchored, *, explained: bool = False,
 ) -> DeviceStrategy:
-    """三维定策略。只看文化依赖度会做出两类错判。
+    """三维定策略，再按整本书的力度偏置一格。只看文化依赖度会做出两类错判。
 
     第一类：高依赖 + 承载情节。按依赖度该「舍了补偿」，
     但那是伏笔 —— 舍了后文回扣就落空。这种宁可 footnote 出戏，
@@ -169,6 +252,15 @@ def choose_strategy(
 
     返回的是默认值，人工与模型都可覆盖。
     """
+    base = _choose_base(load, plot, vol)
+    return apply_fidelity(base, fidelity, explained=explained)
+
+
+def _choose_base(
+    load: CulturalLoad, plot: PlotLoad, vol: Volatility,
+) -> DeviceStrategy:
+    """不含力度偏置的那一步。分开是为了让报表能说清
+    「本来该是 X，因为这本书选了 Y 档，改成了 Z」。"""
     # 情节转折靠它 —— 无论多难翻都必须让读者拿到，代价其次
     if plot is PlotLoad.pivot:
         return (

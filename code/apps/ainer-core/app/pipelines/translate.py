@@ -135,6 +135,13 @@ def translate_chapter(
     policy = transform.policy_json or {}
     if strict is None:
         strict = str(policy.get("lexicon_policy") or "strict") == "strict"
+    # 转译力度与导读讲过的词条 —— 两者一起决定每处装置的最终策略。
+    # 力度在这里读而不是在装置抽取时读：装置是原文的属性，
+    # 力度是映射的属性，同一本书译到两个圈层可以选不同的力度
+    from app.pipelines.primer import covered_terms, fidelity_of
+
+    fidelity = fidelity_of(transform)
+    explained = covered_terms(db, transform)
 
     blocks = [
         b for b in db.execute(
@@ -206,7 +213,8 @@ def translate_chapter(
             if spine:
                 parts.append(spine)
             brief = build_device_brief(
-                db, [b.id for b in chunk], tgt_profile.display_name
+                db, [b.id for b in chunk], tgt_profile.display_name,
+                fidelity=fidelity, explained=explained,
             )
             if brief:
                 parts.append(brief)

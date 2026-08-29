@@ -55,9 +55,20 @@ def load_rows(db: Session, transform_id: str,
 
 
 def build_matcher(db: Session, transform_id: str,
-                  *, only_usable: bool = False) -> tuple[LexiconMatcher, dict[str, WorldLexicon]]:
-    """构建匹配器，同时返回 source_term → 词条 的索引。"""
+                  *, only_usable: bool = False,
+                  source_profile_id: str | None = None,
+                  ) -> tuple[LexiconMatcher, dict[str, WorldLexicon]]:
+    """构建匹配器，同时返回 source_term → 词条 的索引。
+
+    source_profile_id 用于**混合源圈层**的消歧：穿越小说里
+    「先生」在古代场是老师、在现代场是 Mr.，两条同名词条并存。
+    传了圈层就优先用该圈层的那条，没有再回落到通用条目（source_profile_id 为空）。
+
+    不传时**只用通用条目**，不是「随便挑一条」—— 随便挑的话，
+    挑中哪一条取决于查询返回顺序，同一段文本两次跑可能译出两个词。
+    """
     rows = load_rows(db, transform_id, only_usable=only_usable)
+    rows = _disambiguate(rows, source_profile_id)
     matcher = LexiconMatcher(
         {r.source_term: (r.source_aliases or []) for r in rows},
         measure_terms=[
@@ -65,6 +76,31 @@ def build_matcher(db: Session, transform_id: str,
         ],
     )
     return matcher, {r.source_term: r for r in rows}
+
+
+def _disambiguate(
+    rows: list[WorldLexicon], source_profile_id: str | None,
+) -> list[WorldLexicon]:
+    """同名词条按源圈层挑一条。
+
+    优先级：本圈层的 > 通用的（source_profile_id 为空）。
+    别的圈层的一律不要 —— 「先生」在现代场译成「老师」不是「不够好」，
+    是**错的**，而错在这一层看不出来，要到读者读到才发现。
+    """
+    by_term: dict[str, WorldLexicon] = {}
+    for r in rows:
+        cur = by_term.get(r.source_term)
+        mine = r.source_profile_id == source_profile_id
+        generic = r.source_profile_id is None
+        if not (mine or generic):
+            continue
+        if cur is None:
+            by_term[r.source_term] = r
+            continue
+        # 本圈层的压过通用的
+        if mine and cur.source_profile_id is None:
+            by_term[r.source_term] = r
+    return list(by_term.values())
 
 
 @dataclass(slots=True)
@@ -99,9 +135,14 @@ class LexHit:
 
 
 def hits_for_text(db: Session, transform_id: str, text: str,
-                  *, only_usable: bool = True) -> list[LexHit]:
-    """本段文本命中的词条，按命中次数降序。注入 prompt 与反向校验共用。"""
-    matcher, index = build_matcher(db, transform_id, only_usable=only_usable)
+                  *, only_usable: bool = True,
+                  source_profile_id: str | None = None) -> list[LexHit]:
+    """本段文本命中的词条，按命中次数降序。注入 prompt 与反向校验共用。
+
+    source_profile_id 是这段文本所属的源圈层（穿越小说里每场不同）。
+    """
+    matcher, index = build_matcher(db, transform_id, only_usable=only_usable,
+                                   source_profile_id=source_profile_id)
     if not matcher:
         return []
     counts: dict[str, int] = {}

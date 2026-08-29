@@ -656,3 +656,160 @@ def resolve_violation(violation_id: str, action: str = Query("resolved"),
     v.status = ViolationStatus.ignored if action == "ignore" else ViolationStatus.resolved
     db.flush()
     return {"id": v.id, "status": v.status.value}
+
+
+# ── 转译力度 · 导读篇 · 虚构圈层 ──────────────────────────────────────────────
+
+class FidelityIn(BaseModel):
+    fidelity: str
+
+
+@router.patch("/transforms/{transform_id}/fidelity")
+def set_fidelity(transform_id: str, body: FidelityIn,
+                 db: Session = Depends(get_db)) -> dict:
+    """设这次映射的转译力度。
+
+    存真／折中／移植 —— 它不替代九档策略阶梯，只给阶梯一个偏置。
+    每处的具体判断仍由文化依赖度 × 情节承载 × 时效性决定。
+    """
+    from app.models import Fidelity
+
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    try:
+        fid = Fidelity(body.fidelity)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知力度 {body.fidelity}，可选："
+                   f"{'、'.join(f.value for f in Fidelity)}") from exc
+    t.policy_json = {**(t.policy_json or {}), "fidelity": fid.value}
+    db.flush()
+    return {"ok": True, "fidelity": fid.value}
+
+
+@router.post("/transforms/{transform_id}/primer:generate")
+def generate_primer(transform_id: str, force: bool = Query(False),
+                    db: Session = Depends(get_db)) -> dict:
+    """写一篇正文前的导读。
+
+    修仙的境界、科幻的自造词在目标语里没有对应物。就地解释的话，
+    这类词有几十个，读者每隔两页被打断一次。导读一次讲完，
+    正文里就可以直接用原物。
+    """
+    from app.pipelines import primer as primer_pipe
+    from app.pipelines.base import PipelineError
+
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    try:
+        return primer_pipe.generate_primer(db, t, force=force).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/transforms/{transform_id}/primer")
+def get_primer(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """导读篇 + 它对正文的影响面。"""
+    from app.models import Fidelity, WorldPrimer
+    from app.pipelines.primer import (
+        MAX_WORDS, MIN_WORDS, NEEDS_PRIMER, fidelity_of,
+    )
+
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    fid = fidelity_of(t)
+    row = db.execute(
+        select(WorldPrimer).where(WorldPrimer.transform_id == transform_id)
+        .order_by(WorldPrimer.version.desc())
+    ).scalars().first()
+
+    issues: list[str] = []
+    if NEEDS_PRIMER[fid] == "required" and row is None:
+        issues.append(
+            "存真档但没有导读 —— 这一档的整个前提就是「术语原样保留，"
+            "读者靠导读挂靠」。没有导读，读者会撞上一堆没有来处的词")
+    if row is not None and row.status is ReviewStatus.candidate:
+        issues.append(
+            "导读还是候选状态，正文不会按「已经讲过」来写 —— "
+            "审核通过后，讲过的词条在正文里才会直接用原物")
+    if row is not None and row.word_count > MAX_WORDS:
+        issues.append(f"{row.word_count} 词，超过 {MAX_WORDS} —— 太长没人读，"
+                      f"而没人读的导读比没有导读更糟")
+
+    return {
+        "fidelity": fid.value,
+        "fidelity_label": {
+            Fidelity.preserve_world: "存真 · 体系原样保留，靠导读挂靠",
+            Fidelity.anchored: "折中 · 体系保留，关键处给目标文化锚点",
+            Fidelity.transplant_world: "移植 · 整体搬进目标圈层",
+        }[fid],
+        "primer_needed": NEEDS_PRIMER[fid],
+        "word_budget": {"min": MIN_WORDS, "max": MAX_WORDS},
+        "primer": None if row is None else {
+            "id": row.id, "version": row.version, "title": row.title,
+            "sections": row.sections_json or [],
+            "body": row.body, "covers": row.covers_json or [],
+            "word_count": row.word_count, "status": row.status.value,
+            "locked": row.locked, "edited_by_human": row.edited_by_human,
+            "rationale": row.rationale,
+        },
+        "issues": issues,
+    }
+
+
+class PrimerPatch(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    covers: list[str] | None = None
+    status: str | None = None
+    locked: bool | None = None
+
+
+@router.patch("/primers/{primer_id}")
+def patch_primer(primer_id: str, body: PrimerPatch,
+                 db: Session = Depends(get_db)) -> dict:
+    """人工改导读。改过的标 edited_by_human，重写要显式 force。"""
+    from app.models import WorldPrimer
+
+    row = db.get(WorldPrimer, primer_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="primer not found")
+    for f in ("title", "body"):
+        v = getattr(body, f)
+        if v is not None:
+            setattr(row, f, v)
+            row.edited_by_human = True
+    if body.covers is not None:
+        row.covers_json = body.covers or None
+        row.edited_by_human = True
+    if body.status:
+        try:
+            row.status = ReviewStatus(body.status)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="unknown status") from exc
+    if body.locked is not None:
+        row.locked = body.locked
+    db.flush()
+    return {"ok": True, "id": row.id, "status": row.status.value}
+
+
+@router.get("/world-profiles/{profile_id}/resolved")
+def get_resolved_profile(profile_id: str, db: Session = Depends(get_db)) -> dict:
+    """解析后的圈层：虚构圈层叠加它的现实底座。
+
+    三体的未来、修真界不是任何现实文化，但读者是现实里的人 ——
+    语域、日常常识、礼貌尺度都得有个现实依托。
+    """
+    from app.worldview import profile_resolve
+
+    p = db.get(WorldProfile, profile_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    out = profile_resolve.resolve(db, p)
+    warn = profile_resolve.missing_base(p)
+    out["issues"] = [warn] if warn else []
+    return out

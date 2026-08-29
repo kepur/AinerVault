@@ -326,6 +326,7 @@ const GROUPS = [
     {id:"prompts",  ico:"🖼", name:"提示词台账", sub:"素材生图提示词 · 依据 · 引用"},
   ]},
   {id:"g-trans", name:"译本", pages:[
+    {id:"fidelity", ico:"⚖", name:"力度与导读", sub:"存真／折中／移植 · 正文前的世界观导读"},
     {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 装置 → 翻译 → 审核 → 回译 → 锁定"},
     {id:"review",   ico:"🔍", name:"文化差异审查", sub:"模型出报表，人裁决"},
   ]},
@@ -2172,6 +2173,137 @@ const Crew = {
   },
 };
 
+// ───────────────────────── 力度与导读 ─────────────────────────
+const FID = [
+  {v:"preserve_world", n:"存真", d:"原著体系原样保留，音译加导读。修仙的境界、科幻的自造词，粉丝要的就是那套原物。代价：读者要先学一套词汇 —— 所以这一档必须配导读。"},
+  {v:"anchored", n:"折中", d:"体系保留，但关键处给一个目标文化的锚点，让读者能挂靠。大众向的默认档。"},
+  {v:"transplant_world", n:"移植", d:"整体搬进目标圈层，读者读到的像一本本土作品。武侠改编到帝俄走的就是这一档。代价：原著的体系痕迹会被抹掉。"},
+];
+const PK_CN = {system:"体系", address:"称谓", measure:"度量", setting:"世界", convention:"类型约定"};
+
+const FidelityPage = {
+  async render(v) {
+    if (!State.novelId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一本小说</div></div>`;
+      return;
+    }
+    const ts = await api("GET", `/novels/${State.novelId}/transforms`).catch(()=>[]);
+    const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+    const d = tf ? await api("GET", `/transforms/${tf.id}/primer`).catch(()=>null) : null;
+    const p = d && d.primer;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>转译力度
+          ${d?`<span class="tag t-info">${h(d.fidelity_label.split(" · ")[0])}</span>`:""}
+        </h2>
+        <p class="hint">同一本书可以译成三种完全不同的书。<br>
+          <b>它不替代九档策略阶梯，只给阶梯一个偏置</b> ——
+          每一处的具体判断仍由文化依赖度 × 情节承载 × 时效性决定，
+          力度只回答「同样这处，这本书该往哪边挪一格」。
+          所以报表能说清「因为选了存真档，这处从 substitute 提到了 preserve」，
+          而不是给出一个没法追问的结果。</p>
+        <div class="row" style="flex-direction:column;align-items:stretch;gap:8px">
+          ${FID.map(f=>`
+            <div class="prop" style="cursor:pointer;${d&&d.fidelity===f.v
+              ?"border-color:var(--ok)":""}" onclick="FidelityPage.set('${f.v}')">
+              <div class="row" style="gap:8px">
+                <b style="color:var(--ink)">${f.n}</b>
+                <span class="mono" style="font-size:11px;color:var(--muted)">${f.v}</span>
+                ${d&&d.fidelity===f.v?`<span class="tag t-ok">当前</span>`:""}
+              </div>
+              <div class="sub" style="font-size:12px;margin-top:3px;line-height:1.7">${f.d}</div>
+            </div>`).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>导读篇
+          ${p?`<span class="sub mono" style="color:var(--muted)">v${p.version} · ${
+            p.word_count} 词 · 覆盖 ${p.covers.length} 条</span>`:""}
+          ${d?`<span class="tag ${d.primer_needed==="required"?"t-bad":
+             d.primer_needed==="recommended"?"t-warn":"t-mute"}">${
+             d.primer_needed==="required"?"这一档必须有":
+             d.primer_needed==="recommended"?"建议有":"这一档用不上"}</span>`:""}
+          ${p?`<span class="tag ${p.status==="candidate"?"t-warn":"t-ok"}">${
+            p.status==="candidate"?"候选":p.status==="approved"?"已通过":"已锁定"}</span>`:""}
+        </h2>
+        <p class="hint">修仙的境界、科幻的自造词在目标语里没有对应物。就地解释的话，
+          这类词有几十个，每个第一次出现都停下来讲一段，
+          <b>读者每隔两页被打断一次，读的就不是小说了</b>。<br>
+          导读把这些一次讲完，正文里就可以直接用原物。<br>
+          <b>「覆盖」那一栏是导读与正文的接口</b> —— 导读讲过的词条，
+          翻译时策略会从「就地解释」降为「直接用原物」。
+          导读<b>审核通过后</b>这一步才生效：候选状态的导读还可能改，
+          按它把正文的解释去掉，改完就对不上了。</p>
+        <div class="row">
+          <button class="btn pri" onclick="FidelityPage.gen(this)" ${tf?"":"disabled"}
+            >生成导读</button>
+          <button class="btn" onclick="FidelityPage.gen(this,true)" ${p?"":"disabled"}
+            >重写</button>
+          ${p&&p.status==="candidate"?`<button class="btn"
+            onclick="FidelityPage.approve(this)">审核通过</button>`:""}
+          ${d&&d.word_budget?`<span class="sub mono" style="color:var(--muted);font-size:12px">
+            篇幅 ${d.word_budget.min}–${d.word_budget.max} 词</span>`:""}
+        </div>
+        ${d&&d.issues.length?`<div class="sub"
+          style="color:var(--warn);font-size:12px;margin-top:8px;line-height:1.8">
+          ${d.issues.map(h).join("<br>")}</div>`:""}
+      </div>
+
+      ${p ? `<div class="card">
+        <h2>${h(p.title||"导读")}</h2>
+        ${(p.sections||[]).map(s=>`
+          <div style="margin-bottom:12px">
+            <div class="row" style="gap:6px;margin-bottom:3px">
+              <span class="tag t-info">${h(PK_CN[s.kind]||s.kind)}</span>
+              <b style="color:var(--ink);font-size:13px">${h(s.heading||"")}</b>
+              ${(s.covers||[]).length?`<span class="sub mono"
+                style="font-size:11px;color:var(--muted)">覆盖 ${s.covers.length} 条</span>`:""}
+            </div>
+            <div class="sub" style="font-size:12.5px;line-height:1.85;color:var(--body)"
+              >${h(s.body||"").replace(/\n/g,"<br>")}</div>
+          </div>`).join("")}
+        ${p.rationale?`<div class="sub" style="font-size:12px;color:var(--muted);
+          margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+          ${h(p.rationale)}</div>`:""}
+      </div>` : ""}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async _tf() {
+    const ts = await api("GET", `/novels/${State.novelId}/transforms`);
+    const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+    if (!tf) throw new Error("还没有世界观映射");
+    return tf.id;
+  },
+  async set(fid) {
+    try {
+      await api("PATCH", `/transforms/${await this._tf()}/fidelity`, {fidelity: fid});
+      logOk(`转译力度设为 ${fid}`);
+      App.refresh();
+    } catch (e) { logWarn(e.message); }
+  },
+  async gen(btn, force) {
+    await run(btn, async () => {
+      const r = await api("POST",
+        `/transforms/${await this._tf()}/primer:generate?force=${force?1:0}`, {});
+      logOk(`导读 ${r.sections} 节 ${r.word_count} 词，覆盖 ${r.covers} 条词表`);
+      (r.trimmed||[]).forEach(x => log(`超长砍掉整节：${x}`, "warn"));
+      (r.warnings||[]).forEach(logWarn);
+      App.refresh();
+    }, "撰写中");
+  },
+  async approve(btn) {
+    await run(btn, async () => {
+      const d = await api("GET", `/transforms/${await this._tf()}/primer`);
+      await api("PATCH", `/primers/${d.primer.id}`, {status: "approved"});
+      logOk("导读已通过 —— 讲过的词条，正文里会直接用原物");
+      App.refresh();
+    }, "提交中");
+  },
+};
+
 // ───────────────────────── 人物时期 ─────────────────────────
 const EK_CN = {baseline:"基准", age:"年龄", status:"身份", gear:"装备",
                injury:"伤病", season:"季节", ruin:"损毁", disguise:"易容"};
@@ -2635,6 +2767,7 @@ const App = {
     const R = {settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,
+               fidelity:FidelityPage,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {

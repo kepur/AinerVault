@@ -24,9 +24,9 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
-    strategy_brief,
+    apply_fidelity, choose_strategy, strategy_brief, Fidelity,
     Chapter, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
-    NarrativeDevice, ScriptBlock, ScriptDoc, StoryBeat,
+    NarrativeDevice, PlotLoad, ScriptBlock, ScriptDoc, StoryBeat, Volatility,
 )
 from app.models.script import DocStatus
 from app.pipelines.base import PipelineError, chat_json, as_text, as_items
@@ -43,7 +43,8 @@ DEVICE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "required": ["block_id", "device_type", "effect", "source_text",
-                             "mechanism", "cultural_load", "intensity"],
+                             "mechanism", "cultural_load", "plot_load",
+                             "volatility", "intensity"],
                 "properties": {
                     "block_id": {"type": "string"},
                     "device_type": {"type": "string",
@@ -56,6 +57,10 @@ DEVICE_SCHEMA: dict[str, Any] = {
                     "punch": {"type": "string"},
                     "cultural_load": {"type": "string",
                                       "enum": [c.value for c in CulturalLoad]},
+                    "plot_load": {"type": "string",
+                                  "enum": [p.value for p in PlotLoad]},
+                    "volatility": {"type": "string",
+                                   "enum": [v.value for v in Volatility]},
                     "intensity": {"type": "integer"},
                     "depends_on": {"type": "array", "items": {"type": "string"}},
                 },
@@ -80,6 +85,26 @@ DEVICE_SYSTEM = """你是跨文化改编的叙事分析师。找出这一章里�
    low     机制通用，任何语言都能重造（反转、夸张、并置）
    medium  需要换一个目标文化的等价物（俗语、身份称谓的反差）
    high    深度绑定中文（谐音、拆字、方言、只有中文读者懂的典故）
+
+2b. plot_load —— 它承载多少情节。**决定能不能舍**：
+   none    纯修辞，舍了只损失趣味
+   flavor  塑造人物或氛围，舍了角色变薄
+   setup   伏笔，后文有回扣 —— 舍了读者不会觉得「少了个梗」，
+           只会觉得后面那段莫名其妙
+   pivot   情节转折本身就靠它，绝不可舍
+
+2c. volatility —— 它多久会过期：
+   evergreen 成语、经典典故，几百年不变
+   decade    一代人的共同记忆
+   years     几年热度的流行语
+   months    短命网络梗 —— 三年后源文化自己都没人懂了
+
+   高依赖 + 短命的梗**不值得考古**：目标读者既不懂源文化，
+   这梗在源文化里也快死了，等于为一个即将消失的东西付出理解成本。
+
+这三项一起决定处理策略，只看第一项会做出两类错判：
+高依赖的伏笔按依赖度该「舍了补偿」，可它是伏笔；
+高依赖的短命梗按依赖度该费力找等价物，可它不值那个力气。
 
 3. intensity 1–5 —— 这处丢了对读者体验的损失有多大。
 
@@ -110,12 +135,18 @@ class DeviceResult:
         }
 
 
-#: 文化依赖度 → 默认策略。high 的硬翻必然失效。
-_DEFAULT_STRATEGY = {
-    CulturalLoad.low: DeviceStrategy.preserve,
-    CulturalLoad.medium: DeviceStrategy.substitute,
-    CulturalLoad.high: DeviceStrategy.compensate,
+_FIDELITY_CN = {
+    Fidelity.preserve_world: "存真 · 体系原样保留，靠导读挂靠",
+    Fidelity.anchored: "折中 · 体系保留，关键处给目标文化锚点",
+    Fidelity.transplant_world: "移植 · 整体搬进目标圈层",
 }
+
+# 策略由三轴决定，不是只看文化依赖度。
+# 一维表会做出两类错判：高依赖的伏笔按依赖度该「舍了补偿」，
+# 可它是伏笔，舍了后文回扣就落空；高依赖的短命网络梗按依赖度该费力
+# 找等价物，可这梗在源文化里都快死了，值不上目标读者的理解成本。
+# choose_strategy 从一开始就写好了这套判断，只是抽取管线一直用的一维表，
+# 而 plot_load／volatility 两列从来没被填过 —— 于是三轴设计是死代码。
 
 
 def extract_devices(
@@ -204,6 +235,14 @@ def extract_devices(
             if not source_text or not mechanism:
                 continue
 
+            try:
+                plot = PlotLoad(item.get("plot_load") or "none")
+            except ValueError:
+                plot = PlotLoad.none
+            try:
+                vol = Volatility(item.get("volatility") or "evergreen")
+            except ValueError:
+                vol = Volatility.evergreen
             intensity = max(1, min(int(item.get("intensity") or 3), 5))
             # 查表命中的成语：文化依赖度与装置类型都是确定的，
             # 模型判低了就纠正 —— 判成 low 会让它走 preserve 直接照搬，
@@ -221,7 +260,12 @@ def extract_devices(
             db.add(NarrativeDevice(
                 id=new_id("nd"), chapter_id=chapter.id, block_id=bid,
                 device_type=dtype, effect=effect, cultural_load=load,
-                strategy=_DEFAULT_STRATEGY[load],
+                plot_load=plot, volatility=vol,
+                # **这里存的是「不带力度偏置」的中性默认值。**
+                # 力度是映射的属性（同一本书译到两个圈层可以选不同力度），
+                # 而装置是原文的属性 —— 两者不在一个层次上。
+                # 偏置在翻译时施加，那时才知道译到哪儿、导读讲过什么
+                strategy=choose_strategy(load, plot, vol),
                 source_text=source_text[:2000], mechanism=mechanism[:2000],
                 setup=as_text(item.get("setup")) or None,
                 punch=as_text(item.get("punch")) or None,
@@ -244,15 +288,25 @@ def extract_devices(
 
 
 def build_device_brief(
-    db: Session, block_ids: list[str], target_display: str
+    db: Session, block_ids: list[str], target_display: str, *,
+    fidelity: Fidelity = Fidelity.anchored,
+    explained: set[str] | None = None,
 ) -> str:
     """把该批文本涉及的装置整理成给写作者的说明。
 
     重写时附在 prompt 里 —— 让模型知道这一段哪里有笑点、
     机制是什么、该保留还是该换一个。
+
+    **力度偏置在这里施加，不在抽取时。** 装置是原文的属性，
+    力度是映射的属性：同一本书译到两个圈层可以选不同力度，
+    而装置表只有一份。存进库的是中性默认值，读出来时才叠加力度。
+
+    explained 是导读讲过的词条。讲过了就不必在正文里再解释一次 ——
+    不接这一步的话，导读写了也白写：读者读完导读，正文里又被解释一遍。
     """
     if not block_ids:
         return ""
+    explained = explained or set()
     rows = list(
         db.execute(
             select(NarrativeDevice).where(NarrativeDevice.block_id.in_(block_ids))
@@ -263,13 +317,20 @@ def build_device_brief(
         return ""
 
     lines = ["【叙事装置】这一段有以下效果必须在译文中重现，重现方式见「策略」："]
+    if fidelity is not Fidelity.anchored:
+        lines.append(
+            f"  （本书的转译力度是【{_FIDELITY_CN[fidelity]}】，"
+            f"下面的策略已按这一档调整过）")
     for d in rows[:12]:
-        plan = strategy_brief(d.strategy, target_display)
+        known = (d.source_text or "").strip() in explained
+        final = apply_fidelity(d.strategy, fidelity, explained=known)
+        plan = strategy_brief(final, target_display)
         lines.append(
             f"  · [{d.device_type.value}／{d.effect.value}／强度{d.intensity}] "
             f"「{d.source_text[:40]}」\n"
             f"    机制：{d.mechanism[:120]}\n"
             f"    策略：{plan}"
+            + ("　（导读里已经讲过，正文直接用原物即可）" if known else "")
         )
         if d.depends_on:
             lines.append(f"    依赖：{'、'.join(str(x) for x in d.depends_on[:3])}")

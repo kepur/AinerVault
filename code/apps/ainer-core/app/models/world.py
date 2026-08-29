@@ -119,6 +119,21 @@ class WorldProfile(Base, StdMixin):
 
     parent_id 支持继承：jp_showa_rural 只需覆写差异项，其余继承 jp_showa。
     v1 借 CreativePolicyStack.stack_json 存放 culture pack，无法按 axes 检索，此处独立成表。
+
+    ## 虚构圈层要有底座
+
+    三体的未来、修仙界、异世界大陆 —— 这些不是任何现实文化，
+    但**读者是现实里的人**。写给英语读者的科幻，语域是当代英语科幻的语域；
+    人物怎么打招呼、一里有多远、什么算礼貌，全都得有个现实依托，
+    否则读者除了不懂设定，连句子该怎么读都不知道。
+
+    所以虚构圈层必填 base_profile_id，指向一个现实圈层作**语言与常识的底座**。
+    自身的 axes/visual/language 只覆写虚构层特有的部分，其余落到底座上。
+
+    这里**不做多父继承**。两个父都定义 register 时该听谁的，
+    是个没有正确答案的问题，而错了会静默地把语域调错。
+    底座与本体管的是不同层次的事（怎么说话 vs 世界什么样），互不重叠，
+    所以合并规则是确定的：本体有就用本体的，没有就落到底座。
     """
 
     __tablename__ = "world_profiles"
@@ -132,6 +147,15 @@ class WorldProfile(Base, StdMixin):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     role: Mapped[ProfileRole] = mapped_column(default=ProfileRole.both, nullable=False)
     parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("world_profiles.id", ondelete="SET NULL")
+    )
+    #: 这是个虚构圈层（未来、修真界、异世界），不是任何现实文化
+    is_fictional: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    #: 虚构圈层的语言与常识底座，指向一个现实圈层。
+    #: **虚构圈层必填** —— 没有底座，读者不知道这些人该怎么说话
+    base_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("world_profiles.id", ondelete="SET NULL")
     )
 
@@ -174,6 +198,11 @@ class WorldTransform(Base, StdMixin):
     source_profile_id: Mapped[str] = mapped_column(
         ForeignKey("world_profiles.id", ondelete="RESTRICT"), nullable=False
     )
+    #: **额外的源圈层**。穿越小说的源文本本身就横跨两个圈层
+    #: （古代中国 + 当代中国），名物、称呼、语域在两边都不一样。
+    #: 主源圈层仍是 source_profile_id，这里放其余的。
+    #: 场景绑到具体哪一个，见 scenes.source_profile_id
+    extra_source_profiles_json: Mapped[list | None] = mapped_column(JSONB)
     target_profile_id: Mapped[str] = mapped_column(
         ForeignKey("world_profiles.id", ondelete="RESTRICT"), nullable=False
     )
@@ -181,7 +210,10 @@ class WorldTransform(Base, StdMixin):
     status: Mapped[TransformStatus] = mapped_column(
         default=TransformStatus.draft, nullable=False
     )
-    # {naming_policy, honorific_policy, lexicon_policy, preserve_original_for[], strictness}
+    # {naming_policy, honorific_policy, lexicon_policy, preserve_original_for[],
+    #  strictness, fidelity}
+    #  fidelity: preserve_world | anchored | transplant_world —— 转译力度，
+    #  给九档策略阶梯一个偏置。见 models/narrative_device.py::Fidelity
     policy_json: Mapped[dict | None] = mapped_column(JSONB)
     stats_json: Mapped[dict | None] = mapped_column(JSONB)
 
@@ -197,7 +229,9 @@ class WorldLexicon(Base, StdMixin):
 
     __tablename__ = "world_lexicon"
     __table_args__ = (
-        UniqueConstraint("transform_id", "source_term", name="uq_lexicon_transform_source"),
+        # 唯一键带上源圈层：穿越小说里同一个词在两个圈层各有一条
+        UniqueConstraint("transform_id", "source_term", "source_profile_id",
+                         name="uq_lexicon_transform_source"),
         Index("ix_world_lexicon_canonical", "transform_id", "canonical_key"),
         Index("ix_world_lexicon_status", "transform_id", "status"),
         Index("ix_world_lexicon_category", "transform_id", "category"),
@@ -217,6 +251,23 @@ class WorldLexicon(Base, StdMixin):
     # ★ 译文中出现即违规。闸二的执行依据。
     forbidden_targets: Mapped[list | None] = mapped_column(JSONB)
 
+    #: 这一条属于哪个**源圈层**。空 = 通用，全书适用。
+    #:
+    #: 穿越小说一本书横跨两个圈层：「先生」在古代场是老师，
+    #: 在现代场是 Mr.。同一个源词在两个圈层里译法不同，
+    #: 靠 (transform, source_term) 唯一是分不开的 —— 后写的会覆盖先写的，
+    #: 而覆盖掉哪一个取决于挖掘顺序，两次跑可能不一样。
+    #: 查词表时按当前场景所属的圈层消歧，查不到再回落到通用条目
+    source_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("world_profiles.id", ondelete="SET NULL")
+    )
+    #: 目标文化里**没有对应物**，只能音译或造词。
+    #: 这是词条的固有属性，不是某次导读的推断 —— 所以存在这里。
+    #: 导读要讲的正是这些：有对应物的词写进导读是浪费读者的耐心，
+    #: 而耐心是导读最稀缺的资源
+    no_equivalent: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     status: Mapped[ReviewStatus] = mapped_column(default=ReviewStatus.candidate, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)

@@ -19,10 +19,11 @@ from app.models.gen import Asset, AssetKind, AssetSource, GenTask, TaskStatus
 from app.models.meme import MemeEntry, MemeRegister, MemeRendering
 from app.models.narrative import StoryBeat, StyleHint
 from app.models.narrative_device import (
-    BackTranslationCheck, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
+    BackTranslationCheck, CulturalLoad, DeviceEffect, DeviceStrategy, Fidelity, apply_fidelity, DeviceType,
     NarrativeDevice, PlotLoad, STRATEGY_BRIEF, Volatility, choose_strategy,
     strategy_brief,
 )
+from app.models.primer import PrimerKind, WorldPrimer
 from app.models.performance import (
     Facing, ShotPerformance, SpeechRole, StagePosition,
 )
@@ -82,7 +83,8 @@ __all__ = [
     "WorldEntity", "EntityChapterState", "EntityKind",
     "StoryBeat", "StyleHint",
     "NarrativeDevice", "BackTranslationCheck",
-    "DeviceType", "DeviceEffect", "CulturalLoad", "DeviceStrategy",
+    "DeviceType", "DeviceEffect", "CulturalLoad", "DeviceStrategy", "Fidelity", "apply_fidelity",
+    "PrimerKind", "WorldPrimer",
     "ShotPlan", "Shot", "FrameSpec", "AudioSpec", "FrameRole", "AudioKind", "SpecStatus",
     "GenTask", "Asset", "TaskStatus", "AssetKind", "AssetSource",
     "CapabilityEndpoint", "CapabilityRoute", "PromptTemplate", "User",

@@ -95,6 +95,10 @@ class Scene(Base, StdMixin):
     location_entity_id: Mapped[str | None] = mapped_column(String(32))
     location_text: Mapped[str | None] = mapped_column(String(256))
     weather: Mapped[str | None] = mapped_column(String(64))
+    #: 这一场属于哪个**源圈层**。穿越小说里前一场在古代、后一场在现代，
+    #: 「先生」「大人」「一里」在两边不是一个意思。
+    #: 空 = 用映射的主源圈层
+    source_profile_id: Mapped[str | None] = mapped_column(String(32), index=True)
     mood: Mapped[str | None] = mapped_column(String(64))
     summary: Mapped[str | None] = mapped_column(Text)
     # 场景级共享素材 —— 同场景所有镜头复用，省钱且保证空间一致
