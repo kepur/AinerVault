@@ -11,10 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import AudioKind, AudioSpec, Scene, Shot, ShotPlan, WorldTransform
+from app.models import (
+    AudioKind, AudioSpec, ReviewStatus, Scene, Shot, ShotPlan, VoiceCasting,
+    WorldEntity, WorldProfile, WorldTransform,
+)
 from app.pipelines import audio_compose as ac
-from app.pipelines import delivery
+from app.pipelines import casting, delivery
 from app.pipelines.base import PipelineError
+from app.worldview.voice import VOCAB, VoiceSpec
 
 router = APIRouter(prefix="/api/v2", tags=["audio"])
 
@@ -152,3 +156,132 @@ def get_manifest(
         db, _plan(db, plan_id), projection=projection,  # type: ignore[arg-type]
         include_subtitles=subtitles,
     )
+
+
+# ── 配音 ──────────────────────────────────────────────────────────────────────
+
+class CastIn(BaseModel):
+    profile_id: str
+    entity_ids: list[str] = Field(default_factory=list)
+    force: bool = False
+
+
+@router.post("/novels/{novel_id}/casting:run")
+def run_casting(novel_id: str, body: CastIn,
+                db: Session = Depends(get_db)) -> dict:
+    """给全书说过话的角色定音色。
+
+    整本一起配 —— 可辨识是角色之间的关系，一次配一个没法保证。
+    """
+    profile = db.get(WorldProfile, body.profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    try:
+        return casting.cast_voices(
+            db, novel_id, profile,
+            entity_ids=body.entity_ids or None, force=body.force,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/novels/{novel_id}/casting:derive-epochs")
+def derive_epoch_voices(novel_id: str, profile_id: str = Query(...),
+                        db: Session = Depends(get_db)) -> dict:
+    """按素材时期推出各期音色。不调模型 —— 年龄对嗓子的影响是规律的。"""
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    try:
+        return casting.cast_epoch_voices(db, novel_id, profile)
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/novels/{novel_id}/casting")
+def get_casting(novel_id: str, profile_id: str = Query(...),
+                db: Session = Depends(get_db)) -> dict:
+    """配音表 + 体检。撞声、声线漂移、缺项、没配到的说话人。"""
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+
+    rows = list(db.execute(
+        select(VoiceCasting)
+        .where(VoiceCasting.world_profile_id == profile_id)
+        .order_by(VoiceCasting.cast_key, VoiceCasting.epoch_key)
+    ).scalars())
+    ents = {
+        e.id: e for e in db.execute(
+            select(WorldEntity).where(WorldEntity.novel_id == novel_id)
+        ).scalars()
+    }
+    lines, _co, _basis = casting.speaking_roles(db, novel_id)
+
+    items = []
+    for r in rows:
+        spec = VoiceSpec.from_json(r.timbre_json)
+        ent = ents.get(r.cast_key)
+        items.append({
+            "id": r.id, "cast_key": r.cast_key, "epoch_key": r.epoch_key,
+            "name": "旁白" if r.cast_key == casting.NARRATOR else (
+                ent.display_name if ent else r.cast_key),
+            "lines": lines.get(r.cast_key, 0),
+            "timbre": spec.as_dict(),
+            "describe": spec.describe(),
+            "speech_habits": r.speech_habits,
+            "rationale": r.rationale,
+            "voice_ref": r.voice_ref, "voice_engine": r.voice_engine,
+            "tts_params": casting.casting_params(r),
+            "status": r.status.value, "locked": r.locked,
+            "edited_by_human": r.edited_by_human,
+            "model": r.model,
+        })
+    items.sort(key=lambda i: (-i["lines"], i["cast_key"], i["epoch_key"]))
+    return {
+        "profile": {"id": profile.id, "display_name": profile.display_name},
+        "items": items,
+        "audit": casting.audit_casting(db, novel_id, profile),
+        "vocab": {k: list(v) for k, v in VOCAB.items()},
+    }
+
+
+class CastPatch(BaseModel):
+    timbre: dict | None = None
+    speech_habits: str | None = None
+    voice_ref: str | None = None
+    voice_engine: str | None = None
+    status: str | None = None
+    locked: bool | None = None
+
+
+@router.patch("/voice-castings/{casting_id}")
+def patch_casting(casting_id: str, body: CastPatch,
+                  db: Session = Depends(get_db)) -> dict:
+    """人工改音色。改过的标记 edited_by_human，重跑配音不覆盖。"""
+    row = db.get(VoiceCasting, casting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="voice casting not found")
+    if body.timbre is not None:
+        spec = VoiceSpec.from_json({**(row.timbre_json or {}), **body.timbre})
+        bad = spec.off_vocab()
+        if bad:
+            # 术语表是白名单。放行一个越界取值，撞声检测就再也比不了它
+            raise HTTPException(status_code=422,
+                                detail=f"取值不在术语表里：{'、'.join(bad)}")
+        row.timbre_json = spec.as_dict()
+        row.edited_by_human = True
+    for f in ("speech_habits", "voice_ref", "voice_engine"):
+        v = getattr(body, f)
+        if v is not None:
+            setattr(row, f, v)
+            row.edited_by_human = True
+    if body.status:
+        try:
+            row.status = ReviewStatus(body.status)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="unknown status") from exc
+    if body.locked is not None:
+        row.locked = body.locked
+    db.flush()
+    return {"ok": True, "id": row.id, "edited_by_human": row.edited_by_human}

@@ -24,6 +24,7 @@ from app.models import (
     Chapter, ScriptBlock, SpecStatus, TranslationBlock, WorldEntity, WorldProfile,
     WorldTransform,
 )
+from app.pipelines import casting
 from app.pipelines.base import PipelineError
 
 log = logging.getLogger(__name__)
@@ -124,9 +125,16 @@ def compile_audiobook(
                 ),
                 voices.get(f"voice.{entity.canonical_key.split('.', 1)[-1]}"),
             )
-        if pair is None:
-            pair = voices.get(NARRATOR_KEY)
-        if pair is None and is_dialogue:
+        # 音色权威是配音表 —— 有声书与分镜必须查同一张表，
+        # 否则同一个角色在两条产线上是两个嗓子
+        cast_row = casting.voice_for(
+            db, block.speaker_entity_id if is_dialogue else casting.NARRATOR,
+            profile.id,
+        )
+        if not is_dialogue:
+            pair = pair or voices.get(NARRATOR_KEY)
+        elif pair is None and cast_row is None:
+            # 对白不借旁白的嗓子。见 audio_compose 里同一处的说明
             label = entity.display_name if entity else (block.speaker_tag or "未知")
             if label not in result.missing_voice:
                 result.missing_voice.append(label)
@@ -142,6 +150,11 @@ def compile_audiobook(
                 params["emotion"] = str(structured["emotional_baseline"])
             if var.ref_asset_ids:
                 params["voice_reference_asset_ids"] = list(var.ref_asset_ids)
+        if cast_row is not None:
+            params.update(casting.casting_params(cast_row))
+            if cast_row.voice_asset_id and not params.get(
+                    "voice_reference_asset_ids"):
+                params["voice_reference_asset_ids"] = [cast_row.voice_asset_id]
 
         row = existing.get((block.id, kind))
         if row is None:

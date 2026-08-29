@@ -129,27 +129,43 @@ class VoiceCasting(Base, StdMixin):
 
     __tablename__ = "voice_castings"
     __table_args__ = (
-        UniqueConstraint("entity_id", "world_profile_id", "epoch_key",
-                         name="uq_voice_casting_entity_profile_epoch"),
+        UniqueConstraint("cast_key", "world_profile_id", "epoch_key",
+                         name="uq_voice_casting_key_profile_epoch"),
     )
 
-    entity_id: Mapped[str] = mapped_column(
-        ForeignKey("world_entities.id", ondelete="CASCADE"), nullable=False
+    #: 配音对象的标识。角色是它的 entity_id，旁白是 __narrator__。
+    #: **不能直接用 entity_id 当键** —— 旁白没有实体，
+    #: 而它恰恰是全片出现最多的那把嗓子，必须与主要角色一样有一行、
+    #: 一样参与撞声检测。留空的 entity_id 也做不成唯一键：
+    #: Postgres 里 NULL 各不相等，两行旁白能同时存在。
+    cast_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("world_entities.id", ondelete="CASCADE")
     )
     world_profile_id: Mapped[str] = mapped_column(
         ForeignKey("world_profiles.id", ondelete="CASCADE"), nullable=False
     )
     epoch_key: Mapped[str] = mapped_column(String(64), default="baseline",
                                            nullable=False)
-    #: 音色的结构化描述：性别、年龄感、音高、音质、口音、语速基线
+    #: 音色的结构化描述，取值受 worldview.voice 的术语表约束。
+    #: identity 五项（声部/音区/音质/共鸣/口音）跨时期恒定，
+    #: epoch 四项（年龄感/语速/力度/状态）随时期变 —— 与素材时期同一套办法
     timbre_json: Mapped[dict | None] = mapped_column(JSONB)
-    #: 供 TTS 使用的音色 id 或参考音频。中间层据此选声
+    #: 某个引擎上的落地：voice id 或参考音频。**不是权威** ——
+    #: 权威是 timbre_json 的声学描述。存了 voice_id 当权威就锁死在一家引擎上，
+    #: 换 TTS 时全书要重配，等于换了一套演员
     voice_ref: Mapped[str | None] = mapped_column(String(128))
+    #: 这条 voice_ref 属于哪个引擎。换引擎时据此判断要不要重新落地
+    voice_engine: Mapped[str | None] = mapped_column(String(64))
     voice_asset_id: Mapped[str | None] = mapped_column(String(32))
     #: 该角色的语言习惯：口头禅、句式偏好、常用称呼
     speech_habits: Mapped[str | None] = mapped_column(Text)
     rationale: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[ReviewStatus] = mapped_column(
         default=ReviewStatus.candidate, nullable=False
+    )
+    edited_by_human: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
     )
     locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

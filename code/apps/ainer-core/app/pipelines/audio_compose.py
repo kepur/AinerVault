@@ -27,11 +27,12 @@ from app.models import (
 )
 from app.models.script import BlockType
 from app.worldview import resolve
+from app.pipelines import casting
 from app.pipelines.base import PipelineError
 
 log = logging.getLogger(__name__)
 
-#: 旁白使用的 voice 素材 key。找不到时回落到任意可用音色。
+#: 旁白使用的 voice 素材 key。
 NARRATOR_KEY = "voice.narrator"
 
 
@@ -174,11 +175,22 @@ def compile_audio(
                 db.get(WorldEntity, block.speaker_entity_id)
                 if block.speaker_entity_id else None
             )
+            # 音色的权威是配音表，不是素材。素材只提供参考音频与既有 voice_id ——
+            # 前者决定「是谁的嗓子」，后者只是某个引擎上的一次落地。
+            cast_row = casting.voice_for(
+                db,
+                block.speaker_entity_id if is_dialogue else casting.NARRATOR,
+                profile.id,
+            )
             pair = _voice_for_entity(entity, variants) if is_dialogue else None
-            if pair is None:
-                pair = variants.get(NARRATOR_KEY)
-            if pair is None and is_dialogue:
-                label = entity.display_name if entity else (block.speaker_tag or "未知说话人")
+            if not is_dialogue:
+                pair = pair or variants.get(NARRATOR_KEY)
+            elif pair is None and cast_row is None:
+                # **对白不回落到旁白音色。** 借旁白的嗓子说台词，
+                # 数据上看不出问题，听起来却是旁白在自问自答 ——
+                # 这种错比「没有音色」更难发现。宁可缺，也不要错。
+                label = (entity.display_name if entity
+                         else (block.speaker_tag or "未知说话人"))
                 if label not in result.missing_voice:
                     result.missing_voice.append(label)
 
@@ -192,6 +204,11 @@ def compile_audio(
                     params["voice_id"] = str(vid)
                 voice_ref_ids = list(var.ref_asset_ids or [])
                 params["voice_asset_key"] = spec.canonical_key
+            if cast_row is not None:
+                # 配音表后写入，覆盖素材上的旧值：它才是权威
+                params.update(casting.casting_params(cast_row))
+                if cast_row.voice_asset_id and not voice_ref_ids:
+                    voice_ref_ids = [cast_row.voice_asset_id]
             if voice_ref_ids:
                 params["voice_reference_asset_ids"] = voice_ref_ids
 

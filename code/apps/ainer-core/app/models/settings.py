@@ -52,6 +52,9 @@ DEFAULT_TIER: dict[str, QualityTier] = {
     "memes": QualityTier.premium,
     "translate": QualityTier.premium,
     "script": QualityTier.premium,
+    # 配音：撞声由规则兜着，但「这个人该是什么嗓子」没有任何规则能查 ——
+    # 配错了不报错，只是整本书都听着别扭
+    "casting": QualityTier.premium,
     # 终审：这一档的结论直接决定要不要返工
     "review": QualityTier.critical,
     "culture_review": QualityTier.critical,

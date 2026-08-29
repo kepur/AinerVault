@@ -332,6 +332,7 @@ const GROUPS = [
     {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
     {id:"staging",  ico:"🎭", name:"分镜调度", sub:"站位 · 朝向 · 视线 · 表情 · 动作"},
     {id:"crew",     ico:"🎥", name:"制作单", sub:"摄影 · 灯光 · 美术 · 声音 · 剪辑 · 场记"},
+    {id:"casting",  ico:"🎙", name:"配音表", sub:"音色绑定 · 撞声 · 时期演化"},
     {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
   ]},
   {id:"g-sys", name:"系统", pages:[
@@ -2170,6 +2171,159 @@ const Crew = {
   },
 };
 
+// ───────────────────────── 配音表 ─────────────────────────
+const VF_CN = {voice_type:"声部", pitch:"音区", texture:"音质", resonance:"共鸣",
+               accent:"口音", age_feel:"年龄感", tempo:"语速", energy:"力度",
+               condition:"状态"};
+const VF_ID = ["voice_type","pitch","texture","resonance","accent"];
+const VF_EP = ["age_feel","tempo","energy","condition"];
+
+const Casting = {
+  async render(v) {
+    if (!State.novelId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一本小说</div></div>`;
+      return;
+    }
+    const transforms = await api("GET", `/novels/${State.novelId}/transforms`)
+      .catch(()=>[]);
+    const tf = transforms.find(t=>t.id===State.transformId) || transforms[0];
+    const pid = tf && tf.target && tf.target.id;
+    const d = pid ? await api(
+      "GET", `/novels/${State.novelId}/casting?profile_id=${pid}`).catch(()=>null)
+      : null;
+    const a = d && d.audit;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>配音表
+          ${d?`<span class="sub mono" style="color:var(--muted)">${
+            a.cast}/${a.speaking_roles+1} 已配</span>`:""}
+          ${a&&a.epoch_rows?`<span class="tag t-info">${a.epoch_rows} 条时期音色</span>`:""}
+          ${a?(a.collisions.length
+             ? `<span class="tag t-bad">${a.collisions.length} 处撞声</span>`
+             : `<span class="tag t-ok">音色可辨</span>`):""}
+        </h2>
+        <p class="hint">全片同一个角色必须是同一个嗓子 —— 换了观众会当成换了人。<br>
+          <b>整本一起配，不是遇到一个配一个</b>：可辨识是角色之间的关系，
+          不是单个角色的属性。一次配一个的话每一个单看都合格，
+          放在一起五个人同一把嗓子。<br>
+          存的是<b>声学描述而不是某家引擎的 voice_id</b> ——
+          存了 voice_id 当权威，换 TTS 时全书要重配，等于换了一套演员。
+          落到 qwen3-tts 或云 API 是最后一步，描述本身不动。</p>
+        <div class="row">
+          <button class="btn pri" onclick="Casting.run(this)" ${pid?"":"disabled"}
+            >整本配音</button>
+          <button class="btn" onclick="Casting.epochs(this)" ${pid?"":"disabled"}
+            >按时期推导</button>
+          <button class="btn" onclick="Casting.run(this,true)" ${pid?"":"disabled"}
+            >重配（不覆盖已锁定）</button>
+          ${tf?`<span class="sub mono" style="color:var(--muted);font-size:12px">
+            ${h(tf.target.display_name)}</span>`:`<span class="sub"
+            style="color:var(--warn);font-size:12px">先在「映射与词表」建一个映射</span>`}
+        </div>
+      </div>
+
+      ${a && (a.collisions.length || a.identity_drift.length
+              || a.uncast.length || a.incomplete.length || a.not_checked.length) ? `
+      <div class="card">
+        <h2>体检</h2>
+        ${a.collisions.length?`<p class="hint" style="margin-bottom:6px">
+          <b>撞声</b> —— 同场说过话的角色之间用严格阈值，其余用宽阈值。
+          全书两两互斥既做不到也没必要：第三章的店小二和第二十章的船夫
+          永远不会同框。</p>`:""}
+        ${a.collisions.map(c=>`
+          <div class="gap" style="margin-bottom:7px">
+            <div class="gh">
+              <span class="sev sev-${c.scope==="same_scene"?5:2}"
+                >${c.scope==="same_scene"?"同场":"全书"}</span>
+              <b style="color:var(--ink)">${h(c.left)} × ${h(c.right)}</b>
+              <span class="tag t-mute">${c.score}/${c.threshold}</span>
+              ${c.where?`<span class="tag t-info">${h(c.where)}</span>`:""}
+            </div>
+            <div class="eff">${h(c.detail)}</div>
+          </div>`).join("")}
+        ${a.identity_drift.map(i=>`
+          <div class="gap" style="margin-bottom:7px">
+            <div class="gh"><span class="sev sev-4">声线漂移</span>
+              <b style="color:var(--ink)">${h(i.entity)}</b></div>
+            <div class="eff">${h(i.detail)}</div>
+          </div>`).join("")}
+        ${a.incomplete.length?`<div class="sub" style="font-size:12px;margin-top:6px">
+          <b style="color:var(--warn)">取值有问题</b>：${a.incomplete.map(x=>
+            `${h(x.entity)}（${x.problems.map(h).join("、")}）`).join("　")}</div>`:""}
+        ${a.uncast.length?`<div class="sub" style="font-size:12px;margin-top:6px">
+          <b style="color:var(--warn)">说了话但没配音色</b>：${a.uncast.map(h).join("、")}
+          <br>对白<b>不会</b>回落到旁白的嗓子 —— 借旁白的嗓子说台词，
+          数据上看不出问题，听起来却是旁白在自问自答。宁可缺，也不要错。</div>`:""}
+        ${a.not_checked.length?`<div class="sub"
+          style="color:var(--warn);font-size:12px;margin-top:8px">
+          <b>以下没能检查</b> —— 报「0 处问题」会让人以为查过了：<br>
+          ${a.not_checked.map(h).join("<br>")}</div>`:""}
+      </div>` : ""}
+
+      ${d && d.items.length ? `<div class="card">
+        <h2>音色 <span class="sub mono" style="color:var(--muted)">
+          声部/音区/音质/共鸣/口音跨时期恒定，年龄感/语速/力度/状态随时期变</span></h2>
+        <table><thead><tr>
+          <th>角色</th><th>时期</th><th>台词</th>
+          ${VF_ID.map(f=>`<th>${VF_CN[f]}</th>`).join("")}
+          ${VF_EP.map(f=>`<th>${VF_CN[f]}</th>`).join("")}
+          <th>TTS</th><th></th>
+        </tr></thead><tbody>
+        ${d.items.map(i=>`<tr>
+          <td><b>${h(i.name)}</b></td>
+          <td><span class="tag ${i.epoch_key==="baseline"?"t-mute":"t-info"}"
+            >${h(i.epoch_key)}</span></td>
+          <td class="mono" style="color:var(--muted)">${i.lines||""}</td>
+          ${VF_ID.map(f=>`<td>${h(i.timbre[f]||"—")}</td>`).join("")}
+          ${VF_EP.map(f=>`<td class="sub">${h(i.timbre[f]||"—")}</td>`).join("")}
+          <td class="mono" style="font-size:11px;color:var(--muted)">
+            ${i.tts_params.gender||""} ${
+            i.tts_params.pitch_shift>0?"+":""}${i.tts_params.pitch_shift??""} ×${
+            i.tts_params.rate??""}</td>
+          <td>${i.locked?`<span class="tag t-ok">锁定</span>`:
+              i.edited_by_human?`<span class="tag t-info">已改</span>`:""}</td>
+        </tr>
+        ${i.rationale||i.speech_habits?`<tr><td></td><td colspan="12"
+          class="sub" style="font-size:12px;color:var(--body);padding-top:0">
+          ${i.speech_habits?`<b>说话习惯</b> ${h(i.speech_habits)}　`:""}
+          ${i.rationale?`<span style="color:var(--muted)">${h(i.rationale)}</span>`:""}
+        </td></tr>`:""}`).join("")}
+        </tbody></table>
+      </div>` : `<div class="card"><div class="empty">${
+        pid?"还没有配音表":"还没有世界观映射"}</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async _profile() {
+    const ts = await api("GET", `/novels/${State.novelId}/transforms`);
+    const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+    if (!tf) throw new Error("还没有世界观映射");
+    return tf.target.id;
+  },
+  async run(btn, force) {
+    await run(btn, async () => {
+      const r = await api("POST", `/novels/${State.novelId}/casting:run`,
+        {profile_id: await this._profile(), force: !!force});
+      logOk(`配音 ${r.cast} 个　沿用 ${r.reused}　锁定跳过 ${r.skipped_locked}`);
+      (r.resolved||[]).forEach(x => log(`规则消解：${x.detail}`, "warn"));
+      (r.collisions||[]).forEach(x => logWarn(`仍撞声：${x.detail}`));
+      (r.invalid||[]).forEach(x => logWarn(
+        `${x.entity}：${[...(x.off_vocab||[]),...(x.missing||[])].join("、")}`));
+      App.refresh();
+    }, "配音中");
+  },
+  async epochs(btn) {
+    await run(btn, async () => {
+      const pid = await this._profile();
+      const r = await api("POST",
+        `/novels/${State.novelId}/casting:derive-epochs?profile_id=${pid}`, {});
+      logOk(`时期音色 ${r.derived} 条（共 ${r.epochs} 期），不调模型`);
+      App.refresh();
+    }, "推导中");
+  },
+};
+
 // ───────────────────────── 任务 ─────────────────────────
 const Tasks = {
   async render(v) {
@@ -2283,7 +2437,7 @@ const App = {
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
-               crew:Crew,
+               crew:Crew, casting:Casting,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {
