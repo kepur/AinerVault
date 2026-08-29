@@ -112,3 +112,80 @@ class TestNoRegression:
                 if pat.search(line):
                     bad.append(f"{p.name}:{i}")
         assert not bad, "这些地方仍在假设模型返回字符串：" + "、".join(bad)
+
+
+# ── 两条路径都要有修复轮 ──────────────────────────────────────────────────────
+
+class TestRepairRoundParity:
+    def test_both_paths_have_a_repair_round(self):
+        """text.chat 与 text.translate 都得有非 JSON 的修复轮。
+
+        端到端第十轮：ch1 翻译时模型回了非 JSON，整章失败，
+        后面的违规审查、回译、文化审查全部级联挂掉 —— 一个根因四处失败。
+        而 text.chat 早就有修复轮，只是 text.translate 没有：
+        **同一个问题只在一条路径上防住了**。
+        """
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "capability" / "dialects.py").read_text(encoding="utf-8")
+        chat = src[src.index("def _run_chat"):src.index("_TRANSLATE_RULES")]
+        trans = src[src.index("def _translate_batch"):]
+        for name, body in (("_run_chat", chat), ("_translate_batch", trans)):
+            assert "修复轮" in body, f"{name} 缺少非 JSON 的修复轮"
+            assert "temperature=0.0" in body, f"{name} 的修复轮该把温度压到 0"
+
+
+# ── 从模型回复里抠 JSON ───────────────────────────────────────────────────────
+
+from app.capability.dialects import _balanced_spans, _loads
+
+
+class TestJsonExtraction:
+    """推理模型常把整段思考写在 JSON 前后，思考里也有括号。
+
+    原来的 find("{") → rfind("}") 假设整段里只有一对最外层括号，
+    遇到这种就把两边的杂物一起圈进来 —— 端到端第十一轮
+    ⑥命名两轮都没抠出 JSON，就是这么failed的。
+    """
+
+    @pytest.mark.parametrize("raw,expect", [
+        ('{"a":1}', {"a": 1}),
+        ('```json\n{"a":1}\n```', {"a": 1}),
+        ('让我分析一下。\n{"a":1}\n以上。', {"a": 1}),
+        ('[{"a":1}]', [{"a": 1}]),
+    ])
+    def test_basic_shapes(self, raw, expect):
+        assert _loads(raw) == expect
+
+    def test_strips_reasoning_tags(self):
+        """<think> 里的内容常含大括号，不剥掉会从思考里开始找。"""
+        assert _loads("<think>先看 {这里} 再看</think>{\"a\":1}") == {"a": 1}
+
+    def test_unclosed_bracket_in_reasoning(self):
+        """未闭合的开括号会把后面真正的 JSON 一起吞掉。
+
+        只有从**每个**开括号位置各扫一次才找得回来 ——
+        只认最外层的写法在这里必然失败。
+        """
+        assert _loads("思考：{不完整\n实际答案：{\"a\":1}") == {"a": 1}
+
+    def test_braces_inside_strings(self):
+        """字符串里的括号不算数，否则会在错误的位置收尾。"""
+        assert _loads('{"a":"}"}') == {"a": "}"}
+
+    def test_trailing_braces_after_json(self):
+        assert _loads('{"a":1} 补充说明 {备注}') == {"a": 1}
+
+    def test_picks_the_longest_candidate(self):
+        """嵌套结构里最外层那个才是完整答案。"""
+        got = _loads('分析：{想法} 结果：{"groups":[{"x":1}]} 完毕')
+        assert got == {"groups": [{"x": 1}]}
+
+    def test_raises_when_no_json(self):
+        with pytest.raises(ValueError):
+            _loads("没有任何 JSON")
+
+    def test_spans_are_longest_first(self):
+        spans = _balanced_spans('{"a":{"b":1}}')
+        assert spans and spans[0] == (0, 13)

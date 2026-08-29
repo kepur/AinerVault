@@ -51,24 +51,74 @@ _MAX_TOKENS_CEILING = 16384
 
 # ── JSON 抽取 ────────────────────────────────────────────────────────────────
 
+#: 推理模型把思考包在这类标签里。内容常含大括号，
+#: 不剥掉会让括号扫描从思考里开始找。
+_THINK = re.compile(
+    r"<(think|thinking|reasoning|scratchpad)>.*?</\1>", re.S | re.I
+)
+
+
+def _balanced_spans(txt: str, limit: int = 40) -> list[tuple[int, int]]:
+    """扫出所有括号平衡的 JSON 候选片段，长的优先。
+
+    比 find/rfind 稳：那种切法假设整段里只有一对最外层括号，
+    而推理模型常把思考写在 JSON 前后，思考里也有括号 ——
+    从第一个 `{` 切到最后一个 `}` 就把两边的杂物一起圈进来了。
+
+    **从每个开括号位置各扫一次**，而不是只认最外层：
+    「思考：{不完整 …… 实际答案：{"a":1}」里那个未闭合的开括号
+    会把后面真正的 JSON 一起吞掉，只有逐位置试才找得回来。
+    字符串内的括号要跳过，否则 {"a": "}"} 会在错误的位置收尾。
+    """
+    spans: list[tuple[int, int]] = []
+    for opener, closer in (("{", "}"), ("[", "]")):
+        starts = [i for i, ch in enumerate(txt) if ch == opener][:limit]
+        for start in starts:
+            depth = 0
+            in_str = False
+            esc = False
+            for i in range(start, len(txt)):
+                ch = txt[i]
+                if esc:
+                    esc = False
+                    continue
+                if in_str:
+                    if ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        spans.append((start, i + 1))
+                        break
+    # 长的优先：嵌套结构里最外层那个才是完整答案
+    spans.sort(key=lambda sp: sp[0] - sp[1])
+    return spans[:limit]
+
+
 def _loads(content: str) -> Any:
     """从模型回复里抠出 JSON。
 
-    即使开了 json_object 模式，模型仍可能裹 ``` 围栏或在前面加一句废话，
-    所以围栏剥离和首尾括号定位都得留着。
+    即使开了 json_object 模式，模型仍可能裹 ``` 围栏、在前面加一句废话、
+    或者（推理模型尤其如此）把整段思考写在 JSON 前后。
     """
-    txt = _FENCE.sub("", content or "").strip()
+    txt = _THINK.sub("", content or "")
+    txt = _FENCE.sub("", txt).strip()
     try:
         return json.loads(txt)
     except json.JSONDecodeError:
         pass
-    for opener, closer in (("{", "}"), ("[", "]")):
-        i, j = txt.find(opener), txt.rfind(closer)
-        if i != -1 and j > i:
-            try:
-                return json.loads(txt[i : j + 1])
-            except json.JSONDecodeError:
-                continue
+    for i, j in _balanced_spans(txt):
+        try:
+            return json.loads(txt[i:j])
+        except json.JSONDecodeError:
+            continue
     raise ValueError("回复中找不到可解析的 JSON")
 
 
@@ -361,16 +411,36 @@ def _translate_batch(call: _Caller, system: str, batch: list[dict],
          **({"speaker": s["speaker"]} if s.get("speaker") else {})}
         for s in batch
     ]
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps({"segments": payload},
+                                               ensure_ascii=False)},
+    ]
+    content = call(messages, temperature=0.3, max_tokens=8192, json_mode=True)
     try:
-        content = call(
-            [{"role": "system", "content": system},
-             {"role": "user", "content": json.dumps({"segments": payload},
-                                                    ensure_ascii=False)}],
-            temperature=0.3, max_tokens=8192, json_mode=True,
-        )
         data = _loads(content)
-    except ValueError as exc:
-        raise CapabilityError(CapErrorCode.BAD_RESPONSE, f"译文非 JSON: {exc}") from exc
+    except ValueError:
+        # 修复轮。text.chat 一直有这一轮，text.translate 没有 ——
+        # 同一个问题只在一条路径上防住了，于是翻译遇到非 JSON 就整章失败，
+        # 而后面的审查、回译、文化审查全部级联挂掉。
+        # 温度压到 0：这一轮要的是听话，不是创造。
+        log.warning("译文非 JSON，进入修复轮")
+        fixed = call(
+            messages + [
+                {"role": "assistant", "content": content[:4000]},
+                {"role": "user", "content": "上面的回复不是合法 JSON。"
+                                            "只重新输出 JSON 本身，"
+                                            "不要围栏、不要任何解释文字。"},
+            ],
+            temperature=0.0, max_tokens=8192, json_mode=True,
+        )
+        try:
+            data = _loads(fixed)
+        except ValueError as exc:
+            raise CapabilityError(
+                CapErrorCode.BAD_RESPONSE, f"两轮均未取得合法译文 JSON: {exc}",
+                retryable=False,
+            ) from exc
     for item in (data.get("segments") if isinstance(data, dict) else data) or []:
         if not isinstance(item, dict):
             continue
