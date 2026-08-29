@@ -209,3 +209,44 @@ class TestHybridSourceWorlds:
         rows = [self._row("先生", "wp_ancient", "teacher"),
                 self._row("先生", "wp_modern", "mister")]
         assert _disambiguate(rows, None) == []
+
+
+class TestTransliterationNaming:
+    """存真档要音译，判反了会让仙侠主角叫 Ethan Ashford。
+
+    命名校验器原本对英语目标一律拒绝拼音片段 —— 那条规则是为
+    「武侠→帝俄」写的（沈砚不该变成 Shen Yan）。但存真档恰恰要拼音：
+    英语仙侠读者期待的就是 Lin Zhao。
+    """
+
+    def test_pinyin_pattern_accepts_transliteration(self):
+        from app.worldview.naming import validate_localized_name as v
+        assert v("Lin Zhao", "en-US", "pinyin")[0] is True
+        assert v("Su Wan", "en-US", "pinyin")[0] is True
+
+    def test_pinyin_pattern_rejects_a_local_name(self):
+        """给这个世界里的人配英美名字，读者会觉得他们不属于这个世界。"""
+        from app.worldview.naming import validate_localized_name as v
+        ok, why = v("Ethan Ashford", "en-US", "pinyin")
+        assert ok is False and "音译" in why
+
+    def test_normal_pattern_still_rejects_pinyin(self):
+        """移植档不变：沈砚不该译成 Shen Yan。"""
+        from app.worldview.naming import validate_localized_name as v
+        assert v("Lin Zhao", "en-US", "given_surname")[0] is False
+        assert v("Alan Redesdale", "en-US", "given_surname")[0] is True
+
+    @pytest.mark.parametrize("pattern,want", [
+        ("pinyin", True), ("romaji", True), ("hepburn", True),
+        ("given_surname", False), ("family_given", False), (None, False),
+    ])
+    def test_which_patterns_want_transliteration(self, pattern, want):
+        from app.worldview.naming import wants_transliteration
+        assert wants_transliteration(pattern) is want
+
+    def test_prompt_matches_the_pattern(self):
+        """规则层只会把不合规范的产出全部拒掉 —— 看着像模型不听话，
+        其实是根本没告诉过它这一本要音译。"""
+        from app.pipelines.naming import NAME_SYSTEM, TRANSLIT_SYSTEM, _system_for
+        assert _system_for("pinyin") is TRANSLIT_SYSTEM
+        assert _system_for("given_surname") is NAME_SYSTEM

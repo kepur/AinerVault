@@ -310,6 +310,43 @@ def suggest_names(
     return result
 
 
+#: 音译圈层的命名指令。与文化等效命名**方向相反** ——
+#: 存真档要的是原名的读音，不是目标文化里的等效名字。
+#: 用错这一条的后果实测过：一本仙侠里主角叫 Ethan Ashford。
+TRANSLIT_SYSTEM = """你是跨文化出版的命名顾问，这一本走的是【音译保名】。
+
+核心任务：把源世界观的人名**按读音转写**成目标语言的文字，
+**不要**换成目标文化里的本土名字。
+
+  ✓ 林昭 → Lin Zhao　　苏晚 → Su Wan　　青云宗 → Qingyun Sect
+  ✗ 林昭 → Ethan Ashford —— 那是换了个人，不是译名
+
+为什么：这本书的世界观原样保留（境界体系、宗门、灵石都在），
+只有语言换了。给这个世界里的人配一个英美名字，
+读者会觉得这些人不属于这个世界。
+
+规则：
+1. 姓在前名在后，按原文顺序转写，两段之间空一格。
+2. 同一个字在全书用同一种转写，不要一处 Zhao 一处 Chao。
+3. 称号与宗门名可以「音译 + 意译」并存：青云宗 → Qingyun Sect
+   （专名音译，通名意译）。
+4. 不要加声调符号 —— 目标读者读不出来，只会碍眼。
+5. 别名与本名分开转写，不要合并。"""
+
+
+def _system_for(name_pattern: str) -> str:
+    """按命名规范选提示词。
+
+    音译与文化等效是两件相反的事，一段提示词做不到两件 ——
+    而规则层只会把不合规范的产出全部拒掉，报一堆
+    「不是原名的音译」，看着像模型不听话，
+    其实是根本没告诉过它这一本要音译。
+    """
+    from app.worldview.naming import wants_transliteration
+
+    return TRANSLIT_SYSTEM if wants_transliteration(name_pattern) else NAME_SYSTEM
+
+
 #: 单次命名调用的成员数上限。输出含备选与称呼，比输入长几倍。
 _NAMING_BATCH_MEMBERS = 8
 
@@ -323,7 +360,7 @@ def _name_one_batch(
     data, _task = chat_json(
         db,
         [
-            {"role": "system", "content": NAME_SYSTEM},
+            {"role": "system", "content": _system_for(pattern)},
             {
                 "role": "user",
                 "content": (

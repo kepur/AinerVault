@@ -171,6 +171,21 @@ def detect_scripts(value: str) -> set[str]:
     return found
 
 
+#: 明确要求音译的命名规范。这些圈层要的就是原名的转写 ——
+#: 英语仙侠读者期待「Lin Zhao」，不是「Ethan Ashford」。
+_TRANSLITERATION_PATTERNS = ("pinyin", "romaji", "hepburn", "wade", "translit")
+
+
+def wants_transliteration(name_pattern: str | None) -> bool:
+    """这个圈层的命名规范是不是「音译原名」。
+
+    存真档的目标圈层写 name_pattern=pinyin，意思是**保留原名的读音**。
+    此时拒绝拼音片段是**判反了** —— 实跑时校验器拒掉了 Lin Zhao、
+    放行了 Ethan Ashford，于是一本仙侠里的主角叫 Ethan。
+    """
+    return any(k in (name_pattern or "").lower() for k in _TRANSLITERATION_PATTERNS)
+
+
 def _min_tokens(name_pattern: str | None) -> int:
     """这个姓名格式至少要几段。
 
@@ -240,9 +255,19 @@ def validate_localized_name(
     if "han" in used and "han" not in expected:
         return False, f"「{value}」残留汉字"
     if "latin" in expected:
-        hits = contains_pinyin(value)
-        if hits:
-            return False, f"「{value}」含拼音片段 {hits}"
+        # 音译圈层的判断**方向相反**：要的就是原名的转写。
+        # 不分开的话，存真档会拒掉 Lin Zhao 而放行 Ethan Ashford
+        if wants_transliteration(name_pattern):
+            if not contains_pinyin(value) and not contains_han(value):
+                return False, (
+                    f"「{value}」不是原名的音译 —— 这个圈层要求保留原名读音"
+                    f"（name_pattern={name_pattern}），"
+                    f"给一个本地名字等于把角色换了个人"
+                )
+        else:
+            hits = contains_pinyin(value)
+            if hits:
+                return False, f"「{value}」含拼音片段 {hits}"
 
     if kind == "character":
         need = _min_tokens(name_pattern)
