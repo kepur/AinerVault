@@ -297,3 +297,53 @@ class TestNewRoles:
         spec = CREW_BY_ROLE["vfx"]
         assert "无" in spec.glossary()
         assert "不要就明说不要" in "".join(spec.dimensions)
+
+
+class TestDeliveryCarriesEverything:
+    """交付清单是最终出口 —— 前面做的东西不进清单，等于没做。"""
+
+    def _src(self):
+        import pathlib
+        return (pathlib.Path(__file__).resolve().parent.parent
+                / "app" / "pipelines" / "delivery.py").read_text("utf-8")
+
+    def test_crew_sheets_are_in_the_manifest(self):
+        """原来清单里只有首尾帧与运动，**没有制作单** ——
+        下游拿不到灯光方位、材质、色调、服化、视效，只能自己猜，
+        而猜出来的东西跨镜不一致。"""
+        src = self._src()
+        assert '"crew": _crew_block' in src
+
+    def test_manifest_motion_is_english(self):
+        """视频模型和图像模型一样不认中文。"""
+        src = self._src()
+        body = src[src.index("def _motion_prompt"):src.index("def _crew_block")]
+        assert "motion_prompt_en" in body
+        # 只看代码，不看 docstring —— 那里正解释着「为什么不回落到中文描述」
+        code = "\n".join(
+            ln for ln in body.splitlines()
+            if not ln.strip().startswith(("#", '"""', "**", "而", "宁可", "优先", "没有"))
+        )
+        assert "shot.description" not in code, \
+            "回落到中文描述会让清单里掺一段模型读不懂的文字"
+
+    def test_frame_prompts_travel_with_the_images(self):
+        """只给一张图的 URL，下游要改图时改不动。"""
+        src = self._src()
+        assert "first_frame_prompt" in src and "last_frame_prompt" in src
+
+
+class TestMotionEnglish:
+    def test_schema_asks_for_both(self):
+        from app.pipelines.crew_sheets import MOTION_SCHEMA
+        req = set(MOTION_SCHEMA["required"])
+        for k in ("start_frame", "camera_move", "deltas"):
+            assert k in req and f"{k}_en" in req, k
+
+    def test_missing_english_is_reported(self):
+        import inspect
+
+        from app.pipelines.crew_sheets import generate_motion
+
+        src = inspect.getsource(generate_motion)
+        assert "没有英文运动描述" in src

@@ -159,7 +159,12 @@ def build_manifest(
             "description": shot.description,
             "first_frame": first_asset.url if first_asset else None,
             "last_frame": last_asset.url if last_asset else None,
-            "motion_prompt": _motion_prompt(shot),
+            "motion_prompt": _motion_prompt(db, shot),
+            # 首尾帧的完整提示词。下游要重出或改图时靠它，
+            # 只给一张图的 URL 是改不动的
+            "first_frame_prompt": first.prompt if first else None,
+            "last_frame_prompt": last.prompt if last else None,
+            "crew": _crew_block(db, shot),
         }
 
         specs = sorted(
@@ -289,14 +294,43 @@ def build_manifest(
     }
 
 
-def _motion_prompt(shot: Shot) -> str:
+def _motion_prompt(db: Session, shot: Shot) -> str:
+    """这一镜的运动，**英文**。
+
+    优先用运动描述那一份（起幅落幅怎么走都写清了），
+    没有才回落到分镜的相机字段。
+
+    **不回落到 shot.description** —— 那是中文，
+    而视频模型和图像模型一样不认中文：喂中文出来的是纹样不是画面。
+    宁可只给「static locked-off」这一句，也不要掺一段读不懂的文字。
+    """
+    from app.models import ShotMotion
+
+    m = db.execute(
+        select(ShotMotion).where(ShotMotion.shot_id == shot.id)
+    ).scalars().first()
+    if m is not None and m.motion_prompt_en:
+        return m.motion_prompt_en
     cam = shot.camera_json or {}
     bits = [str(cam.get("move") or "static").replace("_", " ")]
     if cam.get("speed") is not None:
         bits.append(f"speed {cam['speed']}")
-    if shot.description:
-        bits.append(shot.description)
     return ", ".join(bits)
+
+
+def _crew_block(db: Session, shot: Shot) -> dict[str, Any]:
+    """这一镜八个工种的英文产出。
+
+    **交付清单里原来没有制作单** —— 主要交付物不含主要内容。
+    下游拿到首尾帧与运动，却拿不到灯光方位、材质、色调、服化、视效，
+    只能自己猜，而猜出来的东西跨镜不一致。
+    """
+    from app.models import CrewSheet
+
+    rows = db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id == shot.id)
+    ).scalars()
+    return {r.role: r.prompt_en for r in rows if r.prompt_en}
 
 
 def _scene_prompt(specs: Sequence[AudioSpec], kind: AudioKind) -> str | None:

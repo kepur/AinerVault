@@ -306,7 +306,9 @@ def generate_sheets(
 MOTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["start_frame", "end_frame", "camera_move", "subject_move",
-                 "pacing", "deltas"],
+                 "pacing", "deltas",
+                 "start_frame_en", "end_frame_en", "camera_move_en",
+                 "subject_move_en", "deltas_en"],
     "properties": {
         "start_frame": {"type": "string"},
         "end_frame": {"type": "string"},
@@ -314,6 +316,12 @@ MOTION_SCHEMA: dict[str, Any] = {
         "subject_move": {"type": "string"},
         "pacing": {"type": "string"},
         "deltas": {"type": "array", "items": {"type": "string"}},
+        # 英文那一份**直接交给视频模型**。视频模型与图像模型一样不认中文
+        "start_frame_en": {"type": "string"},
+        "end_frame_en": {"type": "string"},
+        "camera_move_en": {"type": "string"},
+        "subject_move_en": {"type": "string"},
+        "deltas_en": {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -411,9 +419,25 @@ def generate_motion(
         row.pacing = as_text(data.get("pacing"))[:128] or None
         deltas = [d for d in (as_text(x) for x in (data.get("deltas") or [])) if d]
         row.deltas_json = deltas or None
+        row.start_frame_en = as_text(data.get("start_frame_en"))[:2000] or None
+        row.end_frame_en = as_text(data.get("end_frame_en"))[:2000] or None
+        row.deltas_en_json = [
+            d for d in (as_text(x) for x in (data.get("deltas_en") or [])) if d
+        ] or None
         row.motion_prompt = "；".join(
             x for x in (row.camera_move, row.subject_move, row.pacing) if x
         )
+        # 视频模型读的是这一条。不带中文 —— 中文进去出来的是纹样不是画面
+        row.motion_prompt_en = ", ".join(
+            x.strip().rstrip(".;") for x in (
+                as_text(data.get("camera_move_en")),
+                as_text(data.get("subject_move_en")),
+                as_text(data.get("pacing")),
+            ) if x.strip()
+        ) or None
+        if not row.motion_prompt_en:
+            thin.append({"shot": shot.order_no,
+                         "why": "没有英文运动描述 —— 视频模型不认中文，这一条交不出去"})
         row.status = SheetStatus.drafted
         made += 1
         # 首尾相同 = 这一镜没有运动，i2i 无从改起

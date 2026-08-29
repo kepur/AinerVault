@@ -110,8 +110,14 @@ class ShotMotion(Base, StdMixin):
     #: 首尾之间**变化了什么**，逐项列出。
     #: 这是 i2i 的直接依据 —— 没有它，尾帧只能整张重画
     deltas_json: Mapped[list | None] = mapped_column(JSONB)
-    #: 给视频模型的完整运动提示词
+    #: 运动提示词，中文，给人审核
     motion_prompt: Mapped[str | None] = mapped_column(Text)
+    #: 英文那一份，**直接交给视频模型** —— 它和图像模型一样不认中文
+    motion_prompt_en: Mapped[str | None] = mapped_column(Text)
+    start_frame_en: Mapped[str | None] = mapped_column(Text)
+    end_frame_en: Mapped[str | None] = mapped_column(Text)
+    #: 首尾差异的英文。**i2i 读的是这一条** —— 它决定尾帧改画面的哪一部分
+    deltas_en_json: Mapped[list | None] = mapped_column(JSONB)
     status: Mapped[SheetStatus] = mapped_column(
         default=SheetStatus.drafted, nullable=False
     )
