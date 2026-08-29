@@ -26,6 +26,9 @@ from app.models.narrative_device import (
 from app.models.performance import (
     Facing, ShotPerformance, SpeechRole, StagePosition,
 )
+from app.models.shot_sheet import (
+    CrewSheet, SheetStatus, ShotMotion, VoiceCasting,
+)
 from app.models.script import (
     TRANSLATABLE_TYPES, BlockType, DocMode, DocStatus, Scene, ScriptBlock,
     ScriptDoc,
@@ -54,6 +57,7 @@ __all__ = [
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",
     "AssetEpoch", "EpochBinding", "EpochKind",
+    "CrewSheet", "ShotMotion", "VoiceCasting", "SheetStatus",
     "INVARIANT_FIELDS", "VARIANT_FIELDS",
     "CultureReview", "CultureFinding", "GapKind", "Verdict", "ReviewRunStatus",
     "ShotPerformance", "SpeechRole", "StagePosition", "Facing",

@@ -247,6 +247,132 @@ def extract_performance(plan_id: str, body: PerfIn,
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+class SheetIn(BaseModel):
+    #: 只跑指定工种。留空跑全部 —— 顺序有意义，后面的工种看得见前面的产出
+    roles: list[str] = Field(default_factory=list)
+    shot_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/shot-plans/{plan_id}/crew-sheets:generate")
+def generate_crew_sheets(plan_id: str, body: SheetIn,
+                         db: Session = Depends(get_db)) -> dict:
+    """按工种为每个镜头出制作单。
+
+    这是本系统对下游（图像／视频／音频生成）的主要交付物。
+    分工种而不是一次生成：这些维度的判据完全不同 ——
+    灯光要方位与光质，剪辑要秒数与切点，
+    一次填完模型会平均用力、每项写两句。
+    """
+    from app.models import ShotPlan, WorldProfile, WorldTransform
+    from app.pipelines import crew_sheets as cs
+
+    plan = db.get(ShotPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    profile = None
+    if plan.transform_id:
+        t = db.get(WorldTransform, plan.transform_id)
+        profile = db.get(WorldProfile, t.target_profile_id) if t else None
+    if profile is None:
+        raise HTTPException(
+            status_code=409,
+            detail="分镜计划没有关联世界观档案，无法确定年代与禁忌 —— "
+                   "先给它绑一个 transform",
+        )
+    try:
+        return cs.generate_sheets(
+            db, plan, profile,
+            roles=body.roles or None, shot_ids=body.shot_ids or None,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/shot-plans/{plan_id}/motion:generate")
+def generate_motion(plan_id: str, body: SheetIn,
+                    db: Session = Depends(get_db)) -> dict:
+    """生成每镜的运动描述 —— 首帧到尾帧之间发生了什么。
+
+    两个消费者：尾帧靠它做 i2i（知道该改哪部分而不是整张重画），
+    视频模型靠它知道怎么动。
+    """
+    from app.models import ShotPlan
+    from app.pipelines import crew_sheets as cs
+
+    plan = db.get(ShotPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    try:
+        return cs.generate_motion(db, plan, shot_ids=body.shot_ids or None)
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/shot-plans/{plan_id}/crew-sheets")
+def list_crew_sheets(plan_id: str, db: Session = Depends(get_db)) -> dict:
+    """制作单总览。incomplete 是**验收结果不是警告** ——
+    缺项的单子不该进入生成：下游拿到「柔和侧光」出来的图没法用，
+    而那时已经花掉了图像模型的钱。
+    """
+    from app.models import CrewSheet, Shot, ShotMotion, ShotPlan
+    from app.worldview.crew import CREW_BY_ROLE, all_roles
+
+    if db.get(ShotPlan, plan_id) is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    shots = list(db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan_id).order_by(Shot.order_no)
+    ).scalars())
+    ids = [s.id for s in shots]
+    sheets: dict[str, dict[str, CrewSheet]] = {}
+    for row in db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id.in_(ids))
+    ).scalars():
+        sheets.setdefault(row.shot_id, {})[row.role] = row
+    motions = {
+        m.shot_id: m for m in db.execute(
+            select(ShotMotion).where(ShotMotion.shot_id.in_(ids))
+        ).scalars()
+    }
+
+    items = []
+    for s in shots:
+        by_role = sheets.get(s.id, {})
+        m = motions.get(s.id)
+        items.append({
+            "shot_id": s.id, "order_no": s.order_no,
+            "shot_size": s.shot_size, "duration_ms": s.duration_ms,
+            "description": s.description,
+            "sheets": {
+                role: {
+                    "prompt": r.prompt, "payload": r.payload_json or {},
+                    "missing": r.missing_json or [],
+                    "rejected": r.rejected_json or [],
+                    "status": r.status.value,
+                    "edited_by_human": r.edited_by_human,
+                }
+                for role, r in by_role.items()
+            },
+            "motion": None if m is None else {
+                "start_frame": m.start_frame, "end_frame": m.end_frame,
+                "camera_move": m.camera_move, "subject_move": m.subject_move,
+                "pacing": m.pacing, "deltas": m.deltas_json or [],
+            },
+            "missing_roles": [r for r in all_roles() if r not in by_role],
+        })
+    return {
+        "plan_id": plan_id, "shots": len(items),
+        "roles": [{"role": c.role, "name": c.display_name}
+                  for c in CREW_BY_ROLE.values()],
+        "complete": sum(
+            1 for i in items
+            if not i["missing_roles"]
+            and not any(v["missing"] for v in i["sheets"].values())
+        ),
+        "with_motion": sum(1 for i in items if i["motion"]),
+        "items": items,
+    }
+
+
 @router.get("/shot-plans/{plan_id}/performance")
 def list_performance(plan_id: str, db: Session = Depends(get_db)) -> dict:
     """调度表。position_jump 标出站位跳变 —— 那是动画会穿帮的地方。"""
