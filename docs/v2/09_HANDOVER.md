@@ -156,7 +156,30 @@ late 19th century Russian），不花模型调用。
 
 账号 id `aff28dd6bc7032c161c123e2fd55e2ff`，端点已配在 `capability_endpoints`。
 
-### 4.7 幂等键包含 endpoint + model
+### 4.8 存真档的命名方向相反
+
+命名校验器对英语目标一律拒绝拼音片段 —— 那条规则是为「武侠→帝俄」写的。
+但存真档要的就是拼音：实跑时它**拒掉 Lin Zhao、放行 Ethan Ashford**，
+一本仙侠的主角叫 Ethan。
+
+判准看 `name_pattern`：pinyin/romaji/hepburn 要音译（没有拼音特征反而不合格），
+其余照旧。**提示词也要跟着分** —— 只改规则不改提示词，
+模型照旧给文化等效名字，规则层把它们全拒掉，
+报一堆「不是原名的音译」，看着像模型不听话。
+
+### 4.9 代词不能做占位符
+
+称呼抽取会把「你」「他」登记成 `pronoun_like`，占位符机制一视同仁地
+把它们锁成固定形式，于是译文在任何句法位置都用主格：
+`crouched beside he`、`you has good innate potential`。
+
+更糟的是 `「你不知道。」→ "I don't know."` —— **占位符挡住了原文，
+模型看不出这句是对谁说的**，只能猜。
+
+排除条件是**光杆代词**，不是「含代词」：「你师姐」里的「师姐」
+是真正的称呼，需要跨文化映射。
+
+### 4.10 幂等键包含 endpoint + model
 
 不含的话，从 mock 换到真模型会拿到 mock 时代的旧答案。
 `regenerate` 之后 `sync` 要按**当前任务**的产图判断，不是「有没有图」。
@@ -189,12 +212,18 @@ CF 用不了参考图，所以跨期一致性仍主要靠共享的英文不变�
 接一个支持 reference/IP-Adapter 的模型才算锁死。
 契约里 `image.image_to_image` 已有 `last_frame` 用途，加一个 `epoch_from_anchor` 即可。
 
-### P0 · 力度与导读的实跑验证
+### ~~力度与导读的实跑验证~~ 已做
 
-`Fidelity` 与 `WorldPrimer` 已实现、有 25 条单测，但**没有在真实小说上跑过**
-（当前测试小说是武侠→帝俄，走的是移植档，用不上导读）。
-需要一本**修仙或科幻**小说走存真档，验证：
-导读生成 → 审核通过 → `covered_terms` 回流 → 正文里境界名从 gloss 变 preserve。
+`scripts/fixtures_xianxia/`（三章修仙）+ 圈层 `cn_xianxia` → `en_xianxia_preserved`
+（两个都是虚构圈层，底座分别是唐宋古典与现代英语）。验收：
+
+    词表   33 条已审，9 条 no_equivalent
+    导读   4 节 387 词，覆盖 17 条
+    回流   审核前 0 条 → 审核后 15 条
+    策略   gloss_inline → preserve、footnote → preserve
+    译文   Qi Condensation Stage Seven／Senior Sister Su Wan／Qingyun Sect
+
+这一轮挖出三个只有实跑才会露的错，都已修（见 §4.5、§4.8、§4.9）。
 
 ### P1 · 混合源圈层的实跑
 
