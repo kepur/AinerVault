@@ -72,6 +72,33 @@ def as_list(value: Any, *, limit: int | None = None) -> list[str]:
     return items[:limit] if limit else items
 
 
+def as_items(data: Any, key: str) -> list[dict[str, Any]]:
+    """从 LLM 结果里取一个对象数组，滤掉不是对象的元素。
+
+    schema 写 array of object，模型有时给一串裸字符串
+    （["破釜沉舟", "唇亡齿寒"] 而不是 [{"surface": "..."}]）。
+    循环里直接 item.get(...) 会以 AttributeError 变成 500 ——
+    这是同一类问题的最后一种形态：前面处理了「字段值的类型」，
+    这里是「数组元素的类型」。
+
+    非对象元素丢掉而不是尝试猜它对应哪个字段 ——
+    猜错会把一个词写进错误的槽，比少一条更难发现。
+    """
+    raw = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    for item in raw:
+        if isinstance(item, dict):
+            out.append(item)
+        else:
+            dropped += 1
+    if dropped:
+        log.warning("%s 里有 %d 个元素不是对象，已丢弃", key, dropped)
+    return out
+
+
 def as_int(value: Any, default: int = 0, *, lo: int | None = None,
            hi: int | None = None) -> int:
     """取整数并夹到区间。模型给 "3"、3.0、甚至 "三" 都不该让管线崩。"""

@@ -24,7 +24,7 @@ from app.models import (
     WorldTransform, choose_strategy,
 )
 from app.models.narrative_device import CulturalLoad
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 
 log = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ def _render_batch(
     )
 
     by_id = {m.id: m for m in pending}
-    for item in data.get("renderings") or []:
+    for item in as_items(data, "renderings"):
         m = by_id.get(str(item.get("meme_id") or ""))
         if m is None:
             continue

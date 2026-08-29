@@ -17,7 +17,7 @@ from app.ids import new_id
 from app.models import (
     BlockType, Chapter, DocStatus, Scene, ScriptBlock, ScriptDoc, utcnow,
 )
-from app.pipelines.base import PipelineError, chat_json, fingerprint, as_text
+from app.pipelines.base import PipelineError, chat_json, fingerprint, as_text, as_items
 
 log = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ def build_script(
         db.add(scene)
         db.flush()
 
-        for b_raw in s_raw.get("blocks") or []:
+        for b_raw in as_items(s_raw, "blocks"):
             seq += 1
             text = as_text(b_raw.get("text"))
             if not text:

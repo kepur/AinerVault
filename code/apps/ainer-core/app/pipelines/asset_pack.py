@@ -22,7 +22,7 @@ from app.models import (
     AssetKindSpec, AssetOrigin, AssetSpec, AssetVariant, Chapter, DocStatus,
     ReviewStatus, ScriptBlock, ScriptDoc, WorldEntity, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.worldview.asset_requirements import check_completeness, requirements_for
 
 log = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ def extract_assets(
     }
 
     out = ExtractPackResult()
-    for item in data.get("assets") or []:
+    for item in as_items(data, "assets"):
         key = as_text(item.get("canonical_key"))
         name = as_text(item.get("display_name"))
         if not key or not name:
@@ -357,7 +357,7 @@ def ensure_variants(
             ref_kind="asset_variant", ref_id=transform.id,
         )
 
-        for item in data.get("variants") or []:
+        for item in as_items(data, "variants"):
             key = as_text(item.get("canonical_key"))
             spec = by_key.get(key)
             if spec is None:

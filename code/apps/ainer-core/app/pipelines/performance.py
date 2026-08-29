@@ -26,7 +26,7 @@ from app.models import (
     Chapter, DocStatus, Facing, ScriptBlock, ScriptDoc, Shot, ShotPerformance,
     ShotPlan, SpeechRole, StagePosition, WorldEntity,
 )
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 
 log = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ def resolve_dialogue(
             novel_id=chapter.novel_id, chapter_id=chapter.id,
             ref_kind="dialogue", ref_id=chapter.id,
         )
-        for item in data.get("blocks") or []:
+        for item in as_items(data, "blocks"):
             b = by_id.get(str(item.get("block_id") or ""))
             if b is None:
                 continue
@@ -382,7 +382,7 @@ def _absorb(
         if shot is None:
             continue
         static_all = True
-        for c in item.get("cast") or []:
+        for c in as_items(item, "cast"):
             name = as_text(c.get("entity"))
             entity = by_name.get(name)
             if entity is None:

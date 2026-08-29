@@ -29,7 +29,7 @@ from app.models import (
     EntityWorldVisual, FrameRole, FrameSpec, ReviewStatus, Scene, Shot, ShotAssetBinding,
     ShotPlan, SpecStatus, WorldEntity, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError
+from app.pipelines.base import PipelineError, as_items
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
 
 log = logging.getLogger(__name__)
@@ -400,7 +400,7 @@ def bind_and_compose(
             if frame.edited_by_human:
                 continue
             params = frame.params_json or {}
-            for key in params.get("asset_keys") or []:
+            for key in as_items(params, "asset_keys"):
                 if key not in by_key and key not in result.missing_assets:
                     result.missing_assets.append(key)
 

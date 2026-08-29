@@ -252,3 +252,58 @@ class TestTopLevelShape:
     def test_no_array_field(self):
         schema = {"type": "object", "properties": {"verdict": {"type": "string"}}}
         assert self._fields(schema) == []
+
+
+class TestAsItems:
+    """schema 写 array of object，模型有时给一串裸字符串。
+
+    ["破釜沉舟", "唇亡齿寒"] 而不是 [{"surface": "..."}]，
+    循环里直接 item.get(...) 会以 AttributeError 变成 500 ——
+    端到端第十四轮⑦梗呈现就是这么挂的。
+
+    这是同一类问题的最后一种形态：
+    前面处理了「字段值的类型」，这里是「数组元素的类型」。
+    """
+
+    def test_normal_case(self):
+        from app.pipelines.base import as_items
+
+        data = {"items": [{"a": 1}, {"b": 2}]}
+        assert as_items(data, "items") == [{"a": 1}, {"b": 2}]
+
+    def test_drops_non_dict_elements(self):
+        """非对象元素丢掉而不是猜它对应哪个字段 ——
+        猜错会把一个词写进错误的槽，比少一条更难发现。
+        """
+        from app.pipelines.base import as_items
+
+        data = {"items": [{"a": 1}, "破釜沉舟", 42, None, {"b": 2}]}
+        assert as_items(data, "items") == [{"a": 1}, {"b": 2}]
+
+    @pytest.mark.parametrize("data", [
+        {}, {"items": None}, {"items": "not a list"}, {"items": {}},
+        None, "garbage", [],
+    ])
+    def test_bad_shapes_yield_empty(self, data):
+        from app.pipelines.base import as_items
+
+        assert as_items(data, "items") == []
+
+    def test_no_raw_get_loops_remain(self):
+        """管线里不该再有 `for item in X.get("k") or []` 这种写法。
+
+        每一处都假设数组元素是 dict。十一处各写各的，
+        总有一处会在换模型时炸。
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "app"
+        pat = re.compile(r'for \w+ in \w+\.get\("\w+"\)\s*or\s*\[\]:')
+        bad = [
+            f"{p.name}:{i}"
+            for p in root.rglob("*.py")
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+            if pat.search(line)
+        ]
+        assert not bad, "这些地方仍假设数组元素是对象：" + "、".join(bad)

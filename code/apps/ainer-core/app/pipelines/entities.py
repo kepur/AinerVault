@@ -22,7 +22,7 @@ from app.models import (
     NameType,
     Chapter, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
 )
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.worldview import appellation_rules as ar
 from app.worldview.naming import cn_surname, infer_family_key
 
@@ -366,7 +366,7 @@ def extract_entities(
 
     result = ExtractResult()
     pending_appellations: list[tuple[str, list[dict]]] = []
-    for item in data.get("entities") or []:
+    for item in as_items(data, "entities"):
         name = as_text(item.get("display_name"))
         if not name:
             continue

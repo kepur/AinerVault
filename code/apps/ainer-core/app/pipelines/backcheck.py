@@ -26,7 +26,7 @@ from app.models import (
     BackTranslationCheck, Chapter, DocStatus, NarrativeDevice, ScriptBlock,
     ScriptDoc, StoryBeat, TranslationBlock, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_items
 
 log = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ def back_check(
     seen_kept: set[int] = set()
     seen_emo: set[int] = set()
     seen_missing: set[int] = set()
-    for item in data.get("beats") or []:
+    for item in as_items(data, "beats"):
         b = by_order.get(int(item.get("order") or 0))
         if b is None:
             continue
@@ -235,7 +235,7 @@ def back_check(
     by_id = {d.id: d for d in devices}
     landed_ids: set[str] = set()
     lost_ids: set[str] = set()
-    for item in data.get("devices") or []:
+    for item in as_items(data, "devices"):
         d = by_id.get(str(item.get("device_id") or ""))
         if d is None or d.id in lost_ids:
             continue

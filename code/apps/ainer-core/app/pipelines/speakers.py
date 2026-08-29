@@ -25,7 +25,7 @@ from app.models import (
     Chapter, DocStatus, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.models.script import BlockType
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.worldview.naming import cn_surname
 
 log = logging.getLogger(__name__)
@@ -286,7 +286,7 @@ def resolve_speakers(
             log.warning("说话人 LLM 判定失败，保留未解析: %s", exc)
             data = {}
 
-        for item in data.get("mappings") or []:
+        for item in as_items(data, "mappings"):
             tag = as_text(item.get("speaker_tag"))
             name = as_text(item.get("entity_name"))
             conf = float(item.get("confidence") or 0)

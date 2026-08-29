@@ -26,7 +26,7 @@ from app.models import (
     Chapter, DocStatus, EntityWorldName, ScriptBlock, ScriptDoc, TranslationBlock,
     WorldEntity, WorldLexicon, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_items
 from app.worldview import preflight as pf
 from app.worldview.naming import contains_han, contains_pinyin
 from app.worldview.validator import Violation
@@ -276,7 +276,7 @@ def review_translation(
                     "source": "rule_fallback",
                 })
 
-        for item in data.get("issues") or []:
+        for item in as_items(data, "issues"):
             bid = str(item.get("block_id") or "")
             issue_type = str(item.get("issue_type") or "")
             kind = ISSUE_KIND.get(issue_type)

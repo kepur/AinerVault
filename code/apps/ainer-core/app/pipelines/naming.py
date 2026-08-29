@@ -23,7 +23,7 @@ from app.models import (
     EntityKind, EntityWorldName, NamingPolicy, ReviewStatus, WorldEntity,
     WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.pipelines.entities import _NEEDS_PROPER_NAME
 from app.worldview import naming as nm
 
@@ -347,13 +347,13 @@ def _name_one_batch(
         ref_id=transform.id,
     )
 
-    for group in data.get("groups") or []:
+    for group in as_items(data, "groups"):
         family_key = str(group.get("family_key") or "")
         surname = as_text(group.get("surname"))
         if family_key and not family_key.startswith("solo:"):
             result.families[family_key] = surname
 
-        for member in group.get("members") or []:
+        for member in as_items(group, "members"):
             eid = str(member.get("entity_id") or "")
             entity = by_id.get(eid)
             if entity is None:
@@ -367,7 +367,7 @@ def _name_one_batch(
             if not ok:
                 # 从备选里找一个合格的
                 picked = None
-                for alt in member.get("alternatives") or []:
+                for alt in as_items(member, "alternatives"):
                     cand = as_text(alt.get("name"))
                     if nm.validate_localized_name(
                         cand, transform.target_language_code, pattern,

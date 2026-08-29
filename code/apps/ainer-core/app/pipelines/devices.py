@@ -29,7 +29,7 @@ from app.models import (
     NarrativeDevice, ScriptBlock, ScriptDoc, StoryBeat,
 )
 from app.models.script import DocStatus
-from app.pipelines.base import PipelineError, chat_json, as_text
+from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.worldview import idiom_rules as ir
 
 log = logging.getLogger(__name__)
@@ -189,7 +189,7 @@ def extract_devices(
             log.warning("装置抽离批次失败: %s", exc)
             continue
 
-        for item in data.get("devices") or []:
+        for item in as_items(data, "devices"):
             bid = str(item.get("block_id") or "")
             if bid not in valid:
                 continue
