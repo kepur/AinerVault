@@ -4,6 +4,9 @@ from app.models.asset_pack import (
     AssetKindSpec, AssetOrigin, AssetSpec, AssetVariant, DirectorProfile,
     ShotAssetBinding,
 )
+from app.models.asset_epoch import (
+    INVARIANT_FIELDS, VARIANT_FIELDS, AssetEpoch, EpochBinding, EpochKind,
+)
 from app.models.appellation import EntityAppellation, REGISTER_BRIEF, Register
 from app.models.content import Chapter, Novel, SourceFormat
 from app.models.culture_review import (
@@ -50,6 +53,8 @@ __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",
+    "AssetEpoch", "EpochBinding", "EpochKind",
+    "INVARIANT_FIELDS", "VARIANT_FIELDS",
     "CultureReview", "CultureFinding", "GapKind", "Verdict", "ReviewRunStatus",
     "ShotPerformance", "SpeechRole", "StagePosition", "Facing",
     "NameType",

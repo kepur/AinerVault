@@ -139,6 +139,36 @@ _FACING_EN = {
 }
 
 
+def _epoch_prompts(
+    db: Session, shot: Shot, profile: WorldProfile, chapter_order: int | None,
+) -> list[str]:
+    """这一镜绑定的素材，按当章的时期取提示词。
+
+    走 epoch_bindings 而不是现算：绑定是分镜编译时定下的，
+    出图不对时能查到当时用的是哪一期 —— 现算的话，
+    改了时期区间之后就再也复现不出当初那张图为什么是那样。
+    """
+    from app.models import AssetEpoch, AssetSpec, EpochBinding
+    from app.pipelines.epochs import compose_epoch_prompt
+
+    rows = list(db.execute(
+        select(EpochBinding, AssetSpec)
+        .join(AssetSpec, AssetSpec.id == EpochBinding.asset_spec_id)
+        .where(EpochBinding.shot_id == shot.id)
+    ))
+    out: list[str] = []
+    for binding, spec in rows:
+        if not binding.asset_epoch_id:
+            continue          # fallback：基准形态已在素材段里出过
+        epoch = db.get(AssetEpoch, binding.asset_epoch_id)
+        if epoch is None or epoch.world_profile_id != profile.id:
+            continue
+        text = epoch.visual_prompt or compose_epoch_prompt(epoch, spec.kind.value)
+        if text:
+            out.append(text.strip())
+    return out
+
+
 def _signage_prompt(db: Session, shot: Shot, profile: WorldProfile) -> str:
     """这一镜里出现的画面文字，连同该世界观的招牌规则。
 
@@ -291,6 +321,15 @@ def compose_frame_prompt(
             role = "character" if spec.kind == AssetKindSpec.costume else "scene"
             refs.append({"ref": {"url": url}, "role": role, "weight": 0.6,
                          "tag": spec.canonical_key})
+
+    # ── 4.35 时期覆盖 ──
+    # 素材包给的是**基准形态**，而人物是沿时间变的：
+    # 少年林凡与中年林凡不是同一套衣着兵器。
+    # 有时期数据时用当章那一期的提示词覆盖基准 ——
+    # 不覆盖的话主角从第一章到最后一章都是同一张脸同一身衣服。
+    epoch_bits = _epoch_prompts(db, shot, profile, chapter_order)
+    if epoch_bits:
+        positive.extend(epoch_bits)
 
     # ── 4.4 画面文字 ──
     # signage 块既进译本也进画面。不带进提示词的话，

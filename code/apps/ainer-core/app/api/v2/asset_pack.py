@@ -183,6 +183,129 @@ def get_pack_status(transform_id: str, db: Session = Depends(get_db)) -> dict:
     return pack.pack_status(db, _transform(db, transform_id))
 
 
+class EpochIn(BaseModel):
+    epoch_key: str
+    display_name: str
+    kind: str = "age"
+    from_chapter_order: int = 1
+    to_chapter_order: int | None = None
+    order_no: int = 0
+    trigger: str | None = None
+    invariant: dict = Field(default_factory=dict)
+    variant: dict = Field(default_factory=dict)
+    identity_ref_asset_id: str | None = None
+
+
+@router.get("/transforms/{transform_id}/assets/{spec_id}/epochs")
+def list_epochs(transform_id: str, spec_id: str,
+                db: Session = Depends(get_db)) -> dict:
+    """一个素材的全部时期。
+
+    人物是沿时间变的：少年林凡与中年林凡不是同一套衣着兵器。
+    而固定物体（老家、祖传的刀）只有一期、覆盖全书 ——
+    「探访故乡」那一镜才会与二十章前是同一个院子。
+    """
+    from app.models import AssetEpoch, AssetSpec
+
+    t = _transform(db, transform_id)
+    spec = db.get(AssetSpec, spec_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="asset spec not found")
+    rows = list(db.execute(
+        select(AssetEpoch).where(
+            AssetEpoch.asset_spec_id == spec_id,
+            AssetEpoch.world_profile_id == t.target_profile_id,
+        ).order_by(AssetEpoch.order_no, AssetEpoch.from_chapter_order)
+    ).scalars())
+    return {
+        "spec_id": spec_id, "name": spec.display_name, "kind": spec.kind.value,
+        "total": len(rows),
+        "items": [
+            {
+                "id": e.id, "epoch_key": e.epoch_key,
+                "display_name": e.display_name, "kind": e.kind.value,
+                "order_no": e.order_no,
+                "from_chapter_order": e.from_chapter_order,
+                "to_chapter_order": e.to_chapter_order,
+                "trigger": e.trigger,
+                "invariant": e.invariant_json or {},
+                "variant": e.variant_json or {},
+                "visual_prompt": e.visual_prompt,
+                "identity_ref_asset_id": e.identity_ref_asset_id,
+                "status": e.status.value, "locked": e.locked,
+            }
+            for e in rows
+        ],
+    }
+
+
+@router.post("/transforms/{transform_id}/assets/{spec_id}/epochs", status_code=201)
+def create_epoch(transform_id: str, spec_id: str, body: EpochIn,
+                 db: Session = Depends(get_db)) -> dict:
+    """新增一个时期。
+
+    identity_ref_asset_id 应跨期共用同一张 ——
+    换了脸参考图，脸就会跟着漂，而那正是分期最该守住的东西。
+    """
+    from app.models import AssetEpoch, AssetSpec, EpochKind
+    from app.pipelines.epochs import compose_epoch_prompt
+
+    t = _transform(db, transform_id)
+    spec = db.get(AssetSpec, spec_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="asset spec not found")
+    try:
+        kind = EpochKind(body.kind)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"未知时期类型 {body.kind}") from exc
+
+    row = AssetEpoch(
+        id=new_id("ae"), asset_spec_id=spec_id,
+        world_profile_id=t.target_profile_id,
+        epoch_key=body.epoch_key, display_name=body.display_name,
+        kind=kind, order_no=body.order_no,
+        from_chapter_order=body.from_chapter_order,
+        to_chapter_order=body.to_chapter_order,
+        trigger=body.trigger,
+        invariant_json=body.invariant or None,
+        variant_json=body.variant or None,
+        identity_ref_asset_id=body.identity_ref_asset_id,
+    )
+    row.visual_prompt = compose_epoch_prompt(row, spec.kind.value)
+    db.add(row)
+    db.flush()
+    return {"id": row.id, "epoch_key": row.epoch_key,
+            "visual_prompt": row.visual_prompt}
+
+
+@router.post("/transforms/{transform_id}/epochs:seed-baseline")
+def seed_baselines(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """把已有的基准形态迁成第一期。
+
+    存量素材都只有一个形态。要求全部重填时期不现实，
+    所以先收成 baseline 覆盖全书 —— 需要分期的再往上加，
+    不需要的（老家、祖传的刀）就此打住。
+    """
+    from app.models import AssetSpec, AssetVariant
+    from app.pipelines.epochs import seed_baseline_epoch
+
+    t = _transform(db, transform_id)
+    rows = list(db.execute(
+        select(AssetSpec, AssetVariant)
+        .join(AssetVariant, AssetVariant.asset_spec_id == AssetSpec.id)
+        .where(
+            AssetSpec.novel_id == t.novel_id,
+            AssetVariant.world_profile_id == t.target_profile_id,
+        )
+    ))
+    n = 0
+    for spec, var in rows:
+        seed_baseline_epoch(db, spec, var, spec.kind.value)
+        n += 1
+    return {"seeded": n}
+
+
 @router.get("/transforms/{transform_id}/prompt-ledger")
 def prompt_ledger(transform_id: str, kind: str | None = None,
                   q: str | None = None, db: Session = Depends(get_db)) -> dict:
