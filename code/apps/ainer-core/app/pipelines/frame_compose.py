@@ -100,10 +100,13 @@ def _entity_look(
     """
     epoch = resolve_epoch(db, entity.id, profile_id, chapter_order)
     if epoch is not None:
-        text = epoch.visual_prompt or compose_epoch_prompt(epoch, "character")
+        anchor = epoch.identity_ref_asset_id
+        text = epoch.visual_prompt or compose_epoch_prompt(
+            epoch, "character", has_anchor=bool(anchor))
         refs = list(epoch.ref_asset_ids or [])
-        if epoch.identity_ref_asset_id and epoch.identity_ref_asset_id not in refs:
-            refs.insert(0, epoch.identity_ref_asset_id)
+        if anchor and anchor not in refs:
+            # 锚排最前：每个人物只取一张参考图，锚必须是那一张
+            refs.insert(0, anchor)
         if text:
             return text.strip(), refs
 
@@ -269,6 +272,18 @@ def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
     return "; ".join(bits)
 
 
+def _recover_content(prompt: str) -> str:
+    """从被套娃过的 prompt 里取回原始镜头内容。
+
+    合成时新内容拼在前面，所以原句在最后一段。
+    没有重复段落就说明这一行还没被合成过，整句都是内容。
+    """
+    segs = [s.strip() for s in prompt.split(", ") if s.strip()]
+    if len(segs) == len(set(segs)):
+        return prompt.strip()
+    return segs[-1] if segs else prompt.strip()
+
+
 def compose_frame_prompt(
     db: Session,
     shot: Shot,
@@ -389,8 +404,17 @@ def compose_frame_prompt(
         negative.extend(str(x).replace("_", " ") for x in (director.avoid_json or []))
 
     # ── 镜头内容（唯一非素材来源，只写「谁在哪做什么」）──
-    if frame.prompt:
-        positive.append(frame.prompt.strip())
+    #
+    # **从 params.content 读，不从 frame.prompt 读。**
+    # frame.prompt 是本函数的**产出**；读它等于把上一次的合成结果
+    # 当成这一次的镜头内容，于是每重拼一次就自我套娃一层。
+    # 实跑时一个三人镜拼到 4034 字，同一批人物描述重复四遍，
+    # 每遍还是不同批次抽取的旧值 —— 画面里那三个人各有四套衣服。
+    # 首次运行时 frame.prompt 里装的确实是分镜给的镜头内容，
+    # 所以那一次要把它搬进 params.content 存起来。
+    content = str((frame.params_json or {}).get("content") or "").strip()
+    if content:
+        positive.append(content)
 
     # 场景元信息
     if scene is not None:
@@ -463,6 +487,13 @@ def bind_and_compose(
                 if key not in by_key and key not in result.missing_assets:
                     result.missing_assets.append(key)
 
+            if not params.get("content") and frame.prompt:
+                # 存量修复：套娃之前的行只把镜头内容存在 prompt 里。
+                # 已经被套过的行要取回原句 —— 它是最后那一段
+                # （每次合成都把新内容拼在前面）。判断依据是有段落重复出现：
+                # 分镜给的镜头内容是一句话，不会自我重复
+                params = {**params, "content": _recover_content(frame.prompt)}
+                frame.params_json = params
             pos, neg, refs = compose_frame_prompt(
                 db, shot, frame, profile=profile, director=director,
                 novel_id=novel_id, chapter_order=chapter_order, scene=scene,
@@ -687,7 +718,7 @@ def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
     ).scalars().all()
     updated = 0
     for frame in rows:
-        if frame.asset_id or not frame.gen_task_id:
+        if not frame.gen_task_id:
             continue
         task = db.get(GenTask, frame.gen_task_id)
         if task is None or task.status != TaskStatus.succeeded:
@@ -695,7 +726,10 @@ def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
         asset_id = db.execute(
             select(Asset.id).where(Asset.gen_task_id == task.id).limit(1)
         ).scalars().first()
-        if asset_id:
+        # 按**当前任务**的产图判断，不是「有没有图」。
+        # 判「有图就跳过」的话，regenerate 之后挂着的还是旧图 ——
+        # 重出一版花了钱，看到的却是上一版
+        if asset_id and asset_id != frame.asset_id:
             frame.asset_id = asset_id
             frame.status = SpecStatus.ready
             updated += 1

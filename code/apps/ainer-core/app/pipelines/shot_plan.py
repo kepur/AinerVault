@@ -308,17 +308,25 @@ def build_shot_plan(
             asset_keys = [str(k) for k in (item.get("asset_keys") or [])]
             shared = {"asset_keys": asset_keys, "shot_size": size,
                       "seed": (seed + order_no) % (2**31)}
+            # 镜头内容存进 params.content 而不是只存 prompt：
+            # prompt 是合成的**产出**，会被反复覆写。
+            # 只存在 prompt 里的话，第二次合成会把上一次的产出
+            # 当成镜头内容读回去，一层层套下去
+            first_content = str(item.get("first_frame") or "")
+            last_content = str(item.get("last_frame") or "")
 
             db.add(FrameSpec(
                 id=new_id("fs"), shot_id=shot.id, role=FrameRole.first,
-                prompt=str(item.get("first_frame") or "") or None,
-                entity_ids_json=entity_ids, params_json=dict(shared),
+                prompt=first_content or None,
+                entity_ids_json=entity_ids,
+                params_json={**shared, "content": first_content},
                 derive_from_first=False, status=SpecStatus.pending,
             ))
             db.add(FrameSpec(
                 id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
-                prompt=str(item.get("last_frame") or "") or None,
-                entity_ids_json=entity_ids, params_json=dict(shared),
+                prompt=last_content or None,
+                entity_ids_json=entity_ids,
+                params_json={**shared, "content": last_content},
                 derive_from_first=True,
                 derive_instruction=str(item.get("derive_instruction") or "") or None,
                 status=SpecStatus.pending,

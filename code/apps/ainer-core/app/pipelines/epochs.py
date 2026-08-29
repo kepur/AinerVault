@@ -56,31 +56,69 @@ def resolve_epoch(
     return rows[0] if rows else None
 
 
-def compose_epoch_prompt(epoch: AssetEpoch, kind: str = "character") -> str:
+#: 锚图（正面素颜头肩像）本身就带着的那几项。
+#: 有锚时不必再用文字描述一遍 —— 它们又长又占权重，
+#: 而三人同框时，开头三百字的骨相会把「谁在做什么」挤到模型注意力之外。
+#: build／height 不在此列：头肩像看不出体型和身高。
+#: scars 也留着 —— 疤可能长在身上，而且它短，写明只有好处。
+_CARRIED_BY_ANCHOR = ("face_shape", "features", "eye_color", "skin_tone")
+
+#: 每一项进提示词时的字数上限。
+#:
+#: 时期记录是**档案**，可以写细；提示词不是。实跑时一个三人镜拼出 2483 字，
+#: 而「随身携带一根铁质镖旗杆（可作短棍使用）」「内装火折子和干粮」
+#: 在画面里根本看不见 —— 它们唯一的作用是把「谁在做什么」
+#: 挤出模型的注意力。
+#: 截断在句读处，不硬切：半个短语比没有更糟。
+_FIELD_LIMIT = 26
+_CUT_AT = "，,、；;（(【"
+
+
+def _short(value: str, limit: int = _FIELD_LIMIT) -> str:
+    """截到限长以内，且断在句读处。"""
+    v = str(value).strip()
+    if len(v) <= limit:
+        return v
+    cut = max((v.rfind(c, 0, limit + 1) for c in _CUT_AT), default=-1)
+    return (v[:cut] if cut > limit // 2 else v[:limit]).rstrip("，,、；;（(【")
+
+
+def compose_epoch_prompt(
+    epoch: AssetEpoch, kind: str = "character", *, has_anchor: bool = False,
+) -> str:
     """把不变与可变拼成完整提示词。
 
     **顺序固定：invariant 在前。** 图像模型对前面的词更敏感，
     把同一性锚点放前面，衣着道具放后面 —— 换了衣服脸还是那张脸。
     反过来放，生成的结果会更像「一个穿着某某衣服的人」
     而不是「某某人穿了衣服」。
+
+    has_anchor 时略去脸的那几项：**参考图负责「是谁」，
+    文字负责「在做什么、穿什么」。** 两边都写是冗余，
+    而冗余在提示词里不是免费的 —— 它挤掉的是动作与调度。
     """
     inv = epoch.invariant_json or {}
     var = epoch.variant_json or {}
+    skip = set(_CARRIED_BY_ANCHOR) if has_anchor and kind == "character" else set()
     parts: list[str] = []
     for key in INVARIANT_FIELDS.get(kind, ()):
+        if key in skip:
+            continue
         v = inv.get(key)
         if v:
-            parts.append(str(v))
+            parts.append(_short(v))
     for key in VARIANT_FIELDS.get(kind, ()):
         v = var.get(key)
         if v:
-            parts.append(str(v))
+            parts.append(_short(v))
     # 结构化字段之外自由填的，也带上
     for extra in (inv, var):
         for k, v in extra.items():
+            if k in skip:
+                continue
             if k not in INVARIANT_FIELDS.get(kind, ()) and \
                k not in VARIANT_FIELDS.get(kind, ()) and v:
-                parts.append(str(v))
+                parts.append(_short(v))
     return ", ".join(p for p in parts if p)
 
 

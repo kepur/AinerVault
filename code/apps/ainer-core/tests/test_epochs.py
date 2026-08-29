@@ -101,3 +101,71 @@ class TestEpochKinds:
         kinds = {k.value for k in EpochKind}
         for expected in ("age", "gear", "injury", "status", "season", "ruin"):
             assert expected in kinds
+
+
+class TestFieldLength:
+    """时期记录是档案，提示词不是。
+
+    实跑时一个三人镜拼出 2483 字，而「随身携带一根铁质镖旗杆
+    （可作短棍使用）」在画面里根本看不见 —— 它唯一的作用是把
+    「谁在做什么」挤出模型的注意力。
+    """
+
+    def test_long_field_is_cut_at_a_clause_boundary(self):
+        from app.pipelines.epochs import _short
+        out = _short("腰刀一把，刀鞘为黑色牛皮，刀柄包铜，未出鞘时仅露刀把")
+        assert len(out) <= 26
+        assert not out.endswith("，")
+        assert out.startswith("腰刀一把")
+
+    def test_short_field_is_untouched(self):
+        from app.pipelines.epochs import _short
+        assert _short("黑鞘铜柄腰刀") == "黑鞘铜柄腰刀"
+
+    def test_no_boundary_falls_back_to_a_hard_cut(self):
+        """半个短语比没有更糟，但没有句读时也只能硬切。"""
+        from app.pipelines.epochs import _short
+        out = _short("あ" * 60)
+        assert len(out) == 26
+
+
+class TestPromptIsNotFedBackIn:
+    """合成结果不能被当成下一次的镜头内容。
+
+    实跑时一个三人镜拼到 4034 字，同一批人物描述重复四遍，
+    每遍还是不同批次抽取的旧值 —— 画面里那三个人各有四套衣服。
+    起因是 compose 读 frame.prompt 当「镜头内容」，又把产出写回 frame.prompt。
+    """
+
+    def test_compose_reads_content_not_prompt(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "pipelines" / "frame_compose.py").read_text("utf-8")
+        head = src[:src.index("def bind_and_compose")]
+        assert "positive.append(frame.prompt" not in head
+        assert '.get("content")' in head
+
+
+class TestRecoverContent:
+    def test_uncomposed_prompt_is_kept_whole(self):
+        from app.pipelines.frame_compose import _recover_content
+        text = "沈砚推开门，腰刀在手，门外三人回头"
+        assert _recover_content(text) == text
+
+    def test_nested_prompt_yields_the_last_segment(self):
+        """合成时新内容拼在前面，所以原句在最后一段。"""
+        from app.pipelines.frame_compose import _recover_content
+        nested = "壮实，肩宽背厚, medium shot, 壮实，肩宽背厚, medium shot, 沈砚推开门"
+        assert _recover_content(nested) == "沈砚推开门"
+
+
+class TestFrameSyncAfterRegenerate:
+    def test_sync_keys_off_the_current_task_not_presence_of_an_asset(self):
+        """判「有图就跳过」的话，regenerate 之后挂着的还是旧图 ——
+        重出一版花了钱，看到的却是上一版。"""
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "pipelines" / "frame_compose.py").read_text("utf-8")
+        body = src[src.index("def sync_frame_assets"):]
+        assert "if frame.asset_id or not frame.gen_task_id" not in body
+        assert "asset_id != frame.asset_id" in body

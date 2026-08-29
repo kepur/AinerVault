@@ -2194,9 +2194,12 @@ const Epochs = {
       .catch(()=>[]);
     const tf = transforms.find(t=>t.id===State.transformId) || transforms[0];
     const pid = tf && tf.target && tf.target.id;
-    const d = pid ? await api("GET",
-      `/novels/${State.novelId}/entity-epochs?profile_id=${pid}`).catch(()=>null)
-      : null;
+    const [d, an] = pid ? await Promise.all([
+      api("GET", `/novels/${State.novelId}/entity-epochs?profile_id=${pid}`).catch(()=>null),
+      api("GET", `/novels/${State.novelId}/identity-anchors?profile_id=${pid}`).catch(()=>null),
+    ]) : [null, null];
+    const anchorOf = {};
+    (an && an.items || []).forEach(i => anchorOf[i.entity_id] = i);
 
     v.innerHTML = `
       <div class="card">
@@ -2218,11 +2221,41 @@ const Epochs = {
             >划分时期</button>
           <button class="btn" onclick="Epochs.mine(this,true)" ${pid?"":"disabled"}
             >重划（不覆盖已锁定）</button>
+          <button class="btn" onclick="Epochs.anchors(this)" ${pid?"":"disabled"}
+            >生成脸参考图</button>
           ${tf?`<span class="sub mono" style="color:var(--muted);font-size:12px">
             ${h(tf.target.display_name)}</span>`:`<span class="sub"
             style="color:var(--warn);font-size:12px">先在「映射与词表」建一个映射</span>`}
         </div>
       </div>
+
+      ${an ? `<div class="card">
+        <h2>身份锚 · 跨期共用的脸参考图
+          <span class="tag ${an.with_anchor===an.entities&&an.entities?"t-ok":"t-warn"}"
+            >${an.with_anchor}/${an.entities} 有锚</span>
+        </h2>
+        <p class="hint">时期让各期共用同一句「浓眉，左颊一道旧疤」，
+          但那<b>只是文字</b> —— 拿同一句话生成三次，出来是三张脸。
+          跨期同一性的真正落点是一张共用的参考图。<br>
+          锚是<b>正面素颜头肩像</b>，不是剧照：它会被后续每一期引用，
+          若带着第一期的衣着兵器，那身衣服会渗进中年的每一张图。<br>
+          有锚之后，出图提示词里就不再重复描述脸 ——
+          <b>参考图负责「是谁」，文字负责「在做什么、穿什么」</b>。</p>
+        <div class="row" style="flex-wrap:wrap;gap:10px">
+          ${(an.items||[]).map(i=>`
+            <div style="text-align:center;width:96px">
+              ${i.anchor_url
+                ? `<img src="${h(i.anchor_url)}" style="width:88px;height:88px;
+                     object-fit:cover;border-radius:8px;border:1px solid var(--line)">`
+                : `<div style="width:88px;height:88px;border-radius:8px;
+                     border:1px dashed var(--warn);display:flex;align-items:center;
+                     justify-content:center;color:var(--warn);font-size:11px">无锚</div>`}
+              <div class="sub" style="font-size:11.5px;margin-top:3px">${h(i.name)}</div>
+              <div class="sub mono" style="font-size:10px;color:var(--muted)"
+                >${i.covered}/${i.epochs} 期</div>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
 
       ${d && (d.issues.length || d.without_epochs.length || d.not_checked.length) ? `
       <div class="card">
@@ -2256,6 +2289,9 @@ const Epochs = {
               >${i.epochs.length} 期</span>
             ${i.identity_ref?`<span class="tag t-ok">脸参考已定</span>`
               :`<span class="tag t-warn">无脸参考</span>`}
+            ${anchorOf[i.entity_id]&&anchorOf[i.entity_id].anchor_url
+              ?`<img src="${h(anchorOf[i.entity_id].anchor_url)}"
+                 style="width:26px;height:26px;object-fit:cover;border-radius:4px">`:""}
           </div>
           ${Object.keys(i.invariant||{}).length?`
             <div class="prop" style="margin-bottom:8px">
@@ -2287,6 +2323,33 @@ const Epochs = {
           pid?"还没划分时期":"还没有世界观映射"}</div></div>`}
       <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
     const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async anchors(btn) {
+    await run(btn, async () => {
+      const ts = await api("GET", `/novels/${State.novelId}/transforms`);
+      const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+      if (!tf) throw new Error("还没有世界观映射");
+      const pid = tf.target.id;
+      const g = await api("POST",
+        `/novels/${State.novelId}/identity-anchors:generate?profile_id=${pid}`,
+        {confirm_cost:true});
+      logOk(`提交 ${g.submitted} 张锚图　已有 ${g.skipped_has_anchor}`);
+      (g.blocked||[]).forEach(logWarn);
+      // 生成是异步的：轮询到落地再挂
+      for (let i = 0; i < 6 && g.submitted; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        await api("POST", `/gen-tasks:poll-due?limit=50`).catch(()=>null);
+        const s = await api("POST",
+          `/novels/${State.novelId}/identity-anchors:sync?profile_id=${pid}`);
+        if (!s.still_missing.length) {
+          logOk(`锚图 ${s.anchored} 张已挂到 ${s.epochs_updated} 期`);
+          (s.rule_fixes||[]).forEach(x => log(`规则：${x.detail}`, "warn"));
+          break;
+        }
+        if (i === 5) logWarn(`仍缺：${s.still_missing.join("、")}`);
+      }
+      App.refresh();
+    }, "生成中");
   },
   async mine(btn, force) {
     await run(btn, async () => {

@@ -402,3 +402,29 @@ class TestVoiceForKeying:
         for name in ("audio_compose.py", "audiobook.py"):
             src = (root / name).read_text(encoding="utf-8")
             assert "casting.NARRATOR," in src, name
+
+
+class TestUnorderableEpochsAreNotJudged:
+    """排不出先后就不查漂移。
+
+    素材时期被删后，音色行成了孤儿：章节序号查不到，排序退回字母序，
+    于是「断腕后沙哑」被读成「少年时嗓子好端端地变回来了」，
+    报出方向完全相反的假漂移。
+    报不出来比报错的好 —— 错的告警会让人去改本来对的东西。
+    """
+
+    def test_audit_skips_and_says_so(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "pipelines" / "casting.py").read_text("utf-8")
+        body = src[src.index("def audit_casting"):]
+        assert "unorderable" in body
+        assert "排不出先后" in body
+
+    def test_derive_removes_orphan_rows(self):
+        """时期没了，它的音色行也该走。"""
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "pipelines" / "casting.py").read_text("utf-8")
+        body = src[src.index("def cast_epoch_voices"):]
+        assert "orphaned" in body and "db.delete(row)" in body

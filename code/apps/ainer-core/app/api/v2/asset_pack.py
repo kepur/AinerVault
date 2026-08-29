@@ -658,3 +658,58 @@ def list_entity_epochs(novel_id: str, profile_id: str = Query(...),
         "issues": issues, "without_epochs": uncast,
         "not_checked": not_checked,
     }
+
+
+# ── 身份锚（跨期共用的脸参考图）─────────────────────────────────────────────
+
+class AnchorIn(BaseModel):
+    entity_ids: list[str] = Field(default_factory=list)
+    regenerate: bool = False
+    confirm_cost: bool = False
+
+
+@router.post("/novels/{novel_id}/identity-anchors:generate")
+def generate_identity_anchors(novel_id: str, profile_id: str = Query(...),
+                              body: AnchorIn | None = None,
+                              db: Session = Depends(get_db)) -> dict:
+    """为每个有时期的角色生成一张脸参考图。
+
+    时期让各期共用同一句「浓眉，左颊一道旧疤」，但那只是文字 ——
+    同一段描述生成三次是三张脸。锚图才是跨期同一性的落点。
+    """
+    from app.models import WorldProfile
+    from app.pipelines import identity
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    body = body or AnchorIn()
+    try:
+        return identity.generate_anchors(
+            db, novel_id, profile, entity_ids=body.entity_ids or None,
+            regenerate=body.regenerate, confirm_cost=body.confirm_cost,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/novels/{novel_id}/identity-anchors:sync")
+def sync_identity_anchors(novel_id: str, profile_id: str = Query(...),
+                          db: Session = Depends(get_db)) -> dict:
+    """把生成好的锚图挂到该角色的每一期上，并抹平分叉。"""
+    from app.models import WorldProfile
+    from app.pipelines import identity
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    return identity.sync_anchors(db, novel_id, profile)
+
+
+@router.get("/novels/{novel_id}/identity-anchors")
+def get_identity_anchors(novel_id: str, profile_id: str = Query(...),
+                         db: Session = Depends(get_db)) -> dict:
+    """锚的体检：谁有、谁没有、谁分叉了。"""
+    from app.pipelines import identity
+
+    return identity.anchor_status(db, novel_id, profile_id)

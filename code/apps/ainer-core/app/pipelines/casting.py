@@ -542,7 +542,7 @@ def cast_epoch_voices(
             )
         ).scalars()
     }
-    made, skipped = 0, 0
+    made, skipped, orphaned = 0, 0, 0
     seen: set[tuple[str, str]] = set()
     for ep, eid in rows:
         key = ep.epoch_key
@@ -570,8 +570,20 @@ def cast_epoch_voices(
         row.rationale = f"由基准音色按「{ep.display_name or key}」推导，声线本体不变"
         row.status = ReviewStatus.candidate
         made += 1
+    # 时期没了，它的音色行也该走。留着的后果不只是脏数据 ——
+    # 审核时排不出这几期的先后（章节序号已经查不到了），
+    # 于是退回按 key 的字母序，报出方向完全相反的假漂移
+    live = {(eid, k) for eid, k in seen}
+    for (ck, ek), row in list(existing.items()):
+        if ek == "baseline" or (ck, ek) in live:
+            continue
+        if row.locked or row.status is ReviewStatus.locked:
+            continue
+        db.delete(row)
+        orphaned += 1
     db.flush()
-    return {"derived": made, "skipped_locked": skipped, "epochs": len(seen)}
+    return {"derived": made, "skipped_locked": skipped, "epochs": len(seen),
+            "orphaned_removed": orphaned}
 
 
 #: 原文里的年龄说法 → 年龄感术语。素材时期的 age_look 是自由文本，
@@ -636,8 +648,16 @@ def audit_casting(
         kinds[(eid, e.epoch_key)] = getattr(e.kind, "value", str(e.kind))
         order_of[(eid, e.epoch_key)] = e.from_chapter_order
 
+    unorderable: list[str] = []
     for eid, group in by_entity.items():
         if len(group) < 2:
+            continue
+        # 排不出先后就不查 —— 拿字母序当时间序，「断腕后沙哑」会被读成
+        # 「少年时嗓子好端端地变回来了」，报出方向完全相反的假漂移。
+        # 报不出来比报错的好：错的告警会让人去改本来对的东西
+        if any(r.epoch_key != "baseline" and (eid, r.epoch_key) not in order_of
+               for r in group):
+            unorderable.append(label(eid))
             continue
         # **按章节先后排，不能按 key 的字母序。** 按字母序会拿「wounded」
         # 去比「youth」—— 顺序反了，于是「断腕后沙哑」被读成
@@ -668,6 +688,11 @@ def audit_casting(
         not_checked.append(
             f"剧本没有分场，同场关系按「相邻 {TURN_WINDOW} 条对白」近似。"
             "跑一次剧本转换分出场次后，这一项会更准")
+    if unorderable:
+        not_checked.append(
+            "以下角色的时期音色找不到对应的素材时期，排不出先后，"
+            "声线漂移未检查：" + "、".join(unorderable)
+            + "（跑一次「按时期推导」会清掉这些孤儿行）")
     if not any(len(g) > 1 for g in by_entity.values()):
         # len(by_entity) == len(base) 判不出来：一个角色有四条时期，
         # by_entity 里仍然只是一个 key

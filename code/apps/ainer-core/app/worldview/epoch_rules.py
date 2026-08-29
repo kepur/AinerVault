@@ -233,8 +233,14 @@ def check_spans(drafts: Sequence[EpochDraft],
     一章一期不是分期，是逐章重画 —— 每章的描述都会漂一点，
     而分期本来就是为了不漂。真需要单章特写的（易容、重伤当场），
     人确认后放行即可，所以这里只报不改。
+
+    **只有一期时不查。** 补完区间后它必然覆盖全书，
+    而「一期覆盖全书」正是配角与固定物体的正确答案 ——
+    对它报「分期过短」是把正确答案判成错的。
     """
     out = []
+    if len(drafts) < 2:
+        return out
     for d in drafts:
         end = d.to_chapter_order if d.to_chapter_order is not None else total_chapters
         span = end - d.from_chapter_order + 1
@@ -323,6 +329,63 @@ def _same_mark(a: str, b: str) -> bool:
     if not ka or not kb:
         return True          # 同一位置、都没说是什么记号，仍算撞
     return bool(ka & kb)
+
+
+#: 「没有疤」的各种写法。落成字面值会变成噪声：
+#: 它进提示词是「无」，进撞记号检测是一个所有人共有的「记号」。
+_NEGATIVE_MARK = ("无", "没有", "未见", "无明显", "无特殊", "没有明显", "－", "-", "—")
+
+
+def normalize_mark(value: str) -> str:
+    """把「无」「没有明显疤痕」这类否定写法归为空。"""
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    if v in _NEGATIVE_MARK or any(v.startswith(n) and len(v) <= len(n) + 4
+                                  for n in _NEGATIVE_MARK):
+        return ""
+    return v
+
+
+def resolve_shared_marks(
+    invariants: dict[str, dict[str, Any]], weights: dict[str, int],
+) -> list[dict[str, Any]]:
+    """撞了的记号，次要角色让路 —— 清掉，不另编一个。
+
+    **清掉而不是换一个。** 换一个是凭空发明原文没有的特征，
+    而那会变成一个假的辨识依据，比没有更糟：
+    观众记住了一道书里没有的疤。
+
+    清掉是安全的：没有记号只是少一条线索，而共有的记号是**误导** ——
+    四个人都是「左颊一道细长旧疤」时，这道疤不再指向任何人。
+    （实跑时六个角色里有四个是它 —— 武侠的类型套话。）
+
+    谁让路按台词量／出场章数：主角的疤是观众记得最牢的那个。
+    """
+    fixes: list[dict[str, Any]] = []
+    for f in DISTINCTIVE:
+        # 重要度高的先占位
+        order = sorted(invariants, key=lambda k: (-weights.get(k, 0), k))
+        taken: list[tuple[str, str]] = []
+        for name in order:
+            val = normalize_mark(invariants[name].get(f, ""))
+            if not val:
+                invariants[name].pop(f, None)
+                continue
+            hit = next((o for o, v in taken if _same_mark(v, val)), None)
+            if hit is None:
+                taken.append((name, val))
+                invariants[name][f] = val
+                continue
+            invariants[name].pop(f, None)
+            fixes.append({
+                "type": "shared_mark_cleared", "entity": name, "field": f,
+                "against": hit,
+                "detail": f"{name} 的「{f}」（{val}）与 {hit} 是同一个记号，"
+                          f"已清空 —— 共有的记号不再指向任何人，"
+                          f"而另编一个是凭空发明原文没有的特征",
+            })
+    return fixes
 
 
 def apply_rules(

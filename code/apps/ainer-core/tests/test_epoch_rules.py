@@ -275,3 +275,59 @@ class TestSharedMarksScope:
             "老周": {"scars": "左颊一道竖直旧疤，约两寸长"},
         })
         assert len(out) == 1
+
+
+class TestSingleEpochIsNeverTooShort:
+    """一期覆盖全书是配角与固定物体的正确答案。
+
+    对它报「分期过短」是把正确答案判成错的 —— 而人会照着告警去改，
+    把本来对的东西改坏。
+    """
+
+    def test_lone_epoch_is_not_flagged(self):
+        assert check_spans([d("only", 1, None)], 1) == []
+        assert check_spans([d("only", 1, 1)], 30) == []
+
+    def test_two_short_epochs_are_still_flagged(self):
+        assert len(check_spans([d("a", 1, 1), d("b", 2, 2)], 20)) == 2
+
+
+class TestResolveSharedMarks:
+    """撞了的记号让次要角色让路 —— 清掉，不另编一个。
+
+    实跑时六个角色里有四个是「左颊一道细长旧疤」，武侠的类型套话。
+    这道疤于是不再指向任何人。
+    """
+
+    def test_less_prominent_character_loses_the_mark(self):
+        from app.worldview.epoch_rules import resolve_shared_marks
+        inv = {"沈砚": {"scars": "左颊一道细长旧疤，从颧骨延伸至下颌"},
+               "灰衣汉子": {"scars": "左颊一道细长旧疤"}}
+        fixes = resolve_shared_marks(inv, {"沈砚": 3, "灰衣汉子": 2})
+        assert "scars" in inv["沈砚"]
+        assert "scars" not in inv["灰衣汉子"]
+        assert fixes[0]["entity"] == "灰衣汉子"
+
+    def test_nothing_is_invented(self):
+        """换一个是凭空发明原文没有的特征，比没有更糟 ——
+        观众会记住一道书里没有的疤。"""
+        from app.worldview.epoch_rules import resolve_shared_marks
+        inv = {"甲": {"scars": "左颊旧疤"}, "乙": {"scars": "左颊旧疤"}}
+        resolve_shared_marks(inv, {"甲": 5, "乙": 1})
+        assert inv["乙"].get("scars") in (None, "")
+
+    def test_distinct_marks_survive(self):
+        from app.worldview.epoch_rules import resolve_shared_marks
+        inv = {"甲": {"scars": "左颊旧疤"}, "乙": {"scars": "右手背烫伤疤"}}
+        assert resolve_shared_marks(inv, {"甲": 5, "乙": 1}) == []
+        assert inv["乙"]["scars"] == "右手背烫伤疤"
+
+    def test_negation_becomes_empty_not_a_shared_mark(self):
+        """「无」落成字面值会变成一个所有人共有的「记号」。"""
+        from app.worldview.epoch_rules import normalize_mark, resolve_shared_marks
+        assert normalize_mark("无") == ""
+        assert normalize_mark("无明显疤痕") == ""
+        assert normalize_mark("左颊旧疤") == "左颊旧疤"
+        inv = {"甲": {"scars": "无"}, "乙": {"scars": "没有明显疤痕"}}
+        assert resolve_shared_marks(inv, {}) == []
+        assert "scars" not in inv["甲"] and "scars" not in inv["乙"]
