@@ -385,3 +385,92 @@ def generate_motion(
 
     db.flush()
     return {"shots": len(shots), "generated": made, "thin": thin}
+
+
+# ── 场记：跨镜连续性 ─────────────────────────────────────────────────────────
+
+def _shot_facts(
+    db: Session, shot: Shot, sheets: dict[str, CrewSheet],
+) -> dict[str, Any]:
+    """把一个镜头的各方数据摊成连续性检查要的形状。
+
+    灯光来自 crew_sheets，站位视线道具来自 shot_performances ——
+    两处数据本来就分开存，检查时才需要合到一起。
+    """
+    from app.models import ShotPerformance, StagePosition, WorldEntity
+
+    light = sheets.get("lighting")
+    payload = (light.payload_json or {}) if light else {}
+    facts: dict[str, Any] = {
+        "order": shot.order_no,
+        # 键名来自灯光规格的维度，这里按语义取而不是按位置
+        "key_light": as_text(payload.get("主光")),
+        "color_temp": as_text(payload.get("色温与色彩倾向")),
+        "positions": {}, "facing": {}, "gaze": {}, "props": {}, "actions": {},
+    }
+    rows = list(db.execute(
+        select(ShotPerformance, WorldEntity)
+        .join(WorldEntity, WorldEntity.id == ShotPerformance.entity_id)
+        .where(ShotPerformance.shot_id == shot.id)
+    ))
+    for p, e in rows:
+        if p.position is StagePosition.offscreen:
+            continue          # 画外的人不参与构图连续性
+        name = e.display_name
+        facts["positions"][name] = p.position.value
+        facts["facing"][name] = p.facing.value
+        if p.gaze_target:
+            facts["gaze"][name] = p.gaze_target
+        if p.props_json:
+            facts["props"][name] = list(p.props_json)
+        facts["actions"][name] = " ".join(
+            x for x in (p.action, p.action_end) if x
+        )
+    return facts
+
+
+def check_continuity(db: Session, plan: ShotPlan) -> dict[str, Any]:
+    """场记检查。按场景分组，只在同一场内相邻比对。
+
+    换了场当然可以换光换位置 —— 不分组的话，
+    每个场景切换都会报一次「光位跳变」，告警立刻变成噪声。
+    """
+    from app.worldview import continuity as ct
+
+    shots = list(db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
+    ).scalars())
+    if not shots:
+        raise PipelineError("该分镜计划下没有镜头")
+
+    sheets: dict[str, dict[str, CrewSheet]] = {}
+    for row in db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id.in_([s.id for s in shots]))
+    ).scalars():
+        sheets.setdefault(row.shot_id, {})[row.role] = row
+
+    by_scene: dict[str, list[dict[str, Any]]] = {}
+    for s in shots:
+        key = s.scene_id or "__no_scene__"
+        by_scene.setdefault(key, []).append(
+            _shot_facts(db, s, sheets.get(s.id, {}))
+        )
+
+    issues: list[ct.Issue] = []
+    for group in by_scene.values():
+        issues.extend(ct.check_scene(group))
+
+    out = ct.summarize(issues)
+    out["scenes"] = len(by_scene)
+    out["shots"] = len(shots)
+    # 检查不了的地方要说出来 —— 没有灯光单就查不出光位跳变，
+    # 报「0 处问题」会让人以为查过了
+    out["not_checked"] = [
+        f"镜 {s.order_no}：缺灯光单，光位与色温未检查"
+        for s in shots if "lighting" not in sheets.get(s.id, {})
+    ] + [
+        f"镜 {s.order_no}：缺人物调度，翻轴与视线未检查"
+        for s in shots
+        if not _shot_facts(db, s, sheets.get(s.id, {}))["positions"]
+    ]
+    return out

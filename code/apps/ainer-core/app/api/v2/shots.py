@@ -308,6 +308,31 @@ def generate_motion(plan_id: str, body: SheetIn,
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/shot-plans/{plan_id}/continuity")
+def check_continuity(plan_id: str, db: Session = Depends(get_db)) -> dict:
+    """场记：跨镜连续性检查。
+
+    这类错误**每一镜自己都完全合理** —— 主光从左前打过来没问题，
+    下一镜从右前打过来也没问题，可放在同一场戏里，
+    观众会觉得太阳在两秒里转了半圈。
+
+    四类都可以形式化判定，**不调模型**：光位与色温跳变、翻轴、
+    视线不相向、道具凭空出现或消失。
+    让模型看整场戏问它「有没有跳」，它会给一堆似是而非的提醒，
+    而真正的翻轴反倒漏掉。
+    """
+    from app.models import ShotPlan
+    from app.pipelines import crew_sheets as cs
+
+    plan = db.get(ShotPlan, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="shot plan not found")
+    try:
+        return cs.check_continuity(db, plan)
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/shot-plans/{plan_id}/crew-sheets")
 def list_crew_sheets(plan_id: str, db: Session = Depends(get_db)) -> dict:
     """制作单总览。incomplete 是**验收结果不是警告** ——

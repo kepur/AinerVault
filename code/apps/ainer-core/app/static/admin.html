@@ -331,6 +331,7 @@ const GROUPS = [
   {id:"g-media", name:"成品", pages:[
     {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
     {id:"staging",  ico:"🎭", name:"分镜调度", sub:"站位 · 朝向 · 视线 · 表情 · 动作"},
+    {id:"crew",     ico:"🎥", name:"制作单", sub:"摄影 · 灯光 · 美术 · 声音 · 剪辑 · 场记"},
     {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
   ]},
   {id:"g-sys", name:"系统", pages:[
@@ -2029,6 +2030,146 @@ const Prompts = {
   },
 };
 
+
+// ───────────────────────── 制作单 ─────────────────────────
+// 与分镜调度页的 ROLE_CN（对话身份）同名会撞车，这里叫 CREW_CN
+const CREW_CN = {
+  cinematography:"摄影", lighting:"灯光", production_design:"美术",
+  sound:"声音", editing:"剪辑",
+};
+const CT_CN = {
+  light_direction_jump:"光位跳变", color_temp_jump:"色温跳变",
+  axis_flip:"翻轴", gaze_mismatch:"视线不相向",
+  prop_vanished:"道具消失", prop_appeared:"道具凭空出现",
+};
+
+const Crew = {
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一个章节</div></div>`;
+      return;
+    }
+    const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`).catch(()=>null);
+    const pid = plan && plan.shot_plan_id;
+    const [d, ct] = pid ? await Promise.all([
+      api("GET", `/shot-plans/${pid}/crew-sheets`).catch(()=>null),
+      api("GET", `/shot-plans/${pid}/continuity`).catch(()=>null),
+    ]) : [null, null];
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>镜头制作单
+          ${d?`<span class="sub mono" style="color:var(--muted)">${d.complete}/${d.shots} 完整</span>`:""}
+          ${d&&d.with_motion?`<span class="tag t-ok">${d.with_motion} 镜有运动</span>`:""}
+        </h2>
+        <p class="hint">这是本系统对下游（图像／视频／音频生成）的<b>主要交付物</b>。
+          本系统不生成画面与声音，但要把「该生成什么」说到不留空白 ——
+          否则那些模块只能自己猜，猜出来的东西没法跨镜保持一致。<br>
+          按工种分开出单而不是一次填完：这些维度的判据完全不同 ——
+          灯光要方位与光质，剪辑要秒数与切点，一次填完模型会平均用力、每项写两句。<br>
+          <b>缺项是验收结果不是警告</b>：下游拿到「柔和侧光」出来的图没法用，
+          而那时已经花掉了图像模型的钱。</p>
+        <div class="row">
+          <button class="btn pri" onclick="Crew.gen(this)" ${pid?"":"disabled"}>逐工种出单</button>
+          <button class="btn" onclick="Crew.motion(this)" ${pid?"":"disabled"}>生成运动描述</button>
+          ${pid?"":`<span class="sub" style="color:var(--warn);font-size:12px">
+            先在「剧本转换」生成分镜计划</span>`}
+        </div>
+      </div>
+
+      ${ct ? `<div class="card">
+        <h2>场记 · 跨镜连续性
+          ${ct.total ? `<span class="tag t-bad">${ct.total} 处</span>`
+                     : `<span class="tag t-ok">未发现问题</span>`}
+          <span class="sub mono" style="color:var(--muted)">${ct.shots} 镜 / ${ct.scenes} 场</span>
+        </h2>
+        <p class="hint">这类错误<b>每一镜自己都完全合理</b> ——
+          主光从左前打过来没问题，下一镜从右前打过来也没问题，
+          可放在同一场戏里，观众会觉得太阳在两秒里转了半圈。<br>
+          四类都是形式化判定，<b>不调模型</b>：光位与色温跳变、翻轴、
+          视线不相向、道具凭空出现或消失。</p>
+        ${ct.items.length ? ct.items.map(i=>`
+          <div class="gap" style="margin-bottom:7px">
+            <div class="gh">
+              <span class="sev sev-${i.severity==="high"?5:i.severity==="medium"?3:1}"
+                >${i.severity==="high"?"高":i.severity==="medium"?"中":"低"}</span>
+              <b style="color:var(--ink)">${h(CT_CN[i.kind]||i.kind)}</b>
+              <span class="tag t-mute">镜 ${i.shot_from}${
+                i.shot_to!==i.shot_from?` → ${i.shot_to}`:""}</span>
+              ${(i.subjects||[]).map(s=>`<span class="tag t-info">${h(s)}</span>`).join("")}
+            </div>
+            <div class="eff">${h(i.detail)}</div>
+          </div>`).join("") : ""}
+        ${(ct.not_checked||[]).length ? `
+          <div class="sub" style="color:var(--warn);font-size:12px;margin-top:8px">
+            <b>以下没能检查</b> —— 报「0 处问题」会让人以为查过了：<br>
+            ${ct.not_checked.map(h).join("<br>")}</div>` : ""}
+      </div>` : ""}
+
+      ${d && d.items.length ? d.items.map(s => `
+        <div class="card" style="padding:13px 15px">
+          <div class="row" style="margin-bottom:9px">
+            <span class="tag t-mute">#${s.order_no}</span>
+            <span class="tag t-info">${h(s.shot_size||"—")}</span>
+            <span class="mono" style="color:var(--muted);font-size:12px">
+              ${(s.duration_ms/1000).toFixed(1)}s</span>
+            ${(s.missing_roles||[]).length
+              ? `<span class="tag t-warn">缺 ${s.missing_roles.map(r=>CREW_CN[r]||r).join("、")}</span>`
+              : `<span class="tag t-ok">五工种齐</span>`}
+            <span style="color:var(--body);font-size:12.5px">${h(s.description||"")}</span>
+          </div>
+          ${Object.entries(s.sheets).map(([role, sh])=>`
+            <div style="margin-bottom:7px">
+              <div class="row" style="gap:6px;margin-bottom:3px">
+                <span class="tag ${sh.missing.length?"t-warn":"t-mute"}">${h(CREW_CN[role]||role)}</span>
+                ${sh.missing.length?`<span class="sub" style="color:var(--warn);font-size:11px">
+                  缺 ${sh.missing.map(h).join("、")}</span>`:""}
+                ${sh.rejected.length?`<span class="sub" style="color:var(--danger);font-size:11px">
+                  空洞 ${sh.rejected.length} 处</span>`:""}
+                ${sh.edited_by_human?`<span class="tag t-ok">已改</span>`:""}
+              </div>
+              <div class="sub" style="font-size:12px;color:var(--body);line-height:1.6">
+                ${h(sh.prompt||"—")}</div>
+            </div>`).join("")}
+          ${s.motion ? `
+            <div class="prop" style="margin-top:8px">
+              <b>运动</b>　${h(s.motion.camera_move||"—")}　${h(s.motion.pacing||"")}
+              <div class="sub" style="font-size:12px;margin-top:5px">
+                起幅：${h((s.motion.start_frame||"").slice(0,90))}<br>
+                落幅：${h((s.motion.end_frame||"").slice(0,90))}</div>
+              ${(s.motion.deltas||[]).length?`<div class="sub" style="font-size:12px;margin-top:4px">
+                首尾差异（i2i 的直接依据）：${s.motion.deltas.map(h).join("；")}</div>`:""}
+            </div>` : ""}
+        </div>`).join("")
+      : `<div class="card"><div class="empty">${pid?"还没有制作单":"还没有分镜计划"}</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async _plan() {
+    const p = await api("GET", `/chapters/${State.chapterId}/shot-plan`);
+    return p.shot_plan_id;
+  },
+  async gen(btn) {
+    await run(btn, async () => {
+      const pid = await this._plan();
+      const r = await api("POST", `/shot-plans/${pid}/crew-sheets:generate`, {});
+      logOk(`出单 ${r.generated} 份　${JSON.stringify(r.by_role)}`);
+      (r.incomplete||[]).forEach(x =>
+        logWarn(`镜 ${x.shot} ${CREW_CN[x.role]||x.role}：缺 ${x.missing.join("、")}`));
+      App.refresh();
+    }, "出单中");
+  },
+  async motion(btn) {
+    await run(btn, async () => {
+      const pid = await this._plan();
+      const r = await api("POST", `/shot-plans/${pid}/motion:generate`, {});
+      logOk(`运动 ${r.generated}/${r.shots} 镜`);
+      (r.thin||[]).forEach(x => logWarn(`镜 ${x.shot}：${x.why}`));
+      App.refresh();
+    }, "生成中");
+  },
+};
+
 // ───────────────────────── 任务 ─────────────────────────
 const Tasks = {
   async render(v) {
@@ -2142,6 +2283,7 @@ const App = {
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
+               crew:Crew,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {
