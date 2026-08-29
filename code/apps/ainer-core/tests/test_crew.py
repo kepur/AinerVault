@@ -116,3 +116,82 @@ class TestCompose:
         out = _compose(spec, payload)
         assert "3.2 秒" in out
         assert out.count("；") == 0
+
+
+class TestAcceptanceBalance:
+    """验收要卡住空洞，但**不能误伤精确的短答案**。
+
+    实跑抓到过：摄影报缺「景别／机位高度／机位方位」，
+    而产出里明明是「中近景」「平视」「正面」—— 最小长度 6 字
+    把这套规格最想要的那种回答全判成了缺失。
+
+    术语表在生成时是给模型的词汇，在验收时是白名单 —— 一物两用。
+    """
+
+    CASES = {
+        "lighting": ["前侧光 硬光", "无补光", "无", "月光", "5600K", "高反差"],
+        "cinematography": ["中近景", "低于视平线", "正面", "50mm 浅景深",
+                           "固定", "居中"],
+        "editing": ["1.9 秒，对白长度", "静止起幅", "切在动作中", "硬切",
+                    "比前镜快"],
+    }
+
+    @pytest.mark.parametrize("role", list(CASES))
+    def test_short_but_precise_passes(self, role):
+        spec = CREW_BY_ROLE[role]
+        payload = {
+            _dim_key(d): v for d, v in zip(spec.dimensions, self.CASES[role])
+        }
+        missing, _ = _check(spec, payload)
+        assert not missing, f"{role} 误判了精确的短答案：{missing}"
+
+    def test_explicit_negative_is_a_decision(self):
+        """「无补光」「机位固定」是做出了决定，不是没填。
+
+        「有没有」类的维度本来就允许回答「没有」。
+        """
+        spec = CREW_BY_ROLE["lighting"]
+        payload = {_dim_key(d): "有内容占位符" for d in spec.dimensions}
+        payload[_dim_key(spec.dimensions[1])] = "无"
+        missing, _ = _check(spec, payload)
+        assert not missing
+
+    def test_vague_still_caught(self):
+        """放宽短答案不等于放过空洞的 —— 两者必须都成立。"""
+        spec = CREW_BY_ROLE["lighting"]
+        payload = {
+            _dim_key(d): v for d, v in zip(
+                spec.dimensions,
+                ["柔和侧光", "适当补光", "有", "", "暖", "明暗对比强烈"])
+        }
+        missing, _ = _check(spec, payload)
+        assert missing, "空洞回答不该通过"
+
+    @pytest.mark.parametrize("spec", CREW, ids=lambda s: s.role)
+    def test_lexicon_covers_dimension_options(self, spec):
+        """维度里列举的选项必须在术语表里有一份。
+
+        列在维度描述里而术语表没有，那些回答就会因为太短被判缺失 ——
+        「正面」「低于视平线」都栽在这上面过。
+        """
+        flat = {w for words in spec.lexicon.values() for w in words}
+        missing = []
+        for dim in spec.dimensions:
+            tail = dim.split("：")[-1]
+            # 「从哪个动作／状态开始」是一句说明，不是选项表 ——
+            # 两段都很短，光看长度分不出来。可靠的判据是**疑问词**：
+            # 枚举项不会含「哪个」「什么」「是否」。
+            # 分不出来的代价是逼人往术语表里塞「状态开始」这种垃圾，
+            # 而术语表同时是验收白名单，塞进垃圾等于放宽验收。
+            if any(q in tail for q in ("哪个", "哪些", "什么", "是否", "多少",
+                                       "为什么", "有没有", "怎么")):
+                continue
+            parts = [o.strip() for o in tail.replace("／", "/").split("/")]
+            if len(parts) < 2 or any(len(p) > 8 for p in parts):
+                continue
+            for opt in parts:
+                if 2 <= len(opt) <= 6 and not any(
+                    opt in w or w in opt for w in flat
+                ):
+                    missing.append(opt)
+        assert not missing, f"{spec.role} 维度里列举但术语表缺：{missing}"

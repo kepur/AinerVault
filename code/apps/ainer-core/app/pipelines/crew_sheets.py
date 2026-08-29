@@ -45,6 +45,9 @@ _EMPTY_WORDS = (
     "电影感", "高级感", "氛围感", "唯美", "精美", "考究", "讲究",
     "根据需要", "视情况", "酌情", "自然的", "和谐的", "统一的",
 )
+#: 短于此长度要另行判断是否合格。**不能一刀切** ——
+#: 「中近景」「平视」「正面」「硬切」都是完全合格的答案，
+#: 按长度筛会把它们全判成缺失，而那正是这套规格最想要的那种精确回答。
 _MIN_LEN = 6
 
 
@@ -75,6 +78,30 @@ def _dim_key(dim: str) -> str:
     return re.sub(r"[^\w]+", "_", head).strip("_") or "field"
 
 
+#: 明确的否定答案。「无补光」「机位固定」是**做出了决定**，
+#: 不是没填 —— 按长度或术语筛会把它们判成缺失，
+#: 而「有没有」类的维度本来就允许回答「没有」。
+_NEGATIVE = ("无", "没有", "不用", "不加", "固定", "静止", "保持", "免")
+
+
+def _is_term(spec: CrewSpec, val: str) -> bool:
+    """这个短答案是不是该工种的术语。
+
+    术语表在生成时是给模型的词汇，在验收时是白名单 —— 一物两用。
+    没有它，「中近景」「平视」「硬切」这类精确回答会因为太短被判缺失，
+    而它们恰恰是这套规格最想要的那种答案。
+    """
+    v = val.strip()
+    if not v:
+        return False
+    for words in spec.lexicon.values():
+        for w in words:
+            # 术语可能带修饰（「低机位仰拍」含「低机位」），包含即算
+            if w and (w in v or v in w):
+                return True
+    return False
+
+
 def _check(spec: CrewSpec, payload: dict[str, Any]) -> tuple[list[str], list[str]]:
     """按规格验收。返回 (缺的维度, 命中的空洞写法)。"""
     missing: list[str] = []
@@ -82,7 +109,11 @@ def _check(spec: CrewSpec, payload: dict[str, Any]) -> tuple[list[str], list[str
     for dim in spec.dimensions:
         key = _dim_key(dim)
         val = as_text(payload.get(key))
-        if not val or len(val) < _MIN_LEN:
+        if not val:
+            missing.append(dim.split("：")[0].split(":")[0])
+            continue
+        decided = _is_term(spec, val) or any(val.startswith(n) for n in _NEGATIVE)
+        if len(val) < _MIN_LEN and not decided:
             missing.append(dim.split("：")[0].split(":")[0])
             continue
         hit = [w for w in _EMPTY_WORDS if w in val]
