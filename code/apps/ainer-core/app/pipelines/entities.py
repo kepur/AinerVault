@@ -677,7 +677,7 @@ def placeholder_map(
 
     返回 (替换表, 还原表, 缺译名的实体名)。
     """
-    from app.models import EntityAppellation, EntityWorldName
+    from app.models import EntityAppellation, EntityWorldName, Register
 
     kind_prefix = {
         EntityKind.character: "CHAR", EntityKind.location: "LOC",
@@ -741,6 +741,14 @@ def placeholder_map(
             surface = str(ap.source_surface or "").strip()
             if not surface or surface in claimed:
                 continue
+            # **代词不做占位符。** 「你」「他」是语法成分，不是称呼 ——
+            # 占位符会把它们锁成一个固定形式，于是译文在任何句法位置
+            # 都用主格。实跑出过「crouched beside he」「you has good
+            # innate potential」，还把「你不知道」译成 "I don't know"：
+            # 占位符挡住了原文，模型看不出这句是对谁说的。
+            # 代词本来就不需要跨文化映射，交给翻译本身处理。
+            if ap.register is Register.pronoun_like and _is_bare_pronoun(surface):
+                continue
             claimed.add(surface)
             if not ap.target_surface:
                 continue  # 未定形，留给下面按本名兜底
@@ -757,6 +765,19 @@ def placeholder_map(
 
     source_to_ph.sort(key=lambda kv: len(kv[0]), reverse=True)
     return source_to_ph, ph_to_target, missing
+
+
+#: 光杆代词。「你师姐」「他师父」这类**带中心语**的不算 ——
+#: 那里的「师姐」是真正的称呼，需要跨文化映射；
+#: 而单独一个「你」只是语法位置，译文该按句法自己变格。
+_BARE_PRONOUNS = frozenset(
+    "我 你 您 他 她 它 咱 俺 吾 汝 尔 余 予 朕 臣 妾 奴 咱们 我们 你们 "
+    "他们 她们 它们 您们 自己 人家".split()
+)
+
+
+def _is_bare_pronoun(surface: str) -> bool:
+    return surface.strip() in _BARE_PRONOUNS
 
 
 def _mutation_variants(prefix: str, target_name: str) -> list[str]:

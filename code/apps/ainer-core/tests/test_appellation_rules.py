@@ -109,3 +109,38 @@ class TestPromptAlignment:
             assert token in brief, f"提示词里缺少 {token} 这一族的判据"
         for t in ("proper", "role", "epithet", "generic"):
             assert t in brief
+
+
+class TestBarePronounsAreNotPlaceholders:
+    """代词是语法成分，不是称呼。
+
+    占位符会把它们锁成一个固定形式，于是译文在任何句法位置都用主格。
+    实跑出过：
+
+        "crouched beside he"                 ← 该是 him
+        "you has good innate potential"      ← 主谓不一致
+        「你不知道。」→ "I don't know."        ← 人称全反了
+
+    最后那条最能说明问题：占位符挡住了原文，模型看不出这句是对谁说的。
+    代词本来就不需要跨文化映射。
+    """
+
+    def test_bare_pronouns_are_recognised(self):
+        from app.pipelines.entities import _is_bare_pronoun
+        for w in ("你", "他", "她", "您", "我们", "他们", "自己"):
+            assert _is_bare_pronoun(w), w
+
+    def test_pronoun_with_a_head_noun_is_a_real_appellation(self):
+        """「你师姐」里的「师姐」是真正的称呼，需要跨文化映射 ——
+        排除它等于把亲属称谓一起丢了。"""
+        from app.pipelines.entities import _is_bare_pronoun
+        for w in ("你师姐", "他师父", "你师门", "我家老爷"):
+            assert not _is_bare_pronoun(w), w
+
+    def test_placeholder_map_skips_them(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "app" / "pipelines" / "entities.py").read_text("utf-8")
+        body = src[src.index("def placeholder_map"):]
+        assert "Register.pronoun_like" in body
+        assert "_is_bare_pronoun(surface)" in body
