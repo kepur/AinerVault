@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.models.script import DocStatus
 from app.pipelines.base import PipelineError, chat_json
+from app.worldview import idiom_rules as ir
 
 log = logging.getLogger(__name__)
 
@@ -95,11 +96,17 @@ class DeviceResult:
     by_type: dict[str, int] = field(default_factory=dict)
     by_load: dict[str, int] = field(default_factory=dict)
     high_load: list[dict] = field(default_factory=list)
+    #: 成语表推翻模型判断的记录。为空说明两者一致
+    rule_corrections: list[dict] = field(default_factory=list)
+    #: 本章查表命中的成语与俗语
+    idioms_found: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "devices": self.devices, "by_type": self.by_type,
             "by_load": self.by_load, "high_load": self.high_load,
+            "rule_corrections": self.rule_corrections,
+            "idioms_found": self.idioms_found,
         }
 
 
@@ -155,11 +162,22 @@ def extract_devices(
              "speaker": b.speaker_tag, "text": b.source_text}
             for b in chunk
         ]
+        # 成语先查表挑出来。它们的 cultural_load 必是 high、
+        # device_type 必是 idiom —— 这两件事查表就能确定，
+        # 不必让模型再花力气去认。模型只需判它在这一处起什么作用。
+        hits = ir.find_in_text("\n".join(b.source_text or "" for b in chunk))
+        for word, _kind in hits:
+            if word not in result.idioms_found:
+                result.idioms_found.append(word)
+        idiom_brief = ir.brief_for_prompt(hits)
+        system = (
+            f"{DEVICE_SYSTEM}\n\n{idiom_brief}" if idiom_brief else DEVICE_SYSTEM
+        )
         try:
             data, _ = chat_json(
                 db,
                 [
-                    {"role": "system", "content": DEVICE_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": _dump(payload)},
                 ],
                 DEVICE_SCHEMA,
@@ -187,6 +205,19 @@ def extract_devices(
                 continue
 
             intensity = max(1, min(int(item.get("intensity") or 3), 5))
+            # 查表命中的成语：文化依赖度与装置类型都是确定的，
+            # 模型判低了就纠正 —— 判成 low 会让它走 preserve 直接照搬，
+            # 而「破釜沉舟」照搬过去只剩「打破锅、沉掉船」。
+            hit = ir.classify(source_text.strip())
+            if hit is not None and hit.decisive:
+                if load is not CulturalLoad.high:
+                    result.rule_corrections.append({
+                        "text": source_text[:40], "model_said": load.value,
+                        "rule_says": "high", "why": hit.reason,
+                    })
+                    load = CulturalLoad.high
+                dtype = DeviceType.idiom
+
             db.add(NarrativeDevice(
                 id=new_id("nd"), chapter_id=chapter.id, block_id=bid,
                 device_type=dtype, effect=effect, cultural_load=load,

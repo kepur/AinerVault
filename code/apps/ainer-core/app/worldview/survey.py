@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.pipelines.base import PipelineError, chat_json
 from app.worldview.matcher import LexiconMatcher
+from app.worldview import lexicon_rules as lr
 from app.worldview.mining import mine_candidates
 
 log = logging.getLogger(__name__)
@@ -119,6 +120,8 @@ class SurveyResult:
     mined_created: int = 0
     mined_terms: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
+    #: 构词规则推翻模型的记录。为空说明两者判得一致
+    rule_corrections: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +131,7 @@ class SurveyResult:
             "mined_created": self.mined_created,
             "mined_terms": self.mined_terms,
             "unresolved": self.unresolved,
+            "rule_corrections": self.rule_corrections,
         }
 
 
@@ -366,7 +370,8 @@ def _mine_batch(
     data, _task = chat_json(
         db,
         [
-            {"role": "system", "content": MINE_SYSTEM},
+            {"role": "system",
+             "content": f"{MINE_SYSTEM}\n\n{lr.brief_for_prompt()}"},
             {
                 "role": "user",
                 "content": (
@@ -411,6 +416,17 @@ def _mine_batch(
             category = LexiconCategory(item.get("category") or "other")
         except ValueError:
             category = LexiconCategory.other
+
+        # 构词规则复核。category 决定这条词在提示词里怎么呈现、
+        # 审计时怎么比对 —— 让模型判「腰刀」是什么类，
+        # 换个模型就可能判成 other，而那会让它彻底失去类别约束。
+        cv = lr.classify(src)
+        if cv is not None and cv.decisive and cv.category is not category:
+            result.rule_corrections.append({
+                "term": src, "model_said": category.value,
+                "rule_says": cv.category.value, "why": cv.reason,
+            })
+            category = cv.category
 
         db.add(WorldLexicon(
             id=new_id("lx"),
