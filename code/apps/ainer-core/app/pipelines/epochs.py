@@ -27,15 +27,16 @@ from app.ids import new_id
 from app.models import (
     INVARIANT_FIELDS, VARIANT_FIELDS, AssetEpoch, AssetSpec, AssetVariant,
     Chapter, EpochBinding, EpochKind, ReviewStatus, ScriptDoc, Shot, ShotPlan,
+    WorldEntity,
 )
 
 log = logging.getLogger(__name__)
 
 
 def resolve_epoch(
-    db: Session, spec_id: str, profile_id: str, chapter_order: int | None,
+    db: Session, subject_key: str, profile_id: str, chapter_order: int | None,
 ) -> AssetEpoch | None:
-    """取该章节该用的那一期。
+    """取该章节该用的那一期。subject_key 是素材 id 或人物 id。
 
     区间匹配：from ≤ 章节 ≤ to，to 为空表示延续到全书结束。
     命中多个时取 order_no 最大的 —— 后设的时期覆盖先设的，
@@ -45,7 +46,7 @@ def resolve_epoch(
         chapter_order = 1
     rows = list(db.execute(
         select(AssetEpoch).where(
-            AssetEpoch.asset_spec_id == spec_id,
+            AssetEpoch.subject_key == subject_key,
             AssetEpoch.world_profile_id == profile_id,
             AssetEpoch.from_chapter_order <= chapter_order,
             or_(AssetEpoch.to_chapter_order.is_(None),
@@ -83,6 +84,21 @@ def compose_epoch_prompt(epoch: AssetEpoch, kind: str = "character") -> str:
     return ", ".join(p for p in parts if p)
 
 
+def subject_of(db: Session, key: str) -> tuple[AssetSpec | WorldEntity | None, str]:
+    """这个 subject_key 指的是素材还是人物，以及它叫什么。
+
+    真查一次而不是看 id 前缀 —— 前缀是 ids 模块的实现细节，
+    改了前缀这里会静默地把人物当成素材，而症状要到出图时才显现。
+    """
+    spec = db.get(AssetSpec, key)
+    if spec is not None:
+        return spec, spec.display_name
+    ent = db.get(WorldEntity, key)
+    if ent is not None:
+        return ent, ent.display_name
+    return None, key
+
+
 @dataclass
 class ReuseHit:
     shot_id: str
@@ -92,14 +108,15 @@ class ReuseHit:
 
 
 def find_reusable(
-    db: Session, spec_id: str, epoch_id: str | None, *, exclude_shot: str | None = None,
+    db: Session, subject_key: str, epoch_id: str | None, *,
+    exclude_shot: str | None = None,
 ) -> ReuseHit | None:
     """这份素材以前哪个镜头用过。
 
     优先同一期的绑定 —— 同一期意味着形态相同，
     直接复用它当时的参考图，「探访故乡」才会和二十章前是同一个院子。
     """
-    q = select(EpochBinding).where(EpochBinding.asset_spec_id == spec_id)
+    q = select(EpochBinding).where(EpochBinding.subject_key == subject_key)
     if epoch_id:
         q = q.where(EpochBinding.asset_epoch_id == epoch_id)
     if exclude_shot:
@@ -152,7 +169,7 @@ def bind_epochs(
 
     result = BindResult()
     existing = {
-        (b.shot_id, b.asset_spec_id): b
+        (b.shot_id, b.subject_key): b
         for b in db.execute(
             select(EpochBinding).where(
                 EpochBinding.shot_id.in_(list(spec_ids_by_shot))
@@ -168,8 +185,12 @@ def bind_epochs(
                                   exclude_shot=shot_id)
             row = existing.get((shot_id, spec_id))
             if row is None:
+                subject, _name = subject_of(db, spec_id)
+                is_entity = isinstance(subject, WorldEntity)
                 row = EpochBinding(
-                    id=new_id("eb"), shot_id=shot_id, asset_spec_id=spec_id
+                    id=new_id("eb"), shot_id=shot_id, subject_key=spec_id,
+                    asset_spec_id=None if is_entity else spec_id,
+                    entity_id=spec_id if is_entity else None,
                 )
                 db.add(row)
                 existing[(shot_id, spec_id)] = row
@@ -178,8 +199,7 @@ def bind_epochs(
                 row.resolved_by = "fallback"
                 row.note = "该素材没有时期数据，用基准形态 —— 全书一个样"
                 result.fallback += 1
-                spec = db.get(AssetSpec, spec_id)
-                name = spec.display_name if spec else spec_id
+                _subject, name = subject_of(db, spec_id)
                 if name not in result.missing_epoch:
                     result.missing_epoch.append(name)
             elif reuse is not None:
@@ -208,7 +228,7 @@ def seed_baseline_epoch(
     """
     row = db.execute(
         select(AssetEpoch).where(
-            AssetEpoch.asset_spec_id == spec.id,
+            AssetEpoch.subject_key == spec.id,
             AssetEpoch.world_profile_id == variant.world_profile_id,
             AssetEpoch.epoch_key == "baseline",
         )
@@ -220,7 +240,7 @@ def seed_baseline_epoch(
     inv_keys = set(INVARIANT_FIELDS.get(kind, ()))
     var_keys = set(VARIANT_FIELDS.get(kind, ()))
     row = AssetEpoch(
-        id=new_id("ae"), asset_spec_id=spec.id,
+        id=new_id("ae"), subject_key=spec.id, asset_spec_id=spec.id,
         world_profile_id=variant.world_profile_id,
         epoch_key="baseline", display_name="基准形态",
         kind=EpochKind.baseline, order_no=0,

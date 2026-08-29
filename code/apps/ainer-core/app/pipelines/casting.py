@@ -517,9 +517,16 @@ def cast_epoch_voices(
     if not base:
         raise PipelineError("还没有基准音色，先跑一次配音")
 
-    # 时期挂在素材上，素材才挂角色 —— 一个角色可能有多个素材（人物立绘、
-    # 服装），但音色只跟人走，所以按角色去重，同角色多份时期按章节取全集
+    # 人物时期直接挂在人物上（subject_key = entity_id）。
+    # 绑在这个角色身上的素材（他的行装、他的刀）分期时，同样是这个人变了，
+    # 所以两条都算 —— 但音色只跟人走，同角色多份按 (角色,期) 去重
     rows = list(db.execute(
+        select(AssetEpoch, AssetEpoch.entity_id)
+        .where(
+            AssetEpoch.world_profile_id == profile.id,
+            AssetEpoch.entity_id.in_(list(base)),
+        ).order_by(AssetEpoch.from_chapter_order)
+    ).all()) + list(db.execute(
         select(AssetEpoch, AssetSpec.entity_id)
         .join(AssetSpec, AssetEpoch.asset_spec_id == AssetSpec.id)
         .where(
@@ -616,11 +623,16 @@ def audit_casting(
     for r in rows:
         by_entity[r.cast_key].append(r)
     kinds, order_of = {}, {}
-    for e, eid in db.execute(
+    pairs = list(db.execute(
+        select(AssetEpoch, AssetEpoch.entity_id)
+        .where(AssetEpoch.world_profile_id == profile.id,
+               AssetEpoch.entity_id.isnot(None))
+    ).all()) + list(db.execute(
         select(AssetEpoch, AssetSpec.entity_id)
         .join(AssetSpec, AssetEpoch.asset_spec_id == AssetSpec.id)
         .where(AssetEpoch.world_profile_id == profile.id)
-    ).all():
+    ).all())
+    for e, eid in pairs:
         kinds[(eid, e.epoch_key)] = getattr(e.kind, "value", str(e.kind))
         order_of[(eid, e.epoch_key)] = e.from_chapter_order
 

@@ -1,0 +1,393 @@
+"""人物时期抽取 —— 从全书划出「哪几章的他长什么样」。
+
+## 这一层解决的是什么
+
+小说是沿时间展开的：林凡少年时的脸、衣着、佩刀，和他中年时不是一回事；
+但**脸必须是同一张**。做不到这一点，前后两章的同一个人在观众看来
+就是两个演员。
+
+而做到这一点的办法不是「每一期都描述得更仔细」，恰恰相反 ——
+是每一期都**不要重新描述**不变的部分：
+
+    invariant  骨相、五官、瞳色、疤痕胎记      抽一次，逐字复用
+    variant    发型、服装、随身兵器、气质、年龄感   每期各写
+
+每重写一次不变项，它就漂一点：「浓眉」会变成「剑眉」，
+「左颊一道旧疤」会变成「脸上有疤」。三期下来就是三个人。
+
+## 模型做什么，规则做什么
+
+模型只做它真正判断不了的事：**从原文看这个人在哪几章变了、变成什么样**。
+分期本身、区间是否连续、不变项是否一致，全部由规则兜：
+
+    区间必须铺满全书且不重叠      有缺口的章节取不到素材，回落到全书一个样
+    跨期 invariant 逐字一致       抹平到第一期，同一性的锚只能有一个来源
+    除第一期外必须写触发事件      没有触发事件的分期无法复核
+
+判据既写进提示词（让模型一次做对），也在规则层覆写（做不对时兜住）。
+
+## 只给主要角色分期
+
+跑龙套的没有时期 —— 他出现两章，分期是噪声。按台词量与出场章数筛，
+不够的建一个覆盖全书的基准期就停。这与固定物体（老家、祖传的刀）
+走的是同一条路：**不需要变的东西，一期就够。**
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.ids import new_id
+from app.models import (
+    INVARIANT_FIELDS, VARIANT_FIELDS, AssetEpoch, Chapter, EntityKind, EpochKind,
+    EntityWorldVisual, ReviewStatus, WorldEntity, WorldProfile,
+)
+from app.pipelines.base import PipelineError, as_items, as_text, chat_json
+from app.worldview.epoch_rules import EpochDraft, apply_rules, max_epochs
+
+log = logging.getLogger(__name__)
+
+CHAR_INVARIANT = INVARIANT_FIELDS["character"]
+CHAR_VARIANT = VARIANT_FIELDS["character"]
+
+_FIELD_CN = {
+    "face_shape": "脸型骨相", "features": "五官", "eye_color": "瞳色",
+    "skin_tone": "肤色", "scars": "疤痕胎记", "build": "体型", "height": "身高",
+    "age_look": "年龄感", "hair": "发型", "facial_hair": "须髯",
+    "garments": "衣着", "accessories": "配饰", "carried": "随身兵器器物",
+    "bearing": "气质仪态", "condition": "身体状态",
+}
+
+#: 出场少于这么多章的角色不分期。跑龙套的分期是噪声 ——
+#: 他出现两章，硬分成两期只会让每章各画一次，反倒不一致。
+MIN_CHAPTERS_FOR_EPOCHS = 3
+
+EPOCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["invariant", "epochs"],
+    "properties": {
+        "invariant": {
+            "type": "object",
+            "properties": {f: {"type": "string"} for f in CHAR_INVARIANT},
+        },
+        "epochs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["epoch_key", "display_name", "kind",
+                             "from_chapter_order", "trigger"],
+                "properties": {
+                    "epoch_key": {"type": "string"},
+                    "display_name": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "from_chapter_order": {"type": "integer"},
+                    "to_chapter_order": {"type": "integer"},
+                    "trigger": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    **{f: {"type": "string"} for f in CHAR_VARIANT},
+                },
+            },
+        },
+    },
+}
+
+
+def _system(total: int) -> str:
+    cap = max_epochs(total)
+    inv = "\n".join(f"    {f}（{_FIELD_CN.get(f, f)}）" for f in CHAR_INVARIANT)
+    var = "\n".join(f"    {f}（{_FIELD_CN.get(f, f)}）" for f in CHAR_VARIANT)
+    kinds = "、".join(k.value for k in EpochKind)
+    return f"""你要为一个角色划出**时期** —— 全书 {total} 章里，他在哪几章是什么样子。
+
+## 最要紧的一条：不变的部分只写一次
+
+    invariant（只在最外层写一次，各期不要重复）
+{inv}
+
+    每一期各自写（这些才是会变的）
+{var}
+
+**不要在每一期重新描述长相。** 每重写一次，「浓眉」就会变成「剑眉」，
+「左颊一道旧疤」就会变成「脸上有疤」—— 三期下来就是三个人，
+而观众会立刻看出这不是同一个演员。
+不变项在最外层写一次，各期逐字复用。
+
+## 什么**不是**时期
+
+时期是**长时段的形态**：少年／壮年，布衣／捕快，断臂前／断臂后。
+下面这些都不是时期，它们属于单个镜头，不要为它们分期：
+
+  ✗ 头发乱了、出了汗、衣服破了口子、刀出了鞘、脸上沾了血
+  ✗ 这一刻紧张／警惕／愤怒 —— 那是表情，不是形态
+  ✗ 情节推进到了下一个场面 —— 场面变了不等于人变了
+
+判断标准很简单：**洗把脸、换身干净衣服就能恢复的，都不是时期。**
+
+## 分期按事件，不按章数
+
+不是把章节平均切开，而是看**什么事件让他变了**：
+拜师、出师、受伤、得了新兵器、身份转变、大病、丧亲。
+trigger 写清是哪件事，且必须是原文里真发生过的 ——
+它既是分界依据，也是审核时判断「这里该不该换形态」的凭据。
+
+kind 从这些里选：{kinds}
+
+## 区间
+
+from_chapter_order / to_chapter_order 按章节序号，闭区间。
+**必须铺满 1 到 {total} 章，不许有缺口，不许重叠。**
+缺口那几章取不到素材，会回落成全书一个样。
+最后一期的 to_chapter_order 留空表示延续到全书结束。
+
+**这本书最多给 {cap} 期。**（全书 {total} 章，一期至少要跨两章 ——
+一章一期是逐章重画，而重画出来的每一章都会长得不太一样。）
+
+如果这个角色全书就没怎么变（配角、只出场几章），
+就只给一期，覆盖全书 —— 一期是完全合格的答案，
+硬分成三期反而会让他每次出场都长得不一样。
+
+## 不合格的写法
+
+  ✗ 每期都写一遍「浓眉大眼、身形挺拔」—— 那是不变项，写在外层
+  ✗ trigger 写「随着时间推移」「情节发展」—— 那不是事件
+  ✗ 「少年（1–10 章）」「中年（15–30 章）」—— 11–14 章空着
+  ✗ 衣着写「朴素的衣服」—— 出图时等于没说，要写料子、颜色、形制"""
+
+
+@dataclass
+class MineResult:
+    entities: int = 0
+    epochs: int = 0
+    skipped_minor: list[str] = field(default_factory=list)
+    skipped_locked: int = 0
+    rule_fixes: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "entities": self.entities, "epochs": self.epochs,
+            "skipped_minor": self.skipped_minor,
+            "skipped_locked": self.skipped_locked,
+            "rule_fixes": self.rule_fixes, "failed": self.failed,
+        }
+
+
+def _chapter_digest(chapters: list[Chapter], name: str,
+                    aliases: list[str], per_chapter: int = 700) -> str:
+    """按章给出这个人出现的片段。
+
+    不给全文 —— 全书塞进一次调用会撞上下文上限，而且模型会开始平均用力。
+    只截取提到这个名字的段落，是**为了让每一章的证据都挤得进来**：
+    分期靠的是「哪一章他变了」，缺了哪一章就分不出那一期。
+    """
+    keys = [k for k in [name, *aliases] if k]
+    out: list[str] = []
+    for ch in chapters:
+        text = ch.content or ""
+        hits: list[str] = []
+        for para in text.split("\n"):
+            if any(k in para for k in keys):
+                hits.append(para.strip())
+            if sum(len(h) for h in hits) > per_chapter:
+                break
+        if hits:
+            body = "".join(hits)[:per_chapter]
+            out.append(f"【第 {ch.order_no} 章 {ch.title or ''}】{body}")
+    return "\n".join(out)
+
+
+def _to_draft(item: dict[str, Any], invariant: dict[str, str]) -> EpochDraft:
+    key = as_text(item.get("epoch_key")).strip() or new_id("ep")[-6:]
+    try:
+        frm = int(item.get("from_chapter_order") or 1)
+    except (TypeError, ValueError):
+        frm = 1
+    to_raw = item.get("to_chapter_order")
+    try:
+        to = int(to_raw) if to_raw not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        to = None
+    kind = as_text(item.get("kind")).strip()
+    if kind not in {k.value for k in EpochKind}:
+        kind = "age"
+    return EpochDraft(
+        epoch_key=key[:64],
+        display_name=as_text(item.get("display_name")).strip()[:128] or key,
+        kind=kind, from_chapter_order=frm, to_chapter_order=to,
+        trigger=as_text(item.get("trigger")).strip()[:500],
+        invariant=dict(invariant),
+        variant={f: as_text(item.get(f)).strip() for f in CHAR_VARIANT
+                 if as_text(item.get(f)).strip()},
+        rationale=as_text(item.get("rationale")).strip()[:500],
+    )
+
+
+def mine_entity_epochs(
+    db: Session, novel_id: str, profile: WorldProfile, *,
+    entity_ids: list[str] | None = None, force: bool = False,
+) -> MineResult:
+    """给主要角色划时期。"""
+    chapters = list(db.execute(
+        select(Chapter).where(Chapter.novel_id == novel_id)
+        .order_by(Chapter.order_no)
+    ).scalars())
+    if not chapters:
+        raise PipelineError("这本书还没有章节")
+    total = chapters[-1].order_no
+
+    q = select(WorldEntity).where(
+        WorldEntity.novel_id == novel_id,
+        WorldEntity.kind == EntityKind.character,
+    )
+    if entity_ids:
+        q = q.where(WorldEntity.id.in_(entity_ids))
+    ents = list(db.execute(q).scalars())
+    if not ents:
+        raise PipelineError("这本书还没有人物实体，先跑一次实体抽取")
+
+    existing = {
+        (e.subject_key, e.epoch_key): e for e in db.execute(
+            select(AssetEpoch).where(
+                AssetEpoch.world_profile_id == profile.id,
+                AssetEpoch.subject_key.in_([e.id for e in ents]),
+            )
+        ).scalars()
+    }
+    visuals = {
+        v.entity_id: v for v in db.execute(
+            select(EntityWorldVisual).where(
+                EntityWorldVisual.world_profile_id == profile.id,
+                EntityWorldVisual.entity_id.in_([e.id for e in ents]),
+            )
+        ).scalars()
+    }
+
+    result = MineResult()
+    for ent in ents:
+        appear = list(ent.appear_chapters_json or [])
+        locked = [r for (k, _), r in existing.items()
+                  if k == ent.id and (r.locked or r.status is ReviewStatus.locked)]
+        if locked and not force:
+            result.skipped_locked += len(locked)
+            continue
+        if not force and any(k == ent.id for k, _ in existing):
+            continue
+
+        if len(appear) and len(appear) < MIN_CHAPTERS_FOR_EPOCHS:
+            # 出场太少：建一期覆盖全书就停 —— 与固定物体同一条路
+            drafts = [EpochDraft(
+                epoch_key="baseline", display_name="全书一个形态",
+                kind="baseline", from_chapter_order=1, to_chapter_order=None,
+                trigger="", invariant={},
+                variant={"garments": ent.appearance or ""} if ent.appearance else {},
+                rationale=f"只出场 {len(appear)} 章，不分期 —— "
+                          f"硬分期会让他每次出场都长得不一样",
+            )]
+            notes: list[dict[str, Any]] = []
+            result.skipped_minor.append(ent.display_name)
+        else:
+            digest = _chapter_digest(chapters, ent.display_name,
+                                     [str(a) for a in (ent.aliases_json or [])])
+            if not digest.strip():
+                result.failed.append(f"{ent.display_name}：原文里找不到他的段落")
+                continue
+            known = []
+            if ent.appearance:
+                known.append(f"【原文的外貌描写】{ent.appearance}")
+            vis = visuals.get(ent.id)
+            if vis is not None and vis.visual_prompt:
+                known.append(f"【已定的目标圈层形象】{vis.visual_prompt}")
+            axes = profile.axes_json or {}
+            user = (
+                f"【角色】{ent.display_name}"
+                + (f"（{ent.summary}）" if ent.summary else "")
+                + f"\n【目标圈层】{profile.display_name}"
+                  f"（{axes.get('era_span') or ''} {axes.get('social_context') or ''}）"
+                + ("\n" + "\n".join(known) if known else "")
+                + f"\n\n【他在各章出现的段落】\n{digest}"
+            )
+            try:
+                data, _task = chat_json(
+                    db,
+                    [{"role": "system", "content": _system(total)},
+                     {"role": "user", "content": user}],
+                    EPOCH_SCHEMA, purpose="asset_variant", novel_id=novel_id,
+                    ref_kind="entity_epoch", ref_id=ent.id, max_tokens=12288,
+                )
+            except PipelineError as exc:
+                result.failed.append(f"{ent.display_name}：{exc}")
+                continue
+
+            raw_inv = data.get("invariant")
+            invariant = {
+                f: as_text(raw_inv.get(f)).strip()
+                for f in CHAR_INVARIANT
+                if isinstance(raw_inv, dict) and as_text(raw_inv.get(f)).strip()
+            }
+            items = as_items(data, "epochs")
+            if not items:
+                result.failed.append(f"{ent.display_name}：模型没有给出任何时期")
+                continue
+            drafts = [_to_draft(it, invariant) for it in items]
+            drafts, notes = apply_rules(
+                drafts, fields=CHAR_INVARIANT, total_chapters=total)
+
+        for note in notes:
+            note["entity"] = ent.display_name
+        result.rule_fixes.extend(notes)
+
+        # 重跑时把这次没给出的旧时期删掉。留着会与新划分重叠 ——
+        # 上次三期这次两期，第三期还杵在那里，那几章就取到了两期，
+        # 取哪一期看排序，两次跑可能不一样
+        keep = {d.epoch_key for d in drafts}
+        for (skey, ekey), row in list(existing.items()):
+            if skey != ent.id or ekey in keep:
+                continue
+            if row.locked or row.status is ReviewStatus.locked:
+                result.skipped_locked += 1
+                continue
+            db.delete(row)
+            existing.pop((skey, ekey))
+            result.rule_fixes.append({
+                "type": "stale_epoch_removed", "entity": ent.display_name,
+                "epoch": ekey,
+                "detail": f"上次划分里的「{row.display_name}」这次没有了，"
+                          f"留着会与新划分重叠",
+            })
+
+        for order_no, d in enumerate(drafts):
+            row = existing.get((ent.id, d.epoch_key))
+            if row is not None and (row.locked
+                                    or row.status is ReviewStatus.locked):
+                continue
+            if row is None:
+                row = AssetEpoch(
+                    id=new_id("ae"), subject_key=ent.id, entity_id=ent.id,
+                    asset_spec_id=None, world_profile_id=profile.id,
+                    epoch_key=d.epoch_key,
+                )
+                db.add(row)
+                existing[(ent.id, d.epoch_key)] = row
+            row.display_name = d.display_name
+            row.kind = EpochKind(d.kind)
+            row.order_no = order_no
+            row.from_chapter_order = d.from_chapter_order
+            row.to_chapter_order = d.to_chapter_order
+            row.trigger = d.trigger or None
+            row.invariant_json = d.invariant or None
+            row.variant_json = d.variant or None
+            row.rationale = d.rationale or None
+            row.status = ReviewStatus.candidate
+            # 脸参考跨期共用 —— 换了参考图，脸就跟着漂
+            vis = visuals.get(ent.id)
+            anchor = (vis.ref_asset_ids or [None])[0] if vis else None
+            row.identity_ref_asset_id = anchor or row.identity_ref_asset_id
+            result.epochs += 1
+        result.entities += 1
+
+    db.flush()
+    return result

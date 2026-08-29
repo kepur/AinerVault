@@ -18,6 +18,20 @@
 对固定物体（主角老家、祖传的刀）只建一个时期、覆盖全书，
 于是「探访故乡」那一镜自然引用到二十章前的同一份素材与同一张参考图。
 
+## 挂在素材上，也挂在人物上
+
+时期最要紧的对象恰恰是**人物** —— 少年林凡与中年林凡的脸要一样、
+衣着兵器要不一样，这是整套设计的初衷。但素材类别里没有「人物」这一项
+（人物是叙事实体，不是可复用的视觉素材），于是人物时期一度无处可挂。
+
+所以主体有两种：asset_spec 或 world_entity，subject_key 记的是
+实际那一个。**不能靠两个可空外键做唯一键** —— Postgres 里 NULL 各不相等，
+同一个人能插进两条「baseline」。
+
+人物走这条路之后，EntityChapterState（v1 的按章增量）退为兜底：
+它没有 invariant/variant 的字段纪律，也没有跨期共用的脸参考，
+而那两样正是「三个时期不会变成三个人」的全部依据。
+
 ## 时期从哪来
 
 不是按章节机械切分，而是**由事件触发**：拜师、出师、受伤、
@@ -81,14 +95,20 @@ class AssetEpoch(Base, StdMixin):
 
     __tablename__ = "asset_epochs"
     __table_args__ = (
-        UniqueConstraint("asset_spec_id", "world_profile_id", "epoch_key",
-                         name="uq_asset_epoch_spec_profile_key"),
-        Index("ix_asset_epoch_lookup", "asset_spec_id", "world_profile_id",
+        UniqueConstraint("subject_key", "world_profile_id", "epoch_key",
+                         name="uq_asset_epoch_subject_profile_key"),
+        Index("ix_asset_epoch_lookup", "subject_key", "world_profile_id",
               "from_chapter_order"),
     )
 
-    asset_spec_id: Mapped[str] = mapped_column(
-        ForeignKey("asset_specs.id", ondelete="CASCADE"), nullable=False
+    #: 这一期属于谁 —— 素材填 asset_spec_id，人物填 entity_id。
+    #: 唯一键与查询都走它，两个可空外键做不成唯一键（NULL 各不相等）。
+    subject_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    asset_spec_id: Mapped[str | None] = mapped_column(
+        ForeignKey("asset_specs.id", ondelete="CASCADE")
+    )
+    entity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("world_entities.id", ondelete="CASCADE")
     )
     world_profile_id: Mapped[str] = mapped_column(
         ForeignKey("world_profiles.id", ondelete="CASCADE"), nullable=False
@@ -143,15 +163,22 @@ class EpochBinding(Base, StdMixin):
 
     __tablename__ = "epoch_bindings"
     __table_args__ = (
-        UniqueConstraint("shot_id", "asset_spec_id", name="uq_epoch_binding_shot_spec"),
+        UniqueConstraint("shot_id", "subject_key",
+                         name="uq_epoch_binding_shot_subject"),
         Index("ix_epoch_binding_epoch", "asset_epoch_id"),
     )
+
+    #: 与 AssetEpoch.subject_key 同义：这一条绑的是哪个素材或哪个人物
+    subject_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     shot_id: Mapped[str] = mapped_column(
         ForeignKey("shots.id", ondelete="CASCADE"), nullable=False
     )
-    asset_spec_id: Mapped[str] = mapped_column(
-        ForeignKey("asset_specs.id", ondelete="CASCADE"), nullable=False
+    asset_spec_id: Mapped[str | None] = mapped_column(
+        ForeignKey("asset_specs.id", ondelete="CASCADE")
+    )
+    entity_id: Mapped[str | None] = mapped_column(
+        ForeignKey("world_entities.id", ondelete="CASCADE")
     )
     asset_epoch_id: Mapped[str | None] = mapped_column(
         ForeignKey("asset_epochs.id", ondelete="SET NULL")

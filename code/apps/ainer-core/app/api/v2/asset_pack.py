@@ -213,7 +213,7 @@ def list_epochs(transform_id: str, spec_id: str,
         raise HTTPException(status_code=404, detail="asset spec not found")
     rows = list(db.execute(
         select(AssetEpoch).where(
-            AssetEpoch.asset_spec_id == spec_id,
+            AssetEpoch.subject_key == spec_id,
             AssetEpoch.world_profile_id == t.target_profile_id,
         ).order_by(AssetEpoch.order_no, AssetEpoch.from_chapter_order)
     ).scalars())
@@ -261,7 +261,7 @@ def create_epoch(transform_id: str, spec_id: str, body: EpochIn,
             status_code=400, detail=f"未知时期类型 {body.kind}") from exc
 
     row = AssetEpoch(
-        id=new_id("ae"), asset_spec_id=spec_id,
+        id=new_id("ae"), subject_key=spec_id, asset_spec_id=spec_id,
         world_profile_id=t.target_profile_id,
         epoch_key=body.epoch_key, display_name=body.display_name,
         kind=kind, order_no=body.order_no,
@@ -495,3 +495,166 @@ def fork_director(director_id: str, code: str = Query(...),
     db.flush()
     return {"id": d.id, "code": d.code, "display_name": d.display_name,
             "parent_id": parent.id}
+
+
+# ── 人物时期 ──────────────────────────────────────────────────────────────────
+
+class MineEpochsIn(BaseModel):
+    entity_ids: list[str] = Field(default_factory=list)
+    force: bool = False
+
+
+@router.post("/novels/{novel_id}/entity-epochs:mine")
+def mine_entity_epochs(novel_id: str, profile_id: str = Query(...),
+                       body: MineEpochsIn | None = None,
+                       db: Session = Depends(get_db)) -> dict:
+    """给主要角色划时期。
+
+    脸跨期不变、衣着兵器随期变 —— 这是整套时期设计的初衷，
+    而人物一度是唯一挂不上的主体。
+    """
+    from app.models import WorldProfile
+    from app.pipelines import entity_epochs
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    body = body or MineEpochsIn()
+    try:
+        return entity_epochs.mine_entity_epochs(
+            db, novel_id, profile,
+            entity_ids=body.entity_ids or None, force=body.force,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/novels/{novel_id}/entity-epochs")
+def list_entity_epochs(novel_id: str, profile_id: str = Query(...),
+                       db: Session = Depends(get_db)) -> dict:
+    """全书人物的时期表 + 体检。
+
+    体检查的与规则层同一套：区间有没有缺口、不变项跨期一致不一致、
+    分界有没有依据。**把没能检查的也报出来** —— 与场记同一条规矩。
+    """
+    from app.models import (
+        INVARIANT_FIELDS, AssetEpoch, Chapter, EntityKind, WorldEntity,
+        WorldProfile,
+    )
+    from app.pipelines.epochs import compose_epoch_prompt
+    from app.worldview.epoch_rules import (
+        EpochDraft, check_shared_marks, check_spans, check_triggers,
+    )
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+
+    chapters = list(db.execute(
+        select(Chapter.order_no).where(Chapter.novel_id == novel_id)
+    ).scalars())
+    total = max(chapters) if chapters else 0
+    ents = {
+        e.id: e for e in db.execute(
+            select(WorldEntity).where(
+                WorldEntity.novel_id == novel_id,
+                WorldEntity.kind == EntityKind.character,
+            )
+        ).scalars()
+    }
+    rows = list(db.execute(
+        select(AssetEpoch).where(
+            AssetEpoch.world_profile_id == profile_id,
+            AssetEpoch.entity_id.in_(list(ents)),
+        ).order_by(AssetEpoch.subject_key, AssetEpoch.from_chapter_order)
+    ).scalars()) if ents else []
+
+    by_entity: dict[str, list] = {}
+    for r in rows:
+        by_entity.setdefault(r.entity_id, []).append(r)
+
+    items, issues = [], []
+    for eid, group in by_entity.items():
+        ent = ents[eid]
+        drafts = [
+            EpochDraft(
+                epoch_key=r.epoch_key, display_name=r.display_name,
+                kind=r.kind.value, from_chapter_order=r.from_chapter_order,
+                to_chapter_order=r.to_chapter_order, trigger=r.trigger or "",
+                invariant=r.invariant_json or {}, variant=r.variant_json or {},
+            ) for r in group
+        ]
+        # 落库后仍要复查：区间可能被人工改出缺口
+        prev_end = 0
+        for dft in drafts:
+            if dft.from_chapter_order != prev_end + 1:
+                issues.append({
+                    "type": "gap" if dft.from_chapter_order > prev_end + 1
+                            else "overlap",
+                    "entity": ent.display_name, "epoch": dft.epoch_key,
+                    "detail": f"「{dft.display_name}」从第 {dft.from_chapter_order} "
+                              f"章起，上一期到第 {prev_end} 章",
+                })
+            prev_end = (dft.to_chapter_order if dft.to_chapter_order is not None
+                        else total)
+        anchor = drafts[0].invariant if drafts else {}
+        for dft in drafts[1:]:
+            for f in INVARIANT_FIELDS["character"]:
+                a, b = str(anchor.get(f) or ""), str(dft.invariant.get(f) or "")
+                if a and b and a != b:
+                    issues.append({
+                        "type": "invariant_drift", "entity": ent.display_name,
+                        "epoch": dft.epoch_key,
+                        "detail": f"「{f}」在「{dft.display_name}」是「{b}」，"
+                                  f"第一期是「{a}」—— 不变项漂了，脸会跟着漂",
+                    })
+        for note in check_triggers(drafts) + check_spans(drafts, total):
+            note["entity"] = ent.display_name
+            issues.append(note)
+
+        anchors = {r.identity_ref_asset_id for r in group
+                   if r.identity_ref_asset_id}
+        if len(anchors) > 1:
+            issues.append({
+                "type": "ref_split", "entity": ent.display_name,
+                "detail": "各期用了不同的脸参考图 —— 换了参考图，脸就跟着漂",
+            })
+
+        items.append({
+            "entity_id": eid, "name": ent.display_name,
+            "appear_chapters": len(ent.appear_chapters_json or []),
+            "identity_ref": next(iter(anchors), None),
+            "invariant": anchor,
+            "epochs": [
+                {
+                    "id": r.id, "epoch_key": r.epoch_key,
+                    "display_name": r.display_name, "kind": r.kind.value,
+                    "from_chapter_order": r.from_chapter_order,
+                    "to_chapter_order": r.to_chapter_order,
+                    "trigger": r.trigger, "variant": r.variant_json or {},
+                    "prompt": r.visual_prompt or compose_epoch_prompt(r, "character"),
+                    "rationale": r.rationale,
+                    "status": r.status.value, "locked": r.locked,
+                } for r in group
+            ],
+        })
+    # 辨识特征撞了 —— 撞声的视觉版，同样只有放到一起才看得出
+    issues.extend(check_shared_marks(
+        {i["name"]: i["invariant"] for i in items if i["invariant"]}))
+    items.sort(key=lambda i: (-i["appear_chapters"], i["name"]))
+
+    not_checked = []
+    uncast = [e.display_name for e in ents.values() if e.id not in by_entity]
+    if not total:
+        not_checked.append("这本书没有章节，区间覆盖无法检查")
+    if not any(i["identity_ref"] for i in items):
+        not_checked.append(
+            "还没有任何角色的脸参考图 —— 跨期同一性目前只靠文字描述，"
+            "生成参考图后才谈得上真正锁住")
+
+    return {
+        "total_chapters": total, "entities": len(items),
+        "epochs": len(rows), "items": items,
+        "issues": issues, "without_epochs": uncast,
+        "not_checked": not_checked,
+    }

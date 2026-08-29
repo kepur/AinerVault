@@ -30,6 +30,7 @@ from app.models import (
     ShotPlan, SpecStatus, WorldEntity, WorldProfile, WorldTransform,
 )
 from app.pipelines.base import PipelineError, as_items
+from app.pipelines.epochs import compose_epoch_prompt, resolve_epoch
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
 
 log = logging.getLogger(__name__)
@@ -85,10 +86,27 @@ def _asset_urls(db: Session, ids: Sequence[str]) -> list[str]:
 def _entity_look(
     db: Session, entity: WorldEntity, profile_id: str, chapter_order: int | None
 ) -> tuple[str, list[str]]:
-    """人物外观 = 基础视觉 + 该章节生效的成长状态。
+    """人物外观。有时期数据时以时期为准，否则回落到基础视觉 + 成长状态。
 
-    Stage 叠加在 Core 上，不覆盖它 —— 换装受伤是增量，不是替换。
+    ## 为什么时期一旦存在就独占
+
+    时期与 EntityChapterState 描述的是同一件事，都会往提示词里加外貌。
+    两条都放行的话，同一张脸会被描述两遍 —— 而两遍描述必然不完全一样，
+    图像模型收到互相打架的指令，出来的脸两边都不像。
+    所以有时期就只用时期，没有才走老路。
+
+    时期路径把 invariant 放在最前面（compose_epoch_prompt 保证），
+    并带上跨期共用的那张脸参考 —— 脸不漂的全部依据就是这两样。
     """
+    epoch = resolve_epoch(db, entity.id, profile_id, chapter_order)
+    if epoch is not None:
+        text = epoch.visual_prompt or compose_epoch_prompt(epoch, "character")
+        refs = list(epoch.ref_asset_ids or [])
+        if epoch.identity_ref_asset_id and epoch.identity_ref_asset_id not in refs:
+            refs.insert(0, epoch.identity_ref_asset_id)
+        if text:
+            return text.strip(), refs
+
     visual = db.execute(
         select(EntityWorldVisual).where(
             EntityWorldVisual.entity_id == entity.id,
@@ -149,12 +167,14 @@ def _epoch_prompts(
     改了时期区间之后就再也复现不出当初那张图为什么是那样。
     """
     from app.models import AssetEpoch, AssetSpec, EpochBinding
-    from app.pipelines.epochs import compose_epoch_prompt
 
+    # 只取素材主体：人物的时期已经由 _entity_look 出过一遍，
+    # 这里再出一次就是同一张脸描述两遍
     rows = list(db.execute(
         select(EpochBinding, AssetSpec)
         .join(AssetSpec, AssetSpec.id == EpochBinding.asset_spec_id)
-        .where(EpochBinding.shot_id == shot.id)
+        .where(EpochBinding.shot_id == shot.id,
+               EpochBinding.entity_id.is_(None))
     ))
     out: list[str] = []
     for binding, spec in rows:

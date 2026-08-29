@@ -322,6 +322,7 @@ const GROUPS = [
     {id:"world",    ico:"🌍", name:"映射与词表", sub:"映射 · 名物词表 · 人名 · 称呼"},
     {id:"model",    ico:"🧩", name:"世界模型", sub:"人物 · 场景 · 道具 · 节拍 · 风格"},
     {id:"culture",  ico:"🎭", name:"文化梗", sub:"网络梗 · 典故 · 九档呈现策略"},
+    {id:"epochs",   ico:"⏳", name:"人物时期", sub:"脸跨期不变 · 衣着兵器随期变"},
     {id:"prompts",  ico:"🖼", name:"提示词台账", sub:"素材生图提示词 · 依据 · 引用"},
   ]},
   {id:"g-trans", name:"译本", pages:[
@@ -2171,6 +2172,139 @@ const Crew = {
   },
 };
 
+// ───────────────────────── 人物时期 ─────────────────────────
+const EK_CN = {baseline:"基准", age:"年龄", status:"身份", gear:"装备",
+               injury:"伤病", season:"季节", ruin:"损毁", disguise:"易容"};
+const EI_CN = {face_shape:"脸型骨相", features:"五官", eye_color:"瞳色",
+               skin_tone:"肤色", scars:"疤痕胎记", build:"体型", height:"身高"};
+const EV_CN = {age_look:"年龄感", hair:"发型", facial_hair:"须髯",
+               garments:"衣着", accessories:"配饰", carried:"随身",
+               bearing:"气质", condition:"状态"};
+const EISS_CN = {gap:"区间缺口", overlap:"区间重叠", invariant_drift:"不变项漂移",
+                 missing_trigger:"缺分界依据", short_span:"分期过短",
+                 ref_split:"脸参考不一致", shared_mark:"辨识特征撞了"};
+
+const Epochs = {
+  async render(v) {
+    if (!State.novelId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一本小说</div></div>`;
+      return;
+    }
+    const transforms = await api("GET", `/novels/${State.novelId}/transforms`)
+      .catch(()=>[]);
+    const tf = transforms.find(t=>t.id===State.transformId) || transforms[0];
+    const pid = tf && tf.target && tf.target.id;
+    const d = pid ? await api("GET",
+      `/novels/${State.novelId}/entity-epochs?profile_id=${pid}`).catch(()=>null)
+      : null;
+
+    v.innerHTML = `
+      <div class="card">
+        <h2>人物时期
+          ${d?`<span class="sub mono" style="color:var(--muted)">${
+            d.entities} 人 / ${d.epochs} 期 · 全书 ${d.total_chapters} 章</span>`:""}
+          ${d?(d.issues.length?`<span class="tag t-bad">${d.issues.length} 处问题</span>`
+                              :`<span class="tag t-ok">无问题</span>`):""}
+        </h2>
+        <p class="hint">小说沿时间展开：林凡少年时的脸、衣着、佩刀，
+          和他中年时不是一回事 —— 但<b>脸必须是同一张</b>。<br>
+          做到这一点的办法不是把每期描述得更仔细，恰恰相反：
+          每期都<b>不要重新描述</b>不变的部分。每重写一次，「浓眉」会变成「剑眉」，
+          「左颊一道旧疤」会变成「脸上有疤」，三期下来就是三个人。<br>
+          固定物体（老家、祖传的刀）只建一期覆盖全书 ——
+          「探访故乡」那一镜才会与二十章前是同一个院子。</p>
+        <div class="row">
+          <button class="btn pri" onclick="Epochs.mine(this)" ${pid?"":"disabled"}
+            >划分时期</button>
+          <button class="btn" onclick="Epochs.mine(this,true)" ${pid?"":"disabled"}
+            >重划（不覆盖已锁定）</button>
+          ${tf?`<span class="sub mono" style="color:var(--muted);font-size:12px">
+            ${h(tf.target.display_name)}</span>`:`<span class="sub"
+            style="color:var(--warn);font-size:12px">先在「映射与词表」建一个映射</span>`}
+        </div>
+      </div>
+
+      ${d && (d.issues.length || d.without_epochs.length || d.not_checked.length) ? `
+      <div class="card">
+        <h2>体检</h2>
+        ${d.issues.map(i=>`
+          <div class="gap" style="margin-bottom:7px">
+            <div class="gh">
+              <span class="sev sev-${i.type==="invariant_drift"||i.type==="gap"?5:
+                                     i.type==="shared_mark"||i.type==="ref_split"?4:2}"
+                >${h(EISS_CN[i.type]||i.type)}</span>
+              <b style="color:var(--ink)">${h(i.entity||i.left||"")}</b>
+              ${i.epoch?`<span class="tag t-mute">${h(i.epoch)}</span>`:""}
+            </div>
+            <div class="eff">${h(i.detail)}</div>
+          </div>`).join("")}
+        ${d.without_epochs.length?`<div class="sub" style="font-size:12px;margin-top:6px">
+          <b style="color:var(--warn)">还没划时期</b>：${d.without_epochs.map(h).join("、")}
+          —— 出图时会回落到基准形态，全书一个样</div>`:""}
+        ${d.not_checked.length?`<div class="sub"
+          style="color:var(--warn);font-size:12px;margin-top:8px">
+          <b>以下没能检查</b> —— 报「0 处问题」会让人以为查过了：<br>
+          ${d.not_checked.map(h).join("<br>")}</div>`:""}
+      </div>` : ""}
+
+      ${d && d.items.length ? d.items.map(i=>`
+        <div class="card" style="padding:13px 15px">
+          <div class="row" style="margin-bottom:8px">
+            <b style="color:var(--ink);font-size:14px">${h(i.name)}</b>
+            <span class="tag t-mute">出场 ${i.appear_chapters} 章</span>
+            <span class="tag ${i.epochs.length>1?"t-info":"t-mute"}"
+              >${i.epochs.length} 期</span>
+            ${i.identity_ref?`<span class="tag t-ok">脸参考已定</span>`
+              :`<span class="tag t-warn">无脸参考</span>`}
+          </div>
+          ${Object.keys(i.invariant||{}).length?`
+            <div class="prop" style="margin-bottom:8px">
+              <b>跨期不变</b>　<span class="sub" style="font-size:11px;color:var(--muted)">
+                逐字复用，不重新描述 —— 同一性的锚只能有一个来源</span>
+              <div class="sub" style="font-size:12px;margin-top:4px;line-height:1.7">
+                ${Object.entries(i.invariant).map(([k,val])=>
+                  `<span style="color:var(--muted)">${h(EI_CN[k]||k)}</span> ${h(val)}`
+                ).join("　")}</div>
+            </div>`:""}
+          ${i.epochs.map(e=>`
+            <div style="margin-bottom:8px">
+              <div class="row" style="gap:6px;margin-bottom:3px">
+                <span class="tag t-info">${e.from_chapter_order}–${
+                  e.to_chapter_order||"末"} 章</span>
+                <b style="color:var(--ink);font-size:12.5px">${h(e.display_name)}</b>
+                <span class="tag t-mute">${h(EK_CN[e.kind]||e.kind)}</span>
+                ${e.locked?`<span class="tag t-ok">锁定</span>`:""}
+              </div>
+              ${e.trigger?`<div class="sub" style="font-size:12px;color:var(--body)">
+                <span style="color:var(--muted)">触发</span> ${h(e.trigger)}</div>`:""}
+              <div class="sub" style="font-size:12px;line-height:1.7;margin-top:2px">
+                ${Object.entries(e.variant||{}).map(([k,val])=>
+                  `<span style="color:var(--muted)">${h(EV_CN[k]||k)}</span> ${h(val)}`
+                ).join("　")||"—"}</div>
+            </div>`).join("")}
+        </div>`).join("")
+      : `<div class="card"><div class="empty">${
+          pid?"还没划分时期":"还没有世界观映射"}</div></div>`}
+      <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
+    const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  async mine(btn, force) {
+    await run(btn, async () => {
+      const ts = await api("GET", `/novels/${State.novelId}/transforms`);
+      const tf = ts.find(t=>t.id===State.transformId) || ts[0];
+      if (!tf) throw new Error("还没有世界观映射");
+      const r = await api("POST",
+        `/novels/${State.novelId}/entity-epochs:mine?profile_id=${tf.target.id}`,
+        {force: !!force});
+      logOk(`${r.entities} 人 ${r.epochs} 期　配角不分期 ${r.skipped_minor.length} 人`);
+      (r.rule_fixes||[]).forEach(x =>
+        log(`规则：${x.entity||""} ${x.detail}`, "warn"));
+      (r.failed||[]).forEach(x => logWarn(x));
+      App.refresh();
+    }, "划分中");
+  },
+};
+
 // ───────────────────────── 配音表 ─────────────────────────
 const VF_CN = {voice_type:"声部", pitch:"音区", texture:"音质", resonance:"共鸣",
                accent:"口音", age_feel:"年龄感", tempo:"语速", energy:"力度",
@@ -2437,7 +2571,7 @@ const App = {
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
-               crew:Crew, casting:Casting,
+               crew:Crew, casting:Casting, epochs:Epochs,
                script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {
