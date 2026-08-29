@@ -8,6 +8,7 @@
 >
 > | 先读 | 内容 |
 > |------|------|
+> | [`docs/v2/09_HANDOVER.md`](docs/v2/09_HANDOVER.md) | ★ **接力交接：做到哪了 / 哪里是坑 / 接下来做什么。先读这一份** |
 > | [`docs/v2/00_OVERVIEW.md`](docs/v2/00_OVERVIEW.md) | 为什么重构、系统边界、主干模型、冻结清单 |
 > | [`docs/v2/01_DATA_MODEL.md`](docs/v2/01_DATA_MODEL.md) | 20 张表（v1 为 57+）、版本化、旧表映射 |
 > | [`docs/v2/02_CORE_API.md`](docs/v2/02_CORE_API.md) | Core 对外 API（~50 个路由，v1 为 145+） |
@@ -16,6 +17,8 @@
 > | [`docs/v2/04_ADMIN_UX.md`](docs/v2/04_ADMIN_UX.md) | 后台重设计：5 个区、一个工作台、6 条交互铁律 |
 > | [`docs/v2/05_ROADMAP.md`](docs/v2/05_ROADMAP.md) | 落地顺序 P0/P1/P2、冻结做法、迁移脚本 |
 > | [`docs/v2/06_WORLDVIEW_TRANSLATION.md`](docs/v2/06_WORLDVIEW_TRANSLATION.md) | ★ **世界观转译**：中国古代→日本昭和/欧洲中世纪，L1–L4 四层映射、防漂移三道闸 |
+> | [`docs/v2/07_BACKLOG.md`](docs/v2/07_BACKLOG.md) | 待补清单 |
+> | [`docs/v2/08_TRANSLATION_FLOW.md`](docs/v2/08_TRANSLATION_FLOW.md) | 十一步翻译流程 |
 >
 > v2 一句话：**AinerN2D 是一台「小说 → 多语言剧本 → 视频素材清单」的编译器。**
 > 它不生成像素、不生成声波、不合成视频；它生成结构与指令，交给能力中间层执行。
