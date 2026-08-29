@@ -68,6 +68,12 @@ def main() -> int:
     ap.add_argument("--mode", choices=("prose", "script"), default="prose",
                     help="prose 译本线（规则分块，零成本）／script 成片线"
                          "（LLM 拆场景，产出时间地点天气情绪）")
+    ap.add_argument("--fixtures", default=None,
+                    help="语料目录，默认 scripts/fixtures")
+    ap.add_argument("--fidelity", default=None,
+                    choices=("preserve_world", "anchored", "transplant_world"),
+                    help="转译力度。存真档会在翻译前生成并通过导读 —— "
+                         "那一档的前提就是「术语原样保留，读者靠导读挂靠」")
     ap.add_argument("--stop-after", default=None,
                     help="跑到某一步就停，如 --stop-after ⑨。调翻译链时不必等完")
     args = ap.parse_args()
@@ -80,9 +86,10 @@ def main() -> int:
     if "ERR" in nv:
         print("建书失败", nv)
         return 1
-    chapters = sorted(FIXTURES.glob("ch*.txt"))
+    fixtures = pathlib.Path(args.fixtures) if args.fixtures else FIXTURES
+    chapters = sorted(fixtures.glob("ch*.txt"))
     if not chapters:
-        print(f"没有测试语料：{FIXTURES}")
+        print(f"没有测试语料：{fixtures}")
         return 1
     chs = []
     for i, f in enumerate(chapters, 1):
@@ -102,6 +109,9 @@ def main() -> int:
         print("建映射失败", tf)
         return 1
     R.call("POST", f"/transforms/{tf['id']}:activate")
+    if args.fidelity:
+        R.call("PATCH", f"/transforms/{tf['id']}/fidelity",
+               {"fidelity": args.fidelity})
     print(f"书 {nv['id']}　映射 {tf['id']}　{src_code} → {tgt_code}\n", flush=True)
 
     #: 译本线用规则分块（零成本），成片线用 LLM 拆场景 ——
@@ -154,6 +164,14 @@ def main() -> int:
                 R.step("⑧b", f"审核词表（{len(ids)} 条）", lambda: R.call(
                     "POST", f"/transforms/{tf['id']}/lexicon:batch-approve",
                     {"ids": ids}))
+    # 导读要在**词表审完之后、翻译之前**：它的选材来自词表，
+    # 而它讲过的词条要回流进翻译的策略选择。位置错一步就没有意义
+    if args.fidelity == "preserve_world" and not stop_here("⑧c"):
+        pr = R.step("⑧c", "导读篇", lambda: R.call(
+            "POST", f"/transforms/{tf['id']}/primer:generate?force=1"))
+        if isinstance(pr, dict) and pr.get("primer_id"):
+            R.step("⑧d", "导读审核通过", lambda: R.call(
+                "PATCH", f"/primers/{pr['primer_id']}", {"status": "approved"}))
     for i, c in enumerate(chs, 1):
         if stop_here("⑨"):
             break

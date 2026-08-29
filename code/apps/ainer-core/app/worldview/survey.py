@@ -143,7 +143,8 @@ MINE_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["source_term", "category", "target_term", "rationale"],
+                "required": ["source_term", "category", "target_term",
+                             "no_equivalent", "rationale"],
                 "properties": {
                     "source_term": {"type": "string"},
                     "canonical_key": {"type": "string"},
@@ -154,6 +155,7 @@ MINE_SCHEMA: dict[str, Any] = {
                     "target_term": {"type": "string"},
                     "target_reading": {"type": "string"},
                     "forbidden_targets": {"type": "array", "items": {"type": "string"}},
+                    "no_equivalent": {"type": "boolean"},
                     "confidence": {"type": "number"},
                     "rationale": {"type": "string"},
                 },
@@ -189,7 +191,30 @@ MINE_SYSTEM = """你是跨文化改编的名物考据专家。
    不是拉丁转写。
 
 forbidden_targets 填「绝不能出现在译文里的错误译法」，
-通常是直译词与原文词本身。"""
+通常是直译词与原文词本身。
+
+no_equivalent —— **读者要理解它，是否必须先知道一整套结构**。
+
+判准不是「有没有译法」。实跑时你们把「筑基」判成了 false，
+理由是它有译法 foundation establishment —— **译法有，概念没有**。
+英语读者看到 foundation establishment，不知道它是九境里的第二境，
+不知道它比「练气七层→八层」跨度大得多，更不知道过了这一境「人就不是人了」。
+
+**词能译，体系不能译。**
+
+  true   它是某个体系里的一环，读者要懂它必须先懂整个体系：
+         修真的境界（练气／筑基／金丹／元婴）、宗门辈分、
+         力量等级、自造的技术设定、灵石这类体系内的货币
+  false  换个说法就懂：客栈→inn、腰刀→sabre、捕快→constable。
+         读者不需要额外知识
+
+这一栏决定它**要不要写进正文前的导读**。体系性的词有几十个，
+每个都在正文里就地解释的话，读者每隔两页被打断一次，读的就不是小说了；
+而换个说法就懂的词写进导读是浪费读者的耐心，
+耐心是导读最稀缺的资源。
+
+拿不准时问自己：**只看这一个词的译法，读者能不能知道它在体系里的位置？**
+不能就是 true。"""
 
 
 def _profile_constraints(profile: WorldProfile | None) -> str:
@@ -437,6 +462,9 @@ def _mine_batch(
             target_term=tgt,
             target_reading=item.get("target_reading") or None,
             forbidden_targets=item.get("forbidden_targets") or [src],
+            # 目标文化里有没有对应物。**导读的选材全靠这一栏** ——
+            # 有对应物的词写进导读是浪费读者的耐心，而耐心是导读最稀缺的资源
+            no_equivalent=bool(item.get("no_equivalent")),
             status=ReviewStatus.candidate,
             confidence=float(item.get("confidence") or 0.6),
             rationale=item.get("rationale") or None,

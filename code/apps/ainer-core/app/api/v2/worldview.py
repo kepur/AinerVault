@@ -31,6 +31,11 @@ class ProfileIn(BaseModel):
     role: ProfileRole = ProfileRole.both
     novel_id: str | None = None
     parent_id: str | None = None
+    #: 虚构圈层（未来、修真界、异世界），不是任何现实文化
+    is_fictional: bool = False
+    #: 虚构圈层的语言与常识底座，指向一个现实圈层。虚构圈层必填 ——
+    #: 读者是现实里的人，不知道这些人该怎么说话、一里有多远
+    base_profile_id: str | None = None
     axes: dict = Field(default_factory=dict)
     visual: dict = Field(default_factory=dict)
     language: dict = Field(default_factory=dict)
@@ -41,6 +46,8 @@ def _profile_out(p: WorldProfile) -> dict:
     return {
         "id": p.id, "code": p.code, "display_name": p.display_name,
         "role": p.role.value, "novel_id": p.novel_id, "parent_id": p.parent_id,
+        "is_fictional": bool(p.is_fictional),
+        "base_profile_id": p.base_profile_id,
         "axes": p.axes_json or {}, "visual": p.visual_json or {},
         "language": p.language_json or {}, "version": p.version,
         "status": p.status.value, "description": p.description,
@@ -116,10 +123,18 @@ def list_profiles(role: str | None = Query(None), novel_id: str | None = Query(N
 def create_profile(body: ProfileIn, db: Session = Depends(get_db)) -> dict:
     p = WorldProfile(
         id=new_id("wp"), code=body.code, display_name=body.display_name, role=body.role,
-        novel_id=body.novel_id, parent_id=body.parent_id, axes_json=body.axes,
+        novel_id=body.novel_id, parent_id=body.parent_id,
+        is_fictional=body.is_fictional, base_profile_id=body.base_profile_id,
+        axes_json=body.axes,
         visual_json=body.visual, language_json=body.language, version=1,
         status=ProfileStatus.active, description=body.description,
     )
+    if body.is_fictional and not body.base_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="虚构圈层必须挂一个现实圈层作语言与常识底座 —— "
+                   "读者是现实里的人，不知道这些人该怎么说话、一里有多远、"
+                   "什么算礼貌。写给谁读就挂谁")
     db.add(p)
     db.flush()
     return _profile_out(p)

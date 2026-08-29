@@ -408,3 +408,42 @@ class TestEntityMerge:
 
     def test_same_as_pointing_at_self_is_ignored(self):
         assert _resolve_same_as("三娘", "三娘", EntityKind.character, self.EXISTING) is None
+
+
+class TestGrammarCut:
+    """按语法结构切，不按动词表。
+
+    动词表永远补不完 —— 修真小说那一轮里，「撑着地站起来」的撑、
+    「点点头」的点，加一个漏一个。但中文有两条硬结构，
+    对没见过的动词一样管用：
+
+      助词「着／了／过」前面**必是**动词
+      叠字（点点、摇摇）**必是**动词的重叠式
+    """
+
+    @pytest.mark.parametrize("raw,want", [
+        ("林昭撑着地站起来", "林昭"),      # 撑不在动词表里
+        ("苏晚提着药篓从坡上下来", "苏晚"),
+        ("老头点点头", "老头"),            # 点不在动词表里
+        ("老头笑了", "老头"),
+    ])
+    def test_structure_beats_the_word_list(self, raw, want):
+        assert trim_speaker(raw) == want
+
+    def test_abb_adverb_is_not_a_reduplicated_verb(self):
+        """「慢悠悠」的悠悠是 ABB 副词的尾巴，不是动词重叠 ——
+        区别在于叠字之后还有没有内容。切了会剩下「老周慢」。"""
+        assert trim_speaker("老周慢悠悠") == "老周"
+
+    def test_leading_reduplication_is_a_verb_phrase(self):
+        """开头就是叠字 = 整串以动词重叠式开头，那不是称呼。"""
+        assert trim_speaker("摇摇头的老周") is None
+
+    def test_two_char_names_are_never_cut_inside(self):
+        """只从 index 2 起判 —— 两字名字整个是名字。"""
+        for name in ("苏晚", "林昭", "秦烈"):
+            assert trim_speaker(name) == name
+
+    def test_pronoun_phrase_yields_nothing(self):
+        """「他试着按…」切到只剩一个代词，宁可没有说话人。"""
+        assert trim_speaker("他试着按功法册子上写的") is None

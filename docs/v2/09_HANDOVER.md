@@ -131,7 +131,20 @@ late 19th century Russian），不花模型调用。
 同理：一次调用要两种语言，模型会放弃一种 —— 提示词里必须明写
 「两组都要填，各写各的语言」。
 
-### 4.5 Cloudflare Workers AI 的三个约束
+### 4.5 「有译法」不等于「有对应物」
+
+判 `no_equivalent` 时，模型会因为「筑基有译法 foundation establishment」
+判成 false。**译法有，概念没有** —— 英语读者看到 foundation establishment，
+不知道它是九境里的第二境，不知道它比「练气七层→八层」跨度大得多。
+
+**词能译，体系不能译。** 判准要写成「读者要理解它，是否必须先知道
+一整套结构」，不能写成「目标读者能不能靠一个已有的词理解它」——
+后者读者当然能读懂那个词，于是全判 false，导读就没东西可讲了。
+
+同一类陷阱在别处也会出现：凡是「模型给得出一个看似合理的产出」的判断，
+判准都不能问「能不能做到」，要问「做到之后读者拿到了什么」。
+
+### 4.6 Cloudflare Workers AI 的三个约束
 
 - **没有任务队列**：`submit_task` 对同步方言自动改走 `invoke`
 - **回字节不回 URL**：`capability/mediastore.py` 落盘，按 sha256 寻址
@@ -143,7 +156,7 @@ late 19th century Russian），不花模型调用。
 
 账号 id `aff28dd6bc7032c161c123e2fd55e2ff`，端点已配在 `capability_endpoints`。
 
-### 4.6 幂等键包含 endpoint + model
+### 4.7 幂等键包含 endpoint + model
 
 不含的话，从 mock 换到真模型会拿到 mock 时代的旧答案。
 `regenerate` 之后 `sync` 要按**当前任务**的产图判断，不是「有没有图」。

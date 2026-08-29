@@ -145,6 +145,44 @@ def trim_speaker(who: str) -> str | None:
     return _trim_clause(re.split(r"[，,。.；;：:！!？?、]", raw)[0])
 
 
+#: 动态助词。它们只跟在动词后面 —— 这是中文的硬语法，不是统计规律
+_ASPECT = "着了过"
+
+
+def _cut_by_grammar(w: str) -> str:
+    """按语法结构切掉动词短语，不依赖动词表。
+
+    「林昭撑着地站起来」→ 着在 index 3，说明 index 2 的「撑」是动词 → 林昭
+    「老头点点头」→ 点点是叠字动词 → 老头
+
+    只从 index 2 起判：两字名字整个是名字，里面的字不该被当成动词。
+    切完不足两字就返回空串 —— 那说明整串本来就是个动词短语。
+
+    叠字这一条要求**后面还有字**：「点点头」的点点是动词重叠，
+    而「慢悠悠」的悠悠是 ABB 副词的尾巴 —— 后者交给第四刀整体处理，
+    在这里切会剩下「老周慢」。
+    """
+    # 开头就是叠字 = 整串以动词重叠式开头（「摇摇头的老周」），
+    # 那是个动词短语不是称呼。与 _STRONG_VERBS 的首字判断同一个道理，
+    # 但不依赖认识哪个字
+    if len(w) > 2 and w[0] == w[1]:
+        return ""
+
+    cuts: list[int] = []
+    for i, ch in enumerate(w):
+        if i >= 2 and ch in _ASPECT:
+            cuts.append(i - 1)          # 助词前一个字是动词，从它切
+        # 叠字动词要求**后面还有字**：「点点头」的点点是动词重叠，
+        # 「慢悠悠」的悠悠是 ABB 副词的尾巴，切了会剩下「老周慢」。
+        # 两者的区别就在于叠字之后还有没有内容
+        if i >= 2 and i + 2 < len(w) and ch == w[i + 1]:
+            cuts.append(i)
+    if not cuts:
+        return w
+    out = w[: min(cuts)].strip()
+    return out if len(out) >= 2 else ""
+
+
 def _trim_clause(clause: str) -> str | None:
     """从单个分句里裁出称呼。裁不干净返回 None。"""
     w = clause.strip()
@@ -155,6 +193,20 @@ def _trim_clause(clause: str) -> str | None:
     # 「走到日头偏西」的「走」、「摸出个油纸包」的「摸」都在这一档；
     # 而「高渐离」的「高」不在，因为那个字能当姓。
     if len(w) > 2 and w[0] in _STRONG_VERBS:
+        return None
+
+    # 第零刀：**按语法结构切，不按词表。**
+    #
+    # 动词表永远补不完 —— 「撑着地站起来」的撑、「点点头」的点、
+    # 「试着按」的试，加一个漏一个。但中文有两条硬结构：
+    #
+    #   助词「着／了／过」前面**必是**动词
+    #   叠字（点点、摇摇、笑笑）**必是**动词的重叠式
+    #
+    # 这两条不依赖认识哪个字，所以对没见过的动词一样管用。
+    # 从 index 2 起找，两字名字（「苏晚」）不会被误伤。
+    w = _cut_by_grammar(w)
+    if not w:
         return None
 
     # 第一刀：动词
