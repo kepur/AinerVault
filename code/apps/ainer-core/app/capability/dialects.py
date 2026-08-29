@@ -349,8 +349,11 @@ def _run_chat(call: _Caller, payload: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise CapabilityError(
             CapErrorCode.BAD_RESPONSE, f"两轮均未取得合法 JSON: {exc}",
-            # 已经带着坏输出让模型重写过一轮了，外层再重试意义不大
-            retryable=False,
+            # **可重试**。这与截断不同：截断是确定性的（同样的请求
+            # 必然同样被截断，要改的是批次大小），而「没输出合法 JSON」
+            # 是随机的 —— 模型每次生成都不一样，换一次采样很可能就对了。
+            # 标成不可重试的代价是整章这一步直接丢掉。
+            retryable=True,
         ) from exc
 
 
@@ -439,7 +442,8 @@ def _translate_batch(call: _Caller, system: str, batch: list[dict],
         except ValueError as exc:
             raise CapabilityError(
                 CapErrorCode.BAD_RESPONSE, f"两轮均未取得合法译文 JSON: {exc}",
-                retryable=False,
+                # 同上：非 JSON 是随机失败，重采样可能就好了
+                retryable=True,
             ) from exc
     for item in (data.get("segments") if isinstance(data, dict) else data) or []:
         if not isinstance(item, dict):

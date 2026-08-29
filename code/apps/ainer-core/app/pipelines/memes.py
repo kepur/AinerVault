@@ -199,7 +199,7 @@ def _blocks(db: Session, chapter: Chapter) -> list[ScriptBlock]:
 
 
 def extract_memes(
-    db: Session, chapter: Chapter, *, batch_size: int = 16
+    db: Session, chapter: Chapter, *, batch_size: int = 10
 ) -> MemeResult:
     """抽一章的文化梗。跨章累积 —— 同一个梗出现十次是一条，不是十条。"""
     blocks = [b for b in _blocks(db, chapter) if (b.source_text or "").strip()]

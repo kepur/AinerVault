@@ -44,7 +44,9 @@ def _transform(db: Session, novel_id: str, lang: str) -> WorldTransform:
 # ── 文化梗 ────────────────────────────────────────────────────────────────────
 
 class ExtractIn(BaseModel):
-    batch_size: int = 16
+    #: 批次越大，弱模型越容易输出不合法的 JSON。
+    #: 端到端在 16 上偶发失败，10 稳定。
+    batch_size: int = 10
 
 
 @router.post("/chapters/{chapter_id}/memes:extract")

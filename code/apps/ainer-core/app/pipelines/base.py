@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,9 @@ from sqlalchemy.orm import Session
 from app.capability.schemas import Capability
 from app.capability.service import submit_task
 from app.models import GenTask, TaskStatus
+
+
+log = logging.getLogger(__name__)
 
 
 class PipelineError(RuntimeError):
@@ -134,4 +138,25 @@ def chat_json(
     data = result.get("json")
     if data is None:
         raise PipelineError("中间层未按 json_schema 返回可解析对象（契约 §4.1 要求）")
+
+    # schema 顶层是 object，可模型有时只给数组 —— 尤其在 schema 只有
+    # 一个数组字段时（{"terms": [...]} 它直接返回 [...]）。
+    # 所有管线都写 data.get(...)，拿到 list 会以 AttributeError 变成 500，
+    # 而调用方完全不知道是形状不对。
+    # 能对上唯一的数组字段就归位，对不上才报错 —— 报错也要说清收到了什么。
+    if isinstance(data, list):
+        array_fields = [
+            k for k, v in (schema.get("properties") or {}).items()
+            if isinstance(v, dict) and v.get("type") == "array"
+        ]
+        if len(array_fields) == 1:
+            log.info("模型返回了裸数组，按唯一的数组字段 %s 归位", array_fields[0])
+            data = {array_fields[0]: data}
+        else:
+            raise PipelineError(
+                f"模型返回了数组而 schema 顶层是对象，且无法确定归入哪个字段"
+                f"（候选 {array_fields or '无'}）"
+            )
+    if not isinstance(data, dict):
+        raise PipelineError(f"模型返回的顶层不是对象：{type(data).__name__}")
     return data, task

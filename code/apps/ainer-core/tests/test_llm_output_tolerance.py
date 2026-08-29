@@ -189,3 +189,66 @@ class TestJsonExtraction:
     def test_spans_are_longest_first(self):
         spans = _balanced_spans('{"a":{"b":1}}')
         assert spans and spans[0] == (0, 13)
+
+
+class TestRetryability:
+    """两种失败要分开对待。
+
+    截断是**确定性**的：同样的请求必然同样被截断，
+    重试三次只是白烧三倍 token —— 要改的是调用方的批次大小。
+
+    非 JSON 是**随机**的：模型每次生成都不一样，换一次采样很可能就对了。
+    标成不可重试的代价是整章这一步直接丢掉 ——
+    端到端第十三轮④梗抽取就是这么丢的。
+    """
+
+    @staticmethod
+    def _source() -> str:
+        import pathlib
+
+        return (pathlib.Path(__file__).resolve().parent.parent
+                / "app" / "capability" / "dialects.py").read_text(encoding="utf-8")
+
+    def test_truncation_is_not_retryable(self):
+        src = self._source()
+        i = src.index("输出两轮均被截断")
+        assert "retryable=False" in src[i:i + 400], "截断该标为不可重试"
+
+    @pytest.mark.parametrize("marker", ["两轮均未取得合法 JSON",
+                                        "两轮均未取得合法译文 JSON"])
+    def test_bad_json_is_retryable(self, marker):
+        src = self._source()
+        i = src.index(marker)
+        assert "retryable=True" in src[i:i + 400], f"{marker} 是随机失败，该允许重试"
+
+
+class TestTopLevelShape:
+    """schema 顶层是 object，模型有时只给数组。
+
+    尤其在 schema 只有一个数组字段时（{"terms": [...]}
+    它直接返回 [...]）。所有管线都写 data.get(...)，
+    拿到 list 会以 AttributeError 变成 500，
+    而调用方完全不知道是形状不对 —— 端到端第十二轮就是这么挂的。
+    """
+
+    @staticmethod
+    def _fields(schema):
+        return [
+            k for k, v in (schema.get("properties") or {}).items()
+            if isinstance(v, dict) and v.get("type") == "array"
+        ]
+
+    def test_single_array_field_is_unambiguous(self):
+        schema = {"type": "object", "properties": {"terms": {"type": "array"}}}
+        assert self._fields(schema) == ["terms"]
+
+    def test_multiple_array_fields_are_ambiguous(self):
+        """有多个数组字段时不能猜 —— 猜错等于把数据放进错误的槽。"""
+        schema = {"type": "object", "properties": {
+            "entities": {"type": "array"}, "beats": {"type": "array"},
+        }}
+        assert len(self._fields(schema)) == 2
+
+    def test_no_array_field(self):
+        schema = {"type": "object", "properties": {"verdict": {"type": "string"}}}
+        assert self._fields(schema) == []
