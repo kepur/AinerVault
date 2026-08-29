@@ -2189,7 +2189,10 @@ const FidelityPage = {
     }
     const ts = await api("GET", `/novels/${State.novelId}/transforms`).catch(()=>[]);
     const tf = ts.find(t=>t.id===State.transformId) || ts[0];
-    const d = tf ? await api("GET", `/transforms/${tf.id}/primer`).catch(()=>null) : null;
+    const [d, sw] = tf ? await Promise.all([
+      api("GET", `/transforms/${tf.id}/primer`).catch(()=>null),
+      api("GET", `/transforms/${tf.id}/source-worlds`).catch(()=>null),
+    ]) : [null, null];
     const p = d && d.primer;
 
     v.innerHTML = `
@@ -2251,6 +2254,42 @@ const FidelityPage = {
           ${d.issues.map(h).join("<br>")}</div>`:""}
       </div>
 
+      ${sw && (sw.extra||[]).length ? `<div class="card">
+        <h2>混合源圈层
+          <span class="sub mono" style="color:var(--muted)">${sw.assigned}/${sw.scenes} 场已定</span>
+          ${sw.issues.length?`<span class="tag t-warn">${sw.issues.length} 处问题</span>`
+                            :`<span class="tag t-ok">消歧生效</span>`}
+        </h2>
+        <p class="hint">穿越／双线小说的源文本本身横跨两个世界。<br>
+          问题不是「翻译难」，是<b>同一个词在两个世界里不是一个意思</b>：
+          「先生」古代场是老师，现代场是 Mr.；「大人」古代场是 my lord，
+          现代场是 adult。<br>
+          靠（映射, 源词）唯一是分不开的 —— 后写的覆盖先写的，
+          而覆盖掉哪一个取决于挖掘顺序，<b>两次跑可能译出两个词</b>。<br>
+          归属<b>按场不按章</b>：穿越的切换点就是场景切换，一章里可以来回切好几次。</p>
+        <div class="row" style="margin-bottom:8px">
+          <span class="tag t-info">主 ${h(sw.main.display_name||"")}</span>
+          ${(sw.extra||[]).map(e=>`<span class="tag t-mute">${h(e.display_name)}</span>`).join("")}
+          <button class="btn" onclick="FidelityPage.assign(this)">按场判定</button>
+        </div>
+        ${Object.keys(sw.by_profile||{}).length?`<div class="sub" style="font-size:12px">
+          分布：${Object.entries(sw.by_profile).map(([k,v])=>`${h(k)} ${v} 场`).join("　")}</div>`:""}
+        ${(sw.ambiguous_terms||[]).length?`
+          <div class="prop" style="margin-top:8px">
+            <b>两个世界里译法不同的词</b>
+            <span class="sub" style="font-size:11px;color:var(--muted)">
+              —— 这一栏非空才说明消歧真的在起作用</span>
+            <div class="sub" style="font-size:12px;margin-top:4px;line-height:1.8">
+              ${sw.ambiguous_terms.map(t=>
+                `<span class="mono">${h(t.term)}</span>
+                 <span style="color:var(--muted)">（${t.worlds.map(h).join(" / ")}）</span>`
+              ).join("　")}</div>
+          </div>`:""}
+        ${sw.issues.length?`<div class="sub"
+          style="color:var(--warn);font-size:12px;margin-top:8px;line-height:1.8">
+          ${sw.issues.map(h).join("<br>")}</div>`:""}
+      </div>` : ""}
+
       ${p ? `<div class="card">
         <h2>${h(p.title||"导读")}</h2>
         ${(p.sections||[]).map(s=>`
@@ -2293,6 +2332,25 @@ const FidelityPage = {
       (r.warnings||[]).forEach(logWarn);
       App.refresh();
     }, "撰写中");
+  },
+  async assign(btn) {
+    await run(btn, async () => {
+      const tfid = await this._tf();
+      const chs = (await api("GET", `/novels/${State.novelId}/chapters`)).items
+        || await api("GET", `/novels/${State.novelId}/chapters`);
+      const list = Array.isArray(chs) ? chs : (chs.items || []);
+      for (const c of list) {
+        try {
+          const r = await api("POST",
+            `/chapters/${c.id}/source-worlds:assign?transform_id=${tfid}&force=1`, {});
+          if (r.skipped_single) { logWarn("只有一个源圈层，无需判定"); break; }
+          logOk(`${c.title||c.id}：${r.assigned}/${r.scenes} 场已定　${JSON.stringify(r.by_profile)}`);
+          (r.uncertain||[]).forEach(u =>
+            logWarn(`拿不准：${u.scene} —— ${u.evidence}`));
+        } catch (e) { logWarn(`${c.title||c.id}: ${e.message}`); }
+      }
+      App.refresh();
+    }, "判定中");
   },
   async approve(btn) {
     await run(btn, async () => {

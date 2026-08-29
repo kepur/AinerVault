@@ -34,6 +34,7 @@ from app.pipelines.entities import (
     apply_placeholders, placeholder_map, restore_placeholders,
 )
 from app.pipelines.devices import build_device_brief
+from app.pipelines import source_worlds as sw
 from app.worldview import injector, preflight as pf, validator
 
 log = logging.getLogger(__name__)
@@ -193,7 +194,17 @@ def translate_chapter(
         joined = "\n".join(masked.values())
 
         # ── 注入：本批命中的名物 ──
-        hits = pf.hits_for_text(db, transform.id, joined)
+        #
+        # **按这一批所属的源圈层查词表。** 穿越小说里同一个词在两个世界
+        # 不是一个意思：「先生」古代场是老师，现代场是 Mr.。
+        # 不消歧的话取到哪一条取决于查询返回顺序，两次跑可能译出两个词。
+        #
+        # 一批里混了两个世界时按第一块的圈层查 —— 分批本来就沿 seq_no 走，
+        # 同一批跨场的情况只会出现在场次边界上，而边界处两个圈层的词
+        # 都会被带进提示词（第二块那一场下一批还会再查一次）。
+        batch_world = sw.profile_for_block(db, transform, chunk[0])
+        hits = pf.hits_for_text(db, transform.id, joined,
+                                source_profile_id=batch_world)
         system_prompt = injector.compose_system_prompt(
             source_display=src_profile.display_name,
             target_display=tgt_profile.display_name,
@@ -262,7 +273,9 @@ def translate_chapter(
             text = restore_placeholders(raw, p2t)
 
             # ── 闸二：反向校验 ──
-            block_hits = pf.hits_for_text(db, transform.id, b.source_text)
+            block_hits = pf.hits_for_text(
+                db, transform.id, b.source_text,
+                source_profile_id=sw.profile_for_block(db, transform, b))
             vs = validator.check_translation(
                 translated_text=text, hits=block_hits,
                 profile_forbidden=profile_forbidden,

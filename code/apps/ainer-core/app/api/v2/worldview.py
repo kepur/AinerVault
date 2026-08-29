@@ -828,3 +828,114 @@ def get_resolved_profile(profile_id: str, db: Session = Depends(get_db)) -> dict
     warn = profile_resolve.missing_base(p)
     out["issues"] = [warn] if warn else []
     return out
+
+
+# ── 混合源圈层 ────────────────────────────────────────────────────────────────
+
+class ExtraSourcesIn(BaseModel):
+    profile_ids: list[str] = Field(default_factory=list)
+
+
+@router.patch("/transforms/{transform_id}/source-worlds")
+def set_extra_sources(transform_id: str, body: ExtraSourcesIn,
+                      db: Session = Depends(get_db)) -> dict:
+    """配这次映射的额外源圈层。
+
+    穿越／双线小说的源文本本身横跨两个圈层：「先生」在古代场是老师，
+    在现代场是 Mr.。配了之后才谈得上按场消歧。
+    """
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    ids = [i for i in body.profile_ids if i != t.source_profile_id]
+    for pid in ids:
+        if db.get(WorldProfile, pid) is None:
+            raise HTTPException(status_code=400,
+                                detail=f"world profile {pid} not found")
+    t.extra_source_profiles_json = ids or None
+    db.flush()
+    return {"ok": True, "main": t.source_profile_id, "extra": ids}
+
+
+@router.post("/chapters/{chapter_id}/source-worlds:assign")
+def assign_source_worlds(chapter_id: str, transform_id: str = Query(...),
+                         force: bool = Query(False),
+                         db: Session = Depends(get_db)) -> dict:
+    """给这一章的每一场戏定源圈层。
+
+    按场而不是按章：穿越的切换点就是场景切换，一章里可以来回切好几次。
+    """
+    from app.models import Chapter
+    from app.pipelines import source_worlds
+    from app.pipelines.base import PipelineError
+
+    ch = db.get(Chapter, chapter_id)
+    if ch is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    try:
+        return source_worlds.assign_scenes(db, t, ch, force=force).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/transforms/{transform_id}/source-worlds")
+def get_source_worlds(transform_id: str, db: Session = Depends(get_db)) -> dict:
+    """源圈层配置与各场归属，附体检。"""
+    from app.models import Chapter, Scene, ScriptDoc, WorldLexicon
+    from app.pipelines.source_worlds import source_profiles
+
+    t = db.get(WorldTransform, transform_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="transform not found")
+    profiles = source_profiles(db, t)
+    names = {p.id: p.display_name for p in profiles}
+
+    scenes = list(db.execute(
+        select(Scene).join(ScriptDoc, ScriptDoc.id == Scene.script_doc_id)
+        .join(Chapter, Chapter.id == ScriptDoc.chapter_id)
+        .where(Chapter.novel_id == t.novel_id)
+        .order_by(Chapter.order_no, Scene.order_no)
+    ).scalars())
+    lex = list(db.execute(
+        select(WorldLexicon).where(WorldLexicon.transform_id == transform_id)
+    ).scalars())
+
+    unassigned = [s.title or s.id for s in scenes if not s.source_profile_id]
+    issues: list[str] = []
+    if len(profiles) > 1 and unassigned:
+        issues.append(
+            f"{len(unassigned)} 场没定源圈层，会回落到主源圈层「"
+            f"{names.get(t.source_profile_id, '?')}」—— "
+            f"落错的那几场整场用错词表，而沿途没有任何一处会报错")
+    # 同一个源词挂了多个圈层 = 消歧真的在起作用；一个都没有 = 白配了
+    by_term: dict[str, set] = {}
+    for r in lex:
+        by_term.setdefault(r.source_term, set()).add(r.source_profile_id)
+    ambiguous = {k: v for k, v in by_term.items() if len(v) > 1}
+    if len(profiles) > 1 and not ambiguous:
+        issues.append(
+            "配了多个源圈层，但没有任何一个词在两个世界里有不同译法 —— "
+            "要么这本书其实不需要分圈层，要么词表挖掘时还没分场（先跑 assign）")
+
+    return {
+        "main": {"id": t.source_profile_id,
+                 "display_name": names.get(t.source_profile_id)},
+        "extra": [{"id": p.id, "display_name": p.display_name}
+                  for p in profiles[1:]],
+        "scenes": len(scenes),
+        "assigned": len(scenes) - len(unassigned),
+        "by_profile": {
+            names.get(pid, "未定"): sum(1 for s in scenes
+                                       if s.source_profile_id == pid)
+            for pid in {s.source_profile_id for s in scenes}
+        },
+        "ambiguous_terms": [
+            {"term": k, "worlds": [names.get(w, "通用") for w in v]}
+            for k, v in sorted(ambiguous.items())[:20]
+        ],
+        "unassigned": unassigned[:10],
+        "issues": issues,
+    }

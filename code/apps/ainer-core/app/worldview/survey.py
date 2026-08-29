@@ -347,38 +347,93 @@ def survey_chapter(
             (src_profile_early.language_json or {}).get("code")
             if src_profile_early else None
         )
-    candidates = _candidate_tokens(texts, covered, max_candidates, src_lang)
-    # 候选词是**降噪加速**手段，不是前置条件。
-    # 短章节、新书开头、名物密度低的段落，统计层本来就给不出候选 ——
-    # 此时若直接返回，LLM 层根本不被调用，用户只看到「勘探完成，0 条」，
-    # 完全不知道是没词还是没跑。所以退化为直接把原文交给模型找。
-    direct = not candidates
-    if direct:
-        log.info("统计层无候选（语料 %d 字），转为直接从原文挖掘",
-                 sum(len(t) for t in texts))
-
     src_profile = db.get(WorldProfile, transform.source_profile_id)
     tgt_profile = db.get(WorldProfile, transform.target_profile_id)
-    # 原文节选压到 3000 字：每条词条的输出（译法 + 读音 + 禁用词 + 依据）
-    # 是输入的好几倍，一次给太多原文，模型会试图把整章的名物一次列完，
-    # 直接撞穿输出上限。宁可分章多跑几次 —— 词条是跨章累积的，不会丢。
-    excerpt = "\n".join(texts)[:3000]
     known_sample = ", ".join(sorted(covered)[:60])
 
-    # 分批送。**限流不够，必须分批** —— 上一版只是把原文压到 3000 字、
-    # 候选压到 24 个，结果仍然两轮都被截断：每条词条的输出
-    # （译法 + 读音 + 禁用词 + 依据）是候选词本身的几十倍，
-    # 24 条就要生成上万 token。压输入解决不了输出爆炸，只有分批能。
-    # direct 模式没有候选可分批，只跑一轮并在提示词里限量
-    steps = [[]] if direct else [
-        candidates[i : i + _MINE_BATCH]
-        for i in range(0, len(candidates), _MINE_BATCH)
-    ]
-    for batch in steps:
-        _mine_batch(db, transform, chapter, src_profile, tgt_profile,
-                    batch, direct, excerpt, known_sample, covered, result, texts)
+    # 混合源圈层：一章横跨两个世界时，挖出的词条要标明属于哪一个。
+    # 不标的话，「先生」在古代场和现代场会争夺同一个 (映射, 源词) 键，
+    # 后写的覆盖先写的 —— 而覆盖掉哪一个取决于挖掘顺序。
+    #
+    # **候选词也按圈层各算各的。** 用整章的候选去挖每一个世界，
+    # 等于拿现代场的「PPT」去对着唐代的原文找译法 ——
+    # 模型要么硬编一个，要么整批作废，两种都比不挖更糟。
+    worlds = _blocks_by_world(db, transform, blocks)
+    multi = len(worlds) > 1
+    for world_id, world_texts in worlds:
+        if not world_texts:
+            continue
+        # **已覆盖集合按圈层各算各的。**
+        # 共享一个集合的话，古代场挖过「先生」之后，现代场的候选就把它排除了 ——
+        # 而「同一个词在两个世界里译法不同」恰恰是这整套机制存在的理由。
+        # 排除掉它，功能就是死的：库里永远不会出现需要消歧的词条。
+        w_covered = (
+            {r.source_term for r in rows
+             if r.source_profile_id in (world_id, None)}
+            | {a for r in rows if r.source_profile_id in (world_id, None)
+               for a in (r.source_aliases or [])}
+            if multi else covered
+        )
+        w_candidates = _candidate_tokens(
+            world_texts, w_covered, max_candidates, src_lang)
+        # 候选词是**降噪加速**手段，不是前置条件。
+        # 短章节、新书开头、名物密度低的段落，统计层本来就给不出候选 ——
+        # 此时若直接跳过，LLM 层根本不被调用，用户只看到「勘探完成，0 条」，
+        # 完全不知道是没词还是没跑。所以退化为直接把原文交给模型找。
+        direct = not w_candidates
+        if direct:
+            log.info("统计层无候选（语料 %d 字），转为直接从原文挖掘",
+                     sum(len(t) for t in world_texts))
+        # 原文节选压到 3000 字：每条词条的输出（译法 + 读音 + 禁用词 + 依据）
+        # 是输入的好几倍，一次给太多原文，模型会试图把整章的名物一次列完，
+        # 直接撞穿输出上限。宁可分章多跑几次 —— 词条是跨章累积的，不会丢。
+        excerpt = "\n".join(world_texts)[:3000]
+        # 分批送。**限流不够，必须分批** —— 上一版只是把原文压到 3000 字、
+        # 候选压到 24 个，结果仍然两轮都被截断：每条词条的输出是候选词
+        # 本身的几十倍，24 条就要生成上万 token。压输入解决不了输出爆炸。
+        steps = [[]] if direct else [
+            w_candidates[i : i + _MINE_BATCH]
+            for i in range(0, len(w_candidates), _MINE_BATCH)
+        ]
+        for batch in steps:
+            _mine_batch(db, transform, chapter, src_profile, tgt_profile,
+                        batch, direct, excerpt, known_sample, w_covered,
+                        result, world_texts, source_profile_id=world_id)
     db.flush()
     return result
+
+
+def _blocks_by_world(
+    db: Session, transform: WorldTransform, blocks: list,
+) -> list[tuple[str | None, list[str]]]:
+    """把一章的文本按源圈层分组。
+
+    单圈层（绝大多数小说）返回一项 `(None, 全部文本)` —— None 的意思是
+    「这条词条通用」，不挂圈层。挂上主源圈层反而有害：
+    以后加第二个源圈层时，这些老条目会突然变成「只属于古代场」。
+
+    多圈层时按场次所属分组，每组的词条挂上自己的圈层。
+    """
+    from app.pipelines.source_worlds import source_profiles
+
+    if len(source_profiles(db, transform)) < 2:
+        return [(None, [b.source_text for b in blocks if b.source_text])]
+
+    from app.models import Scene
+
+    scene_world: dict[str, str | None] = {}
+    grouped: dict[str | None, list[str]] = {}
+    for b in blocks:
+        if not b.source_text:
+            continue
+        world = None
+        if b.scene_id:
+            if b.scene_id not in scene_world:
+                sc = db.get(Scene, b.scene_id)
+                scene_world[b.scene_id] = sc.source_profile_id if sc else None
+            world = scene_world[b.scene_id]
+        grouped.setdefault(world, []).append(b.source_text)
+    return sorted(grouped.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))
 
 
 #: 单次挖掘的候选词上限。词条的输出量是候选词的几十倍。
@@ -391,6 +446,7 @@ def _mine_batch(
     candidates: list[tuple[str, int]], direct: bool,
     excerpt: str, known_sample: str, covered: set[str],
     result: SurveyResult, texts: list[str],
+    source_profile_id: str | None = None,
 ) -> None:
     data, _task = chat_json(
         db,
@@ -465,6 +521,10 @@ def _mine_batch(
             # 目标文化里有没有对应物。**导读的选材全靠这一栏** ——
             # 有对应物的词写进导读是浪费读者的耐心，而耐心是导读最稀缺的资源
             no_equivalent=bool(item.get("no_equivalent")),
+            # 这条属于哪个源圈层。单圈层时为 None（通用）——
+            # 挂上主源圈层反而有害：以后加第二个源圈层时，
+            # 这些老条目会突然变成「只属于第一个世界」
+            source_profile_id=source_profile_id,
             status=ReviewStatus.candidate,
             confidence=float(item.get("confidence") or 0.6),
             rationale=item.get("rationale") or None,
