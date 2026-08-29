@@ -25,7 +25,7 @@ from app.models import (
     Chapter, CultureFinding, CultureReview, GapKind, ReviewRunStatus, ScriptBlock,
     TranslationBlock, Verdict, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.pipelines.prose import active_prose_doc
 
 log = logging.getLogger(__name__)
@@ -232,7 +232,7 @@ def _absorb(
             kind = GapKind(item.get("kind") or "")
         except ValueError:
             continue
-        gap = str(item.get("gap_explain") or "").strip()
+        gap = as_text(item.get("gap_explain"))
         if not gap:
             continue
         sev = max(1, min(5, int(item.get("severity") or 3)))
@@ -243,11 +243,11 @@ def _absorb(
             severity=sev,
             source_excerpt=(block.source_text or "")[:600],
             target_excerpt=(target or "")[:600],
-            source_effect=(item.get("source_effect") or "").strip()[:1000] or None,
-            target_effect=(item.get("target_effect") or "").strip()[:1000] or None,
+            source_effect=as_text(item.get("source_effect"))[:1000] or None,
+            target_effect=as_text(item.get("target_effect"))[:1000] or None,
             gap_explain=gap[:2000],
-            proposal=(item.get("proposal") or "").strip()[:2000] or None,
-            proposed_text=(item.get("proposed_text") or "").strip()[:2000] or None,
+            proposal=as_text(item.get("proposal"))[:2000] or None,
+            proposed_text=as_text(item.get("proposed_text"))[:2000] or None,
             fix_channel=channel if channel in FIX_CHANNELS else None,
             verdict=Verdict.pending,
         ))

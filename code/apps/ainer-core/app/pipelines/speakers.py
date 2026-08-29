@@ -25,7 +25,7 @@ from app.models import (
     Chapter, DocStatus, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.models.script import BlockType
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.worldview.naming import cn_surname
 
 log = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ def resolve_speakers(
         for surface in [
             e.display_name, *(e.aliases_json or []), *appellations.get(e.id, []),
         ]:
-            s = str(surface or "").strip()
+            s = as_text(surface)
             if not s:
                 continue
             by_exact.setdefault(s, e)
@@ -287,8 +287,8 @@ def resolve_speakers(
             data = {}
 
         for item in data.get("mappings") or []:
-            tag = str(item.get("speaker_tag") or "").strip()
-            name = str(item.get("entity_name") or "").strip()
+            tag = as_text(item.get("speaker_tag"))
+            name = as_text(item.get("entity_name"))
             conf = float(item.get("confidence") or 0)
             if not tag or not name or tag not in ambiguous:
                 continue

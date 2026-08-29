@@ -29,7 +29,7 @@ from app.models import (
     NarrativeDevice, ScriptBlock, ScriptDoc, StoryBeat,
 )
 from app.models.script import DocStatus
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.worldview import idiom_rules as ir
 
 log = logging.getLogger(__name__)
@@ -199,8 +199,8 @@ def extract_devices(
                 load = CulturalLoad(item.get("cultural_load") or "medium")
             except ValueError:
                 continue
-            source_text = str(item.get("source_text") or "").strip()
-            mechanism = str(item.get("mechanism") or "").strip()
+            source_text = as_text(item.get("source_text"))
+            mechanism = as_text(item.get("mechanism"))
             if not source_text or not mechanism:
                 continue
 
@@ -223,8 +223,8 @@ def extract_devices(
                 device_type=dtype, effect=effect, cultural_load=load,
                 strategy=_DEFAULT_STRATEGY[load],
                 source_text=source_text[:2000], mechanism=mechanism[:2000],
-                setup=(item.get("setup") or "").strip() or None,
-                punch=(item.get("punch") or "").strip() or None,
+                setup=as_text(item.get("setup")) or None,
+                punch=as_text(item.get("punch")) or None,
                 intensity=intensity,
                 depends_on=[str(x) for x in (item.get("depends_on") or [])] or None,
             ))

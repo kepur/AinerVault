@@ -26,7 +26,7 @@ from app.models import (
     Chapter, DocStatus, Facing, ScriptBlock, ScriptDoc, Shot, ShotPerformance,
     ShotPlan, SpeechRole, StagePosition, WorldEntity,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 
 log = logging.getLogger(__name__)
 
@@ -383,7 +383,7 @@ def _absorb(
             continue
         static_all = True
         for c in item.get("cast") or []:
-            name = str(c.get("entity") or "").strip()
+            name = as_text(c.get("entity"))
             entity = by_name.get(name)
             if entity is None:
                 if name and name not in result.unresolved:
@@ -412,11 +412,11 @@ def _absorb(
             row.speech_role = role
             row.position = pos
             row.facing = facing
-            row.gaze_target = (c.get("gaze_target") or "").strip()[:128] or None
-            row.expression = (c.get("expression") or "").strip()[:128] or None
-            row.expression_end = (c.get("expression_end") or "").strip()[:128] or None
-            row.action = (c.get("action") or "").strip()[:2000] or None
-            row.action_end = (c.get("action_end") or "").strip()[:2000] or None
+            row.gaze_target = as_text(c.get("gaze_target"))[:128] or None
+            row.expression = as_text(c.get("expression"))[:128] or None
+            row.expression_end = as_text(c.get("expression_end"))[:128] or None
+            row.action = as_text(c.get("action"))[:2000] or None
+            row.action_end = as_text(c.get("action_end"))[:2000] or None
             row.props_json = [
                 str(x).strip() for x in (c.get("props") or []) if str(x).strip()
             ] or None

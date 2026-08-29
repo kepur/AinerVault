@@ -20,6 +20,68 @@ class PipelineError(RuntimeError):
     pass
 
 
+def as_text(value: Any, *, sep: str = "，", limit: int | None = None) -> str:
+    """把 LLM 返回的任意值取成字符串。
+
+    **不能假设模型严格遵守 schema。** schema 写的是 string，
+    模型可能返回 ["紧张", "悬疑"]，也可能返回 3 或 null ——
+    直接 `.strip()` 会以 AttributeError 把整批任务打挂，
+    而调用方看到的只是 500，完全不知道是模型多给了个数组。
+
+    换模型时这类差异最集中：同一份 schema，DeepSeek 老实返回字符串，
+    另一个模型顺手给了列表。管线不该因此失败。
+
+    列表拼起来而不是丢掉 —— 模型给数组通常是因为它真有多个值，
+    丢掉等于丢信息。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        out = value.strip()
+    elif isinstance(value, (list, tuple, set)):
+        out = sep.join(as_text(v) for v in value if v is not None).strip(sep)
+    elif isinstance(value, dict):
+        out = sep.join(as_text(v) for v in value.values() if v is not None).strip(sep)
+    elif isinstance(value, bool):
+        out = "是" if value else ""
+    else:
+        out = str(value).strip()
+    return out[:limit] if limit else out
+
+
+def as_list(value: Any, *, limit: int | None = None) -> list[str]:
+    """把 LLM 返回的任意值取成字符串列表。
+
+    schema 写 array，模型可能返回单个字符串。反过来也一样 ——
+    两个方向都要兜住，否则换个模型就有一半字段取不到。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value.strip()] if value.strip() else []
+    elif isinstance(value, (list, tuple, set)):
+        items = [t for t in (as_text(v) for v in value) if t]
+    elif isinstance(value, dict):
+        items = [t for t in (as_text(v) for v in value.values()) if t]
+    else:
+        items = [str(value).strip()]
+    return items[:limit] if limit else items
+
+
+def as_int(value: Any, default: int = 0, *, lo: int | None = None,
+           hi: int | None = None) -> int:
+    """取整数并夹到区间。模型给 "3"、3.0、甚至 "三" 都不该让管线崩。"""
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        n = default
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
+
+
 def fingerprint(*parts: Any) -> str:
     blob = json.dumps(parts, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()

@@ -22,7 +22,7 @@ from app.models import (
     NameType,
     Chapter, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.worldview import appellation_rules as ar
 from app.worldview.naming import cn_surname, infer_family_key
 
@@ -251,7 +251,7 @@ def _resolve_same_as(
     并错比不并更难修：两个不同的东西合成一条之后，
     要拆开得先发现它们本来是两个，而译文里只会看到一个名字。
     """
-    target = str(same_as or "").strip()
+    target = as_text(same_as)
     if not target or target == name:
         return None
     for row in existing.values():
@@ -367,7 +367,7 @@ def extract_entities(
     result = ExtractResult()
     pending_appellations: list[tuple[str, list[dict]]] = []
     for item in data.get("entities") or []:
-        name = str(item.get("display_name") or "").strip()
+        name = as_text(item.get("display_name"))
         if not name:
             continue
         if int(item.get("importance") or 3) < min_importance:
@@ -405,21 +405,21 @@ def extract_entities(
 
         family_key = None
         if kind == EntityKind.character:
-            hint_surname = str(item.get("family_hint") or "").strip()
+            hint_surname = as_text(item.get("family_hint"))
             family_key = (
                 f"{hint_surname}_family" if hint_surname and cn_surname(hint_surname + "某")
                 else infer_family_key(name)
             )
 
         extra = {
-            "appearance": (item.get("appearance") or "").strip() or None,
-            "voice_hints": (item.get("voice_hints") or "").strip() or None,
+            "appearance": as_text(item.get("appearance")) or None,
+            "voice_hints": as_text(item.get("voice_hints")) or None,
             "visual_keywords": [
                 str(k).strip() for k in (item.get("visual_keywords") or [])
                 if str(k).strip()
             ] or None,
-            "owner_hint": (item.get("owner") or "").strip() or None,
-            "usage_hint": (item.get("usage") or "").strip() or None,
+            "owner_hint": as_text(item.get("owner")) or None,
+            "usage_hint": as_text(item.get("usage")) or None,
             "evidence_json": [
                 str(e).strip() for e in (item.get("evidence") or []) if str(e).strip()
             ][:3] or None,
@@ -553,15 +553,15 @@ def _save_appellations(
             ).scalars()
         }
         for item in items:
-            surface = str(item.get("surface") or "").strip()
+            surface = as_text(item.get("surface"))
             if not surface:
                 continue
             try:
                 register = Register(item.get("register") or "formal_full")
             except ValueError:
                 register = Register.formal_full
-            speaker = (str(item.get("speaker") or "").strip() or None)
-            quote = str(item.get("evidence") or "").strip()
+            speaker = (as_text(item.get("speaker")) or None)
+            quote = as_text(item.get("evidence"))
             row = rows.get(surface)
             if row is None:
                 row = EntityAppellation(
@@ -602,15 +602,15 @@ def _save_beats(db: Session, chapter: Chapter, items: list[dict]) -> int:
 
     n = 0
     for i, item in enumerate(sorted(items, key=lambda x: int(x.get("order") or 0)), 1):
-        title = str(item.get("title") or "").strip()
+        title = as_text(item.get("title"))
         if not title:
             continue
         tension = int(item.get("tension_level") or 3)
         db.add(StoryBeat(
             id=new_id("bt"), chapter_id=chapter.id, order_no=i, title=title,
-            summary=(item.get("summary") or "").strip() or None,
+            summary=as_text(item.get("summary")) or None,
             tension_level=max(1, min(tension, 5)),
-            location_text=(item.get("location") or "").strip() or None,
+            location_text=as_text(item.get("location")) or None,
             entity_names=[str(e) for e in (item.get("entities") or [])] or None,
             evidence_json=[
                 str(e).strip() for e in (item.get("evidence") or []) if str(e).strip()
@@ -633,16 +633,16 @@ def _save_style_hints(db: Session, chapter: Chapter, items: list[dict]) -> int:
 
     n = 0
     for item in items:
-        if not any(str(item.get(k) or "").strip()
+        if not any(as_text(item.get(k))
                    for k in ("lighting_style", "mood", "camera_hint", "texture")):
             continue
         db.add(StyleHint(
             id=new_id("sh"), chapter_id=chapter.id,
-            lighting_style=(item.get("lighting_style") or "").strip() or None,
+            lighting_style=as_text(item.get("lighting_style")) or None,
             color_palette=[str(c) for c in (item.get("color_palette") or [])] or None,
-            mood=(item.get("mood") or "").strip() or None,
-            camera_hint=(item.get("camera_hint") or "").strip() or None,
-            texture=(item.get("texture") or "").strip() or None,
+            mood=as_text(item.get("mood")) or None,
+            camera_hint=as_text(item.get("camera_hint")) or None,
+            texture=as_text(item.get("texture")) or None,
             evidence_json=[
                 str(e).strip() for e in (item.get("evidence") or []) if str(e).strip()
             ][:3] or None,
@@ -751,7 +751,7 @@ def placeholder_map(
             source_to_ph.append((surface, ap_ph))
 
         for surface in [e.display_name, *(e.aliases_json or [])]:
-            surface = str(surface or "").strip()
+            surface = as_text(surface)
             if surface and surface not in claimed:
                 source_to_ph.append((surface, ph))
 
@@ -761,7 +761,7 @@ def placeholder_map(
 
 def _mutation_variants(prefix: str, target_name: str) -> list[str]:
     """模型可能把 {{CHAR:abc}} 写成 {{CHAR:Mason}}，预留兼容键。"""
-    base = str(target_name or "").strip()
+    base = as_text(target_name)
     if not base:
         return []
     compact = re.sub(r"[^\w一-鿿]+", "_", base).strip("_")

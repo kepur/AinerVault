@@ -22,7 +22,7 @@ from app.models import (
     AssetKindSpec, AssetOrigin, AssetSpec, AssetVariant, Chapter, DocStatus,
     ReviewStatus, ScriptBlock, ScriptDoc, WorldEntity, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.worldview.asset_requirements import check_completeness, requirements_for
 
 log = logging.getLogger(__name__)
@@ -145,8 +145,8 @@ def extract_assets(
 
     out = ExtractPackResult()
     for item in data.get("assets") or []:
-        key = str(item.get("canonical_key") or "").strip()
-        name = str(item.get("display_name") or "").strip()
+        key = as_text(item.get("canonical_key"))
+        name = as_text(item.get("display_name"))
         if not key or not name:
             continue
         if int(item.get("importance") or 3) < min_importance:
@@ -157,8 +157,8 @@ def extract_assets(
             kind = AssetKindSpec.prop
 
         aliases = [str(a).strip() for a in (item.get("aliases") or []) if str(a).strip()]
-        owner = entities.get(str(item.get("owner_entity") or "").strip())
-        excerpt = str(item.get("excerpt") or "").strip()
+        owner = entities.get(as_text(item.get("owner_entity")))
+        excerpt = as_text(item.get("excerpt"))
 
         row = existing.get(key)
         if row is not None:
@@ -358,7 +358,7 @@ def ensure_variants(
         )
 
         for item in data.get("variants") or []:
-            key = str(item.get("canonical_key") or "").strip()
+            key = as_text(item.get("canonical_key"))
             spec = by_key.get(key)
             if spec is None:
                 continue

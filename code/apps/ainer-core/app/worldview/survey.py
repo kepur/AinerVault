@@ -24,7 +24,7 @@ from app.models import (
     Chapter, LexiconCategory, LexiconSource, ReviewStatus, ScriptBlock, ScriptDoc,
     DocStatus, WorldLexicon, WorldLexiconTemplate, WorldProfile, WorldTransform, utcnow,
 )
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 from app.worldview.matcher import LexiconMatcher
 from app.worldview import lexicon_rules as lr
 from app.worldview.mining import mine_candidates
@@ -408,8 +408,8 @@ def _mine_batch(
     )
 
     for item in data.get("terms") or []:
-        src = str(item.get("source_term") or "").strip()
-        tgt = str(item.get("target_term") or "").strip()
+        src = as_text(item.get("source_term"))
+        tgt = as_text(item.get("target_term"))
         if not src or not tgt or src in covered:
             continue
         try:

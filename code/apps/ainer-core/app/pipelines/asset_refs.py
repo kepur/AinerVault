@@ -24,7 +24,7 @@ from app.models import (
     Asset, AssetKindSpec, AssetSpec, AssetVariant, ReviewStatus, WorldProfile,
     WorldTransform,
 )
-from app.pipelines.base import PipelineError
+from app.pipelines.base import PipelineError, as_text
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def compose_ref_prompt(
     # 结构化字段逐项进 prompt，比整段自然语言可控
     structured = variant.structured_json or {}
     for key, value in structured.items():
-        val = str(value or "").strip()
+        val = as_text(value)
         if val:
             parts.append(f"{key.replace('_', ' ')}: {val}")
 
@@ -172,7 +172,7 @@ def compose_audio_ref_request(
     """
     structured = variant.structured_json or {}
     descriptor = ", ".join(
-        f"{k.replace('_', ' ')}: {v}" for k, v in structured.items() if str(v or "").strip()
+        f"{k.replace('_', ' ')}: {v}" for k, v in structured.items() if as_text(v)
     )
     kind = spec.kind
 

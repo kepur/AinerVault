@@ -25,7 +25,7 @@ from app.models import (
     Chapter, DocMode, DocStatus, EntityWorldName, ScriptBlock, ScriptDoc,
     TranslationBlock, WorldEntity, WorldLexicon, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError
+from app.pipelines.base import PipelineError, as_text
 from app.worldview.matcher import LexiconMatcher
 from app.worldview.naming import contains_han, contains_pinyin
 from app.worldview.validator import contains_token
@@ -151,7 +151,7 @@ def _audit_names(
     surfaces: dict[str, tuple[str, str, bool]] = {}
     for name_row, entity in rows:
         for s in [entity.display_name, *(entity.aliases_json or [])]:
-            s = str(s or "").strip()
+            s = as_text(s)
             if s:
                 surfaces[s] = (entity.display_name, name_row.target_name, False)
 

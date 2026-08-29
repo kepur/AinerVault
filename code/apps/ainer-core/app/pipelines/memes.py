@@ -24,7 +24,7 @@ from app.models import (
     WorldTransform, choose_strategy,
 )
 from app.models.narrative_device import CulturalLoad
-from app.pipelines.base import PipelineError, chat_json
+from app.pipelines.base import PipelineError, chat_json, as_text
 
 log = logging.getLogger(__name__)
 
@@ -240,8 +240,8 @@ def _absorb(
     existing: dict[str, MemeEntry], result: MemeResult,
 ) -> None:
     for item in items:
-        surface = str(item.get("surface") or "").strip()
-        use = str(item.get("actual_use") or "").strip()
+        surface = as_text(item.get("surface"))
+        use = as_text(item.get("actual_use"))
         if not surface or not use:
             continue
         try:
@@ -257,7 +257,7 @@ def _absorb(
         except ValueError:
             plot = PlotLoad.none
 
-        quote = str(item.get("evidence") or "").strip()
+        quote = as_text(item.get("evidence"))
         row = existing.get(surface)
         if row is not None:
             if row.locked:
@@ -277,12 +277,12 @@ def _absorb(
         row = MemeEntry(
             id=new_id("mm"), novel_id=chapter.novel_id, surface=surface,
             register=reg, volatility=vol, plot_load=plot,
-            literal_gloss=(item.get("literal_gloss") or "").strip() or None,
+            literal_gloss=as_text(item.get("literal_gloss")) or None,
             actual_use=use[:2000],
-            origin=(item.get("origin") or "").strip() or None,
+            origin=as_text(item.get("origin")) or None,
             origin_year=item.get("origin_year") or None,
-            circle=(item.get("circle") or "").strip() or None,
-            platform=(item.get("platform") or "").strip() or None,
+            circle=as_text(item.get("circle")) or None,
+            platform=as_text(item.get("platform")) or None,
             occurrences=1,
             evidence_json=[{"chapter_id": chapter.id, "quote": quote}] if quote else None,
         )
@@ -424,9 +424,9 @@ def _render_batch(
             db.add(row)
             done[m.id] = row
         row.strategy = strategy
-        row.target_text = (item.get("target_text") or "").strip() or None
-        row.gloss_text = (item.get("gloss_text") or "").strip() or None
-        row.rationale = (item.get("rationale") or "").strip() or None
+        row.target_text = as_text(item.get("target_text")) or None
+        row.gloss_text = as_text(item.get("gloss_text")) or None
+        row.rationale = as_text(item.get("rationale")) or None
         row.candidates_json = [
             str(c) for c in (item.get("candidates") or []) if str(c).strip()
         ] or None
