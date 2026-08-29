@@ -307,3 +307,59 @@ class TestAsItems:
             if pat.search(line)
         ]
         assert not bad, "这些地方仍假设数组元素是对象：" + "、".join(bad)
+
+
+class TestRetryAfter:
+    """provider 说了该等多久就听它的。
+
+    固定退避 (2, 8, 30) 在限流严格的服务上必然失败 ——
+    Groq 的 token 配额按分钟重置，等 2 秒再打还是 429，
+    三次退避加起来 40 秒也不够，于是整步失败。
+    而它在响应里明确说了该等多久，只是没人读。
+    """
+
+    @staticmethod
+    def _resp(headers=None, body=None):
+        import httpx
+
+        return httpx.Response(
+            429, headers=headers or {}, json=body or {},
+            request=httpx.Request("POST", "http://x"),
+        )
+
+    @pytest.mark.parametrize("headers,expect", [
+        ({"retry-after": "12"}, 12.0),
+        ({"retry-after": "1500ms"}, 1.5),
+        ({"retry-after": "2m"}, 120.0),
+        ({"x-ratelimit-reset-tokens": "7.5s"}, 7.5),
+        ({"x-ratelimit-reset-requests": "3"}, 3.0),
+    ])
+    def test_reads_headers(self, headers, expect):
+        from app.capability.dialects import _retry_after_seconds
+
+        assert _retry_after_seconds(self._resp(headers)) == expect
+
+    @pytest.mark.parametrize("msg,expect", [
+        ("Rate limit reached. Please try again in 1m2.28s", 62.28),
+        ("try again in 4.5s", 4.5),
+    ])
+    def test_parses_error_message(self, msg, expect):
+        """没有标准头时从错误文案里抠 —— Groq 就是这么写的。"""
+        from app.capability.dialects import _retry_after_seconds
+
+        got = _retry_after_seconds(self._resp(body={"error": {"message": msg}}))
+        assert got == pytest.approx(expect)
+
+    def test_none_when_no_hint(self):
+        from app.capability.dialects import _retry_after_seconds
+
+        assert _retry_after_seconds(
+            self._resp(body={"error": {"message": "no hint"}})) is None
+
+    def test_wait_is_capped(self):
+        """provider 偶尔报出几十分钟的重置时间 ——
+        那种情况该失败并让人换个模型，而不是把任务挂在那里。
+        """
+        from app.capability.dialects import _MAX_RETRY_WAIT
+
+        assert 30 <= _MAX_RETRY_WAIT <= 120

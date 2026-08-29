@@ -47,6 +47,9 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.I)
 _TRANSLATE_BATCH = 40
 #: 被截断时自动抬高的输出预算上限。再高多数服务会直接拒请求。
 _MAX_TOKENS_CEILING = 16384
+#: 单次重试最长等待。provider 偶尔会报出几十分钟的重置时间，
+#: 那种情况该失败并让人换个模型，而不是把任务挂在那里。
+_MAX_RETRY_WAIT = 75.0
 
 
 # ── JSON 抽取 ────────────────────────────────────────────────────────────────
@@ -174,7 +177,13 @@ class _Caller:
                 if not exc.retryable or attempt == MAX_ATTEMPTS - 1:
                     raise
                 last = exc
-                delay = RETRY_BACKOFF_SEC[min(attempt, len(RETRY_BACKOFF_SEC) - 1)]
+                # provider 说了等多久就听它的 —— 固定退避在
+                # 按分钟重置配额的服务上永远等不够
+                told = getattr(exc, "retry_after", None)
+                delay = (
+                    min(float(told) + 0.5, _MAX_RETRY_WAIT) if told
+                    else RETRY_BACKOFF_SEC[min(attempt, len(RETRY_BACKOFF_SEC) - 1)]
+                )
                 log.warning("调用失败可重试（%s），%d 秒后第 %d 次重试：%s",
                             exc.code, delay, attempt + 2, str(exc)[:120])
                 time.sleep(delay)
@@ -279,6 +288,38 @@ class _Caller:
         )
 
 
+def _retry_after_seconds(resp: httpx.Response) -> float | None:
+    """从响应里读出「该等多久」。
+
+    固定退避 (2, 8, 30) 在限流严格的 provider 上必然失败 ——
+    Groq 的 token 配额按分钟重置，等 2 秒再打还是 429，
+    三次退避加起来 40 秒也不够，于是整步失败。
+    而它明确告诉了该等多久，只是没人读。
+
+    三处依次尝试：标准 Retry-After 头、provider 自定义的
+    x-ratelimit-reset-* 头、错误消息里的「try again in 1m2.28s」。
+    """
+    for key in ("retry-after", "x-ratelimit-reset-tokens",
+                "x-ratelimit-reset-requests"):
+        raw = resp.headers.get(key)
+        if not raw:
+            continue
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m)?\s*$", str(raw))
+        if m:
+            n = float(m.group(1))
+            unit = m.group(2) or "s"
+            return n / 1000 if unit == "ms" else n * 60 if unit == "m" else n
+    try:
+        msg = str((resp.json().get("error") or {}).get("message") or "")
+    except Exception:
+        msg = resp.text[:300]
+    # 「Please try again in 1m2.28s」/「try again in 4.5s」
+    m = re.search(r"try again in\s+(?:(\d+)m)?([\d.]+)s", msg, re.I)
+    if m:
+        return int(m.group(1) or 0) * 60 + float(m.group(2))
+    return None
+
+
 def _map_openai_error(resp: httpx.Response) -> CapabilityError:
     """HTTP 状态 → 契约错误码。分清可重试与不可重试，重试逻辑才有意义。"""
     try:
@@ -288,6 +329,21 @@ def _map_openai_error(resp: httpx.Response) -> CapabilityError:
     err = body.get("error") if isinstance(body, dict) else None
     message = (err or {}).get("message") if isinstance(err, dict) else None
     message = str(message or resp.text[:300] or f"HTTP {resp.status_code}")
+    # 「单次请求超过每分钟配额」被有些 provider 报成 400 而不是 429
+    # （Groq 就是）。当成普通 INVALID_REQUEST 的话，
+    # 错误消息里只有一串组织 id 和限额数字，调用方看不出该做什么 ——
+    # 而该做的是把这一批拆小，不是重试。
+    if resp.status_code == 400 and re.search(
+        r"request too large|too many tokens|context length|maximum context",
+        message, re.I,
+    ):
+        return CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            f"单次请求超出该模型的配额或上下文上限，**需要减小批次**"
+            f"（不是重试能解决的）。上游原文：{message[:200]}",
+            retryable=False, provider_raw=body or None,
+        )
+
     code = {
         400: CapErrorCode.INVALID_REQUEST,
         401: CapErrorCode.UNAUTHORIZED,
@@ -302,7 +358,10 @@ def _map_openai_error(resp: httpx.Response) -> CapabilityError:
             CapErrorCode.UPSTREAM_ERROR if resp.status_code >= 500
             else CapErrorCode.INVALID_REQUEST
         )
-    return CapabilityError(code, message, provider_raw=body or None)
+    err = CapabilityError(code, message, provider_raw=body or None)
+    # 把「该等多久」挂在异常上，让重试层用它代替固定退避
+    err.retry_after = _retry_after_seconds(resp)
+    return err
 
 
 # ── 能力实现 ─────────────────────────────────────────────────────────────────
