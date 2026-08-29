@@ -145,6 +145,13 @@ def submit_task(
         trace_id=task.id,
     )
 
+    # 同步方言没有任务队列 —— 直连供应商时一次 HTTP 就是全部。
+    # 不在这里改道的话，submit() 会当场抛「没有任务队列」，
+    # 而调用方（出图、出音）根本不知道端点是哪种方言，也不该知道
+    from app.capability.dialects import SYNC_ONLY_DIALECTS
+
+    sync = sync or (route.endpoint.dialect or "") in SYNC_ONLY_DIALECTS
+
     with CapabilityClient.from_route(route) as client:
         try:
             if sync:

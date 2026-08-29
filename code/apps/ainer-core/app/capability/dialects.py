@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 
 DIALECT_CAPABILITY = "capability"
 DIALECT_OPENAI = "openai"
-DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI)
+DIALECT_CLOUDFLARE = "cloudflare"
+DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE)
 
 #: openai 方言能承接的能力。图像/音频不在此列 —— 走这条方言的服务只有文本。
 OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
@@ -575,3 +576,210 @@ def openai_catalog(transport: httpx.Client, base_url: str, headers: dict[str, st
         capabilities=[CapabilityEntry(capability=c, models=list(descriptors))
                       for c in OPENAI_CAPABILITIES],
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# cloudflare 方言 —— Workers AI 直连
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# 与 openai 方言同一个理由：能力中间层还没上线，而图像这条线不接真模型
+# 就永远只能对着占位图验证管线。Workers AI 有免费额度、
+# 一次同步 HTTP 就出图，是这个阶段成本最低的真实来源。
+#
+# 它与契约有两处对不上，都得在这一层抹平：
+#
+#   **没有任务队列。** 契约里图像走 submit → 回调/轮询 → 取产物；
+#   Workers AI 是一次请求一张图。所以这里直接返回终态 Task，
+#   由 submit_task 走同步分支。
+#
+#   **回的是字节不是 URL。** flux 系列把 JPEG 以 base64 塞在 result.image，
+#   SD 系列直接回二进制 PNG。两种都要落盘换成 URL ——
+#   契约下游（参考图、i2i、交付清单）认的只有 URL。
+
+#: 同步方言：没有任务队列，submit 也得当场跑完
+SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE)
+
+#: **每个模型只吃自己 schema 里的字段，多传一个就整个请求 400。**
+#: flux-1-schnell 只认 prompt 与 steps —— 传 width/height/seed/negative_prompt
+#: 都会被拒（"Additional or unevaluated properties not allowed"），
+#: 而那三样恰恰是画幅、可复现、去干扰的全部手段。
+#: 所以这里按模型列出可传字段，不在表里的一律不传。
+#: 不这么做的话，换个模型整批出图会全军覆没，且错误信息指向的是
+#: 「多传了字段」而不是「这个模型不支持画幅」，很难看懂。
+_CF_PARAMS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("flux-1-schnell", frozenset({"prompt", "steps"})),
+    # SD 系列（含 lightning / dreamshaper / leonardo）吃全套
+    ("", frozenset({"prompt", "negative_prompt", "width", "height", "seed",
+                    "num_steps", "guidance"})),
+)
+
+#: 产出形态：flux 与 leonardo 回 {"result":{"image":"<base64>"}}，
+#: SD 系列回裸 PNG。按 content-type 判，模型名只作兜底
+_CF_B64_MODELS = ("flux", "leonardo")
+
+#: 步数上限。各家不同，传大了同样是 400
+_CF_MAX_STEPS = {"flux-1-schnell": 8}
+_CF_DEFAULT_MAX_STEPS = 20
+
+
+def _cf_allowed(model: str) -> frozenset[str]:
+    for key, allowed in _CF_PARAMS:
+        if not key or key in model:
+            return allowed
+    return _CF_PARAMS[-1][1]
+
+
+def _cf_error(resp: httpx.Response) -> CapabilityError:
+    """Workers AI 的错误也裹在 {success:false, errors:[...]} 里。"""
+    code, retryable = CapErrorCode.UPSTREAM_ERROR, resp.status_code >= 500
+    detail = resp.text[:400]
+    try:
+        body = resp.json()
+        errs = body.get("errors") or []
+        if errs:
+            detail = "; ".join(
+                f"{e.get('code')}: {e.get('message')}" for e in errs if isinstance(e, dict)
+            ) or detail
+    except Exception:  # noqa: BLE001
+        pass
+    if resp.status_code in (401, 403):
+        code = CapErrorCode.UNAUTHORIZED
+    elif resp.status_code == 404:
+        # 模型名写错与账号没开通 AI 都回 404，分不开，所以把两种可能都说出来
+        code = CapErrorCode.INVALID_REQUEST
+        detail += "（模型名写错，或该账号还没开通 Workers AI）"
+    elif resp.status_code == 429:
+        code, retryable = CapErrorCode.RATE_LIMITED, True
+    elif 400 <= resp.status_code < 500:
+        code = CapErrorCode.INVALID_REQUEST
+    return CapabilityError(code, f"Cloudflare {resp.status_code}: {detail}",
+                           retryable=retryable)
+
+
+def _cf_image_payload(payload: dict[str, Any], model: str) -> dict[str, Any]:
+    """契约的图像入参 → Workers AI 的入参，按模型裁掉不支持的字段。"""
+    allowed = _cf_allowed(model)
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    cap = next((v for k, v in _CF_MAX_STEPS.items() if k in model),
+               _CF_DEFAULT_MAX_STEPS)
+    raw: dict[str, Any] = {
+        "prompt": str(payload.get("prompt") or "").strip(),
+        "negative_prompt": str(payload.get("negative_prompt") or "").strip(),
+        "width": payload.get("width"),
+        "height": payload.get("height"),
+        "seed": params.get("seed"),
+        "guidance": params.get("guidance"),
+    }
+    steps = params.get("steps")
+    steps = max(1, min(int(steps), cap)) if isinstance(steps, int) else min(8, cap)
+    raw["steps"] = raw["num_steps"] = steps
+
+    out: dict[str, Any] = {}
+    for key, val in raw.items():
+        if key not in allowed or val in (None, "", 0):
+            continue
+        out[key] = val
+    if not out.get("prompt"):
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "图像生成缺少 prompt")
+    return out
+
+
+def cloudflare_invoke(
+    transport: httpx.Client, base_url: str, headers: dict[str, str], *,
+    capability: Capability, payload: dict[str, Any], model: str | None,
+    timeout: float, task_id: str,
+) -> Task:
+    """跑一次 Workers AI，产物落盘后按契约的 Task 形态返回。"""
+    from app.capability.mediastore import store_b64, store_bytes
+
+    if capability not in (Capability.image_t2i, Capability.image_i2i):
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            f"cloudflare 方言目前只接图像生成，{capability.value} 请走中间层端点。",
+        )
+    if not model:
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            "cloudflare 方言必须在路由上指定模型，例如 "
+            "@cf/black-forest-labs/flux-1-schnell",
+        )
+
+    url = f"{base_url.rstrip('/')}/run/{model.lstrip('/')}"
+    body = _cf_image_payload(payload, model)
+    try:
+        resp = transport.post(url, json=body, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT, f"Cloudflare 超时：{exc}",
+                              retryable=True) from exc
+    except httpx.HTTPError as exc:
+        raise CapabilityError(CapErrorCode.TRANSPORT_ERROR, f"Cloudflare 连接失败：{exc}",
+                              retryable=True) from exc
+    if resp.status_code >= 400:
+        raise _cf_error(resp)
+
+    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
+    if ctype == "application/json" or (
+            not ctype.startswith("image/")
+            and any(k in model for k in _CF_B64_MODELS)):
+        try:
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityError(
+                CapErrorCode.UPSTREAM_ERROR,
+                f"Cloudflare 回了非 JSON 内容（content-type={ctype}）",
+            ) from exc
+        img = ((data.get("result") or {}) if isinstance(data, dict) else {}).get("image")
+        if not img:
+            raise CapabilityError(
+                CapErrorCode.UPSTREAM_ERROR,
+                f"Cloudflare 响应里没有图片：{str(data)[:200]}")
+        media = store_b64(str(img), mime="image/jpeg")
+    else:
+        media = store_bytes(resp.content, mime=ctype or "image/png")
+
+    media["meta"] = {
+        k: body[k] for k in ("width", "height", "seed", "num_steps", "steps")
+        if k in body
+    }
+
+    warnings: list[str] = []
+    # **参考图用不上，但不能默默丢掉。** Workers AI 没有 IP-Adapter，
+    # 也没有面部参考通道 —— 传了也不会被读。
+    # 静默忽略的后果是：脸参考图明明生成好了、挂到每一期了、
+    # 交付清单里也有，出来的脸却每张都不一样，而没有任何地方说过为什么。
+    if payload.get("reference_images"):
+        warnings.append(
+            f"Cloudflare Workers AI 不支持参考图（{model} 无面部/风格参考通道），"
+            f"本次的 {len(payload['reference_images'])} 张参考图未被使用 —— "
+            f"跨期同一性这一轮只由文字描述保证"
+        )
+    dropped = sorted(set(_cf_allowed("")) - _cf_allowed(model)
+                     & {k for k in ("width", "height", "seed", "negative_prompt")
+                        if payload.get(k) or (payload.get("params") or {}).get(k)})
+    if dropped:
+        warnings.append(
+            f"{model} 不接受 {'、'.join(dropped)}，已略去 —— "
+            f"换成 stable-diffusion-xl-lightning 可用这些"
+        )
+
+    return Task(
+        task_id=task_id, status=TaskState.succeeded,
+        capability=capability.value, model=model, provider="cloudflare",
+        output={"images": [media]},
+        # 免费额度内成本记 0，但产出张数要记 —— 用量统计靠它
+        usage={"cost": 0.0, "units": {"images": 1.0}},
+        warnings=warnings or None,
+    )
+
+
+def cloudflare_health(transport: httpx.Client, base_url: str,
+                      headers: dict[str, str], timeout: float) -> HealthResult:
+    """Workers AI 没有健康检查端点，用模型列表代替。"""
+    try:
+        resp = transport.get(f"{base_url.rstrip('/')}/models/search",
+                             headers=headers, timeout=timeout, params={"per_page": 1})
+        ok = resp.status_code < 400
+    except httpx.HTTPError:
+        ok = False
+    return HealthResult(ok=ok, version=f"cloudflare-dialect/{CONTRACT_VERSION}",
+                        contract_version=CONTRACT_VERSION)

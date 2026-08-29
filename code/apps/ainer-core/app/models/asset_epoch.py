@@ -67,7 +67,9 @@ class EpochKind(str, enum.Enum):
 
 #: 各类实体的「不变」字段。生成时逐字复用，是同一性的锚。
 INVARIANT_FIELDS: dict[str, tuple[str, ...]] = {
-    "character": ("face_shape", "features", "eye_color", "skin_tone",
+    # sex 排第一：图像模型不写性别就会自己挑，而它挑的多半是女性 ——
+    # 实跑时沈砚（男）的锚图出来是个女人的脸
+    "character": ("sex", "face_shape", "features", "eye_color", "skin_tone",
                   "scars", "build", "height"),
     "location": ("structure", "terrain", "orientation", "materials", "scale"),
     "prop": ("form", "material", "maker_marks"),

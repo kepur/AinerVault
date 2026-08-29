@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,10 +56,17 @@ from app.worldview.epoch_rules import (
 log = logging.getLogger(__name__)
 
 CHAR_INVARIANT = INVARIANT_FIELDS["character"]
+#: 英文渲染在 invariant/variant dict 里的键。
+#: 用一个不在字段表里的名字，于是它不会被当成结构化字段参与验收，
+#: 但会跟着 invariant 一起被「以第一期为准」抹平 —— 而那正是要的：
+#: 英文不变项也必须跨期逐字一致，否则脸照样漂
+EN_KEY = "_en"
+#: 这一期年龄的英文。单独存是因为锚图要用它，而混在 visual_en 里取不出来
+AGE_EN_KEY = "_age_en"
 CHAR_VARIANT = VARIANT_FIELDS["character"]
 
 _FIELD_CN = {
-    "face_shape": "脸型骨相", "features": "五官", "eye_color": "瞳色",
+    "sex": "性别", "face_shape": "脸型骨相", "features": "五官", "eye_color": "瞳色",
     "skin_tone": "肤色", "scars": "疤痕胎记", "build": "体型", "height": "身高",
     "age_look": "年龄感", "hair": "发型", "facial_hair": "须髯",
     "garments": "衣着", "accessories": "配饰", "carried": "随身兵器器物",
@@ -76,18 +84,19 @@ MIN_CHAPTERS_FOR_EPOCHS = 3
 
 EPOCH_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["invariant", "epochs"],
+    "required": ["invariant", "invariant_en", "epochs"],
     "properties": {
         "invariant": {
             "type": "object",
             "properties": {f: {"type": "string"} for f in CHAR_INVARIANT},
         },
+        "invariant_en": {"type": "string"},
         "epochs": {
             "type": "array",
             "items": {
                 "type": "object",
                 "required": ["epoch_key", "display_name", "kind",
-                             "from_chapter_order", "trigger"],
+                             "from_chapter_order", "trigger", "visual_en"],
                 "properties": {
                     "epoch_key": {"type": "string"},
                     "display_name": {"type": "string"},
@@ -96,6 +105,7 @@ EPOCH_SCHEMA: dict[str, Any] = {
                     "to_chapter_order": {"type": "integer"},
                     "trigger": {"type": "string"},
                     "rationale": {"type": "string"},
+                    "visual_en": {"type": "string"},
                     **{f: {"type": "string"} for f in CHAR_VARIANT},
                 },
             },
@@ -172,6 +182,48 @@ from_chapter_order / to_chapter_order 按章节序号，闭区间。
   ✗ 「腰刀一把，刀鞘为黑色牛皮，刀柄包铜，未出鞘时仅露刀把；随身携带
      一根铁质镖旗杆（可作短棍使用）」—— **这是档案不是提示词**
 
+## 两份产出：中文给人看，英文给图像模型
+
+**两组都要填，而且各写各的语言。** 只给一种的话，
+要么人审不了（全英文），要么出不了图（全中文）。
+实跑时一次要两种语言，模型把中文那组也写成了英文 —— 不要那样。
+
+    中文那组（face_shape / hair / garments …）：用中文写，给人审核
+    英文那组（invariant_en / visual_en）：用英文写，给图像模型
+
+同一件事写两遍不是浪费：中文那遍决定人要不要改，英文那遍决定画出来什么。
+
+中文那几项是**审核用的**，人要能一眼看懂并改。
+但图像模型不认中文 —— 实跑时把中文描述直接喂给 SDXL，
+出来的是一整版汉字纹样，一张脸都没有。
+
+所以还要写英文：
+
+    sex            male／female／child 三选一。**必填** ——
+                   不写的话图像模型自己挑，而它挑的多半是女性，
+                   男角色会得到一张女人的脸
+    invariant_en   不变项的英文，**一句，写一次，各期共用**。
+                   只写脸与体格，不写衣着兵器 —— 它要用来生成
+                   一张跨期共用的素颜头肩参考图，带上衣着就会渗进后面每一期。
+                   例：square face with high cheekbones, thick brows,
+                       narrow dark-brown eyes, weathered tan skin, sturdy build
+    visual_en      **这一期**的英文，只写这一期特有的：年龄、发型、
+                   衣着、随身器物、气质、状态。不要重复 invariant_en 的内容。
+
+                   **第一段必须是年龄，且要用图像模型认得的说法** ——
+                   脸参考图从这里取年龄，而没有年龄的头肩像，
+                   模型一律画成三十岁上下。
+                     ✓ elderly man in his sixties, deeply lined face, ...
+                     ✓ young man in his early twenties, smooth face, ...
+                     ✗ late 50s to early 60s —— 数字区间它读不出年纪，
+                       实跑时六十岁的角色画出来像四十岁
+                   例：man in his early thirties, hair in a low bun,
+                       dark grey padded escort coat, black-sheathed sabre at the hip
+
+英文写成逗号分隔的短语，不要写句子，不要写「the man is...」。
+人物的族裔与年代按目标圈层写（帝俄晚期就是 late 19th century Russian），
+不要写成原文文化的样子。
+
 ## 每一项写成一个短语，不超过 20 字
 
 这些字要拼进出图提示词。三个人同框时，每人三百字的详述会把
@@ -228,6 +280,33 @@ def _chapter_digest(chapters: list[Chapter], name: str,
     return "\n".join(out)
 
 
+#: 年龄短语的样子。两类都要认：
+#:   带年龄段词的  elderly man in his sixties／middle-aged／young woman
+#:   带年岁的      in his early twenties／a boy of about twelve／45 years old
+_AGE_WORD = (r"young|old|elderly|middle[\s-]?aged|aged|teenage|adolescent|"
+             r"twenties|thirties|forties|fifties|sixties|seventies|eighties|"
+             r"\d{1,2}s\b|\d{1,2}\s*(?:years?\s*old|yo)\b|"
+             r"boy|girl|child|infant|toddler")
+_AGE_EN = re.compile(rf"(?:^|\b)(?:{_AGE_WORD})", re.I)
+
+
+def _age_en(item: dict[str, Any]) -> str:
+    """取这一期的英文年龄。
+
+    正路是 visual_en 的第一段 —— 提示词里要求它写在那里，模型也照做了。
+    age_en 是可选的额外字段：**它在 required 里，模型却始终不返回**，
+    所以不能把它当主路。跟模型较劲不如建在它可靠做到的那件事上。
+
+    没有年龄的头肩像，模型一律画成三十岁上下，
+    于是六十岁的老周和二十岁的裴无咎看着同龄。
+    """
+    direct = as_text(item.get("age_en")).strip()
+    if direct:
+        return direct[:48]
+    head = as_text(item.get("visual_en")).split(",")[0].strip()
+    return head[:48] if head and _AGE_EN.search(head) else ""
+
+
 def _to_draft(item: dict[str, Any], invariant: dict[str, str]) -> EpochDraft:
     key = as_text(item.get("epoch_key")).strip() or new_id("ep")[-6:]
     try:
@@ -249,7 +328,10 @@ def _to_draft(item: dict[str, Any], invariant: dict[str, str]) -> EpochDraft:
         trigger=as_text(item.get("trigger")).strip()[:500],
         invariant=dict(invariant),
         variant={f: as_text(item.get(f)).strip() for f in CHAR_VARIANT
-                 if as_text(item.get(f)).strip()},
+                 if as_text(item.get(f)).strip()}
+        | ({EN_KEY: as_text(item.get("visual_en")).strip()}
+           if as_text(item.get("visual_en")).strip() else {})
+        | ({AGE_EN_KEY: _age_en(item)} if _age_en(item) else {}),
         rationale=as_text(item.get("rationale")).strip()[:500],
     )
 
@@ -359,6 +441,11 @@ def mine_entity_epochs(
             for f in CHAR_INVARIANT
             if isinstance(raw_inv, dict) and as_text(raw_inv.get(f)).strip()
         }
+        # 英文不变项与中文一样是跨期恒定的锚，存在同一个 dict 里，
+        # 于是 enforce_invariant 的「以第一期为准」自动覆盖它
+        inv_en = as_text(data.get("invariant_en")).strip()
+        if inv_en:
+            invariant[EN_KEY] = inv_en
         items = as_items(data, "epochs")
         if not items:
             result.failed.append(f"{ent.display_name}：模型没有给出任何时期")
@@ -421,6 +508,15 @@ def mine_entity_epochs(
             row.trigger = d.trigger or None
             row.invariant_json = d.invariant or None
             row.variant_json = d.variant or None
+            # 英文提示词落到 visual_prompt —— 出图读的是它。
+            # 不变项在前、这一期在后，与中文那条同一个顺序理由：
+            # 图像模型对前面的词更敏感，同一性锚点要排在衣着道具之前
+            # 年龄不在这里单独拼 —— 它本来就是 visual_en 的第一段，
+            # 再拼一次就成了「…178cm tall, man in his mid-twenties, hair…」。
+            # AGE_EN_KEY 只服务锚图：那里没有 visual_en 可取
+            en = ", ".join(x for x in (d.invariant.get(EN_KEY),
+                                       d.variant.get(EN_KEY)) if x)
+            row.visual_prompt = en or None
             row.rationale = d.rationale or None
             row.status = ReviewStatus.candidate
             # 脸参考跨期共用 —— 换了参考图，脸就跟着漂

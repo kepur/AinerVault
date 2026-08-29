@@ -20,6 +20,7 @@ def _perf(**kw):
         position=StagePosition.center, facing=Facing.three_quarter,
         expression=None, expression_end=None, action=None, action_end=None,
         gaze_target=None, props_json=None, speech_role=SpeechRole.listener,
+        en_json=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -326,3 +327,25 @@ class TestSignagePrompt:
             self._profile(),
         )
         assert out == ""
+
+
+class TestGazePhrase:
+    """视线的三种写法。人名对图像模型毫无意义，道具名却有意义。"""
+
+    def test_person_in_shot_becomes_a_position(self):
+        from app.pipelines.frame_compose import _gaze_phrase
+        out = _gaze_phrase("裴无咎", {"裴无咎": "on the right of frame"})
+        assert out == "gaze directed at the figure on the right of frame"
+        assert "裴无咎" not in out
+
+    def test_latin_prop_is_kept_verbatim(self):
+        """「looking at the locked chest」是模型能执行的指令。"""
+        from app.pipelines.frame_compose import _gaze_phrase
+        assert _gaze_phrase("the locked chest", {}) == "looking at the locked chest"
+
+    def test_offscreen_person_loses_the_name(self):
+        """名字塞进去既没信息，还会被当成图案画进画面。"""
+        from app.pipelines.frame_compose import _gaze_phrase
+        out = _gaze_phrase("老周", {"沈砚": "on the left of frame"})
+        assert out == "gaze directed off-screen"
+        assert "老周" not in out

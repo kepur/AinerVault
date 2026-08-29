@@ -33,6 +33,11 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:16379/1"
 
+    # ── 产物存储 ──────────────────────────────────────────────
+    # 同步方言（直连供应商）返回的是字节而不是 URL，Core 得自己落盘。
+    # 走中间层时用不到这一项 —— 那边把产物存好只回 URL
+    media_dir: str = "var/media"
+
     # ── 成本闸门 ──────────────────────────────────────────────
     # 单次批量生成预估成本超过此值需前端二次确认（由 API 返回 requires_confirm）
     cost_confirm_threshold: float = 1.0

@@ -77,6 +77,21 @@ app.include_router(settings_api.router)
 _STATIC = Path(__file__).parent / "static"
 
 
+@app.get("/media/{name}", include_in_schema=False)
+def media_file(name: str) -> FileResponse:
+    """同步方言落盘的产物。文件名是内容的 sha256，不接受路径分隔符。"""
+    from fastapi import HTTPException
+
+    from app.capability.mediastore import media_root
+
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="bad name")
+    path = media_root() / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(path)
+
+
 @app.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     """单文件后台。零构建、零依赖，改完刷新即生效。"""

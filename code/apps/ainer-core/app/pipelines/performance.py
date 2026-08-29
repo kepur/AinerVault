@@ -207,6 +207,10 @@ PERF_SCHEMA: dict[str, Any] = {
                                 "expression_end": {"type": "string"},
                                 "action": {"type": "string"},
                                 "action_end": {"type": "string"},
+                                "expression_en": {"type": "string"},
+                                "expression_end_en": {"type": "string"},
+                                "action_en": {"type": "string"},
+                                "action_end_en": {"type": "string"},
                                 "props": {"type": "array", "items": {"type": "string"}},
                             },
                         },
@@ -228,9 +232,20 @@ PERF_SYSTEM = """你要为每个镜头标注**这一刻画面里发生什么**�
                three_quarter 四分之三侧
   gaze_target  看向谁或什么。**两个人对视时视线必须相向** ——
                一个看左一个也看左，观众会觉得他们没在交流。
-  expression / expression_end   首帧与尾帧的表情
-  action / action_end           首帧与尾帧的动作
+  expression / expression_end   首帧与尾帧的表情（中文）
+  action / action_end           首帧与尾帧的动作（中文）
   props        手上或身上的关键道具
+
+表情与动作还要各写一份**英文**：
+  expression_en / expression_end_en / action_en / action_end_en
+
+**图像模型不认中文。** 这四项会直接拼进出图提示词，
+而中文喂进去出来的是一整版汉字纹样，不是画面 ——
+实跑时验证过，一张脸都没有。
+英文写成短语，不要句子：
+  ✓ brow furrowed, jaw set          ✗ His brow was furrowed
+  ✓ seated behind the door, sabre across the knees
+中文那份是给人审核的，两份都要填。
 
 三条硬要求：
 
@@ -417,6 +432,12 @@ def _absorb(
             row.expression_end = as_text(c.get("expression_end"))[:128] or None
             row.action = as_text(c.get("action"))[:2000] or None
             row.action_end = as_text(c.get("action_end"))[:2000] or None
+            # 英文单独存：出图读它，审核读上面那几个中文字段
+            row.en_json = {
+                k: as_text(c.get(f"{k}_en"))[:512]
+                for k in ("expression", "expression_end", "action", "action_end")
+                if as_text(c.get(f"{k}_en")).strip()
+            } or None
             row.props_json = [
                 str(x).strip() for x in (c.get("props") or []) if str(x).strip()
             ] or None

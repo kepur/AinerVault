@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -29,7 +30,7 @@ from app.models import (
     EntityWorldVisual, FrameRole, FrameSpec, ReviewStatus, Scene, Shot, ShotAssetBinding,
     ShotPlan, SpecStatus, WorldEntity, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, as_items
+from app.pipelines.base import PipelineError, as_items, as_list
 from app.pipelines.epochs import compose_epoch_prompt, resolve_epoch
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
 
@@ -42,12 +43,16 @@ class ComposeResult:
     bound: int = 0
     missing_assets: list[str] = field(default_factory=list)
     missing_entity_visual: list[str] = field(default_factory=list)
+    #: 提示词里还留着的中文片段。**图像模型不认中文** ——
+    #: 喂中文出来的是汉字纹样不是画面。哪条产线还欠英文渲染，看这里
+    untranslated: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "shots": self.shots, "bound": self.bound,
             "missing_assets": self.missing_assets,
             "missing_entity_visual": self.missing_entity_visual,
+            "untranslated": self.untranslated,
         }
 
 
@@ -236,6 +241,23 @@ def _signage_prompt(db: Session, shot: Shot, profile: WorldProfile) -> str:
     return ", ".join(bits)
 
 
+def _gaze_phrase(target: str, where: dict[str, str]) -> str:
+    """视线该怎么写进提示词。三种情况：
+
+      看同镜里的人   换成几何位置。**人名对图像模型毫无意义** ——
+                    「looking at 裴无咎」它读不出是谁，更读不出该往哪看
+      看画面里的物   原样保留。「looking at the locked chest」是它能执行的
+      其余           只说看向画外。名字或中文塞进去既没信息，
+                    还会被当成图案画进画面
+    """
+    pos = where.get(target)
+    if pos:
+        return f"gaze directed at the figure {pos}"
+    if target and not _CJK.search(target):
+        return f"looking at {target}"
+    return "gaze directed off-screen"
+
+
 def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
     """把这一镜的人物调度写成提示词。
 
@@ -253,23 +275,59 @@ def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
     if not rows:
         return ""
     is_last = frame.role == FrameRole.last
+    # 视线目标在画面里的位置。**人名对图像模型毫无意义** ——
+    # 「looking at 裴无咎」它读不出是谁，更读不出该往哪看；
+    # 「looking at the figure on the right」才是它能执行的指令
+    where = {
+        e.display_name: _POS_EN.get(p.position.value, "")
+        for p, e in rows if p.position is not StagePosition.offscreen
+    }
     bits: list[str] = []
     for p, e in rows:
         if p.position is StagePosition.offscreen:
             continue
         seg = [_POS_EN.get(p.position.value, ""), _FACING_EN.get(p.facing.value, "")]
-        expr = (p.expression_end if is_last else p.expression) or p.expression
-        act = (p.action_end if is_last else p.action) or p.action
+        # 优先英文 —— 中文进了提示词会被当成图案画进画面。
+        # 没有英文时仍带上中文：漏掉表情动作，这一镜就没有表演了，
+        # 而 cjk_segments 会把它报出来，知道该补哪一条
+        en = p.en_json or {}
+        expr = (en.get("expression_end") if is_last else en.get("expression")) \
+            or en.get("expression") \
+            or (p.expression_end if is_last else p.expression) or p.expression
+        act = (en.get("action_end") if is_last else en.get("action")) \
+            or en.get("action") \
+            or (p.action_end if is_last else p.action) or p.action
         if expr:
             seg.append(str(expr))
         if act:
             seg.append(str(act))
         if p.gaze_target:
-            seg.append(f"looking at {p.gaze_target}")
+            seg.append(_gaze_phrase(str(p.gaze_target), where))
         seg = [x for x in seg if x]
         if seg:
             bits.append(", ".join(seg))
     return "; ".join(bits)
+
+
+#: 中日韩统一表意文字 + 假名 + 谚文。图像模型不认这些 ——
+#: 实跑时把中文外貌描述喂给 SDXL，出来的是一整版汉字纹样，一张脸都没有。
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def cjk_segments(prompt: str, limit: int = 8) -> list[str]:
+    """提示词里还留着的非拉丁片段。
+
+    **不是把它们删掉，是报出来。** 删掉等于悄悄丢信息：
+    「站在门口，手握刀柄」删了，画面里的人就不再握刀了，
+    而没有任何地方说过为什么。报出来才知道哪条产线还欠英文渲染。
+    """
+    out = []
+    for seg in (x.strip() for x in prompt.split(", ")):
+        if seg and _CJK.search(seg) and seg not in out:
+            out.append(seg)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _recover_content(prompt: str) -> str:
@@ -303,6 +361,21 @@ def compose_frame_prompt(
     positive: list[str] = []
     negative: list[str] = []
     refs: list[dict[str, Any]] = []
+
+    # ── 0 镜头内容：**排在最前** ──
+    #
+    # 这一句是「谁在哪做什么」，是这一镜之所以是这一镜的原因。
+    # 排在后面的后果实测过：人物描述有四百字，图像模型顺着它画，
+    # 出来的每一镜都是同一张肖像 —— 动作、场景、调度全都没了。
+    #
+    # 从 params.content 读，**不从 frame.prompt 读**。
+    # frame.prompt 是本函数的产出；读它等于把上一次的合成结果
+    # 当成这一次的镜头内容，每重拼一次就自我套娃一层。
+    # 实跑时一个三人镜拼到 4034 字，同一批人物描述重复四遍，
+    # 每遍还是不同批次抽取的旧值 —— 画面里那三个人各有四套衣服。
+    content = str(params.get("content") or "").strip()
+    if content:
+        positive.append(content)
 
     # ── 1 画风（全书一份）──
     style = by_kind.get(AssetKindSpec.style.value)
@@ -403,19 +476,6 @@ def compose_frame_prompt(
                 positive.append(f"{key.replace('_', ' ')}: {light[key]}")
         negative.extend(str(x).replace("_", " ") for x in (director.avoid_json or []))
 
-    # ── 镜头内容（唯一非素材来源，只写「谁在哪做什么」）──
-    #
-    # **从 params.content 读，不从 frame.prompt 读。**
-    # frame.prompt 是本函数的**产出**；读它等于把上一次的合成结果
-    # 当成这一次的镜头内容，于是每重拼一次就自我套娃一层。
-    # 实跑时一个三人镜拼到 4034 字，同一批人物描述重复四遍，
-    # 每遍还是不同批次抽取的旧值 —— 画面里那三个人各有四套衣服。
-    # 首次运行时 frame.prompt 里装的确实是分镜给的镜头内容，
-    # 所以那一次要把它搬进 params.content 存起来。
-    content = str((frame.params_json or {}).get("content") or "").strip()
-    if content:
-        positive.append(content)
-
     # 场景元信息
     if scene is not None:
         for val in (scene.time_of_day, scene.weather, scene.mood):
@@ -483,7 +543,10 @@ def bind_and_compose(
             if frame.edited_by_human:
                 continue
             params = frame.params_json or {}
-            for key in as_items(params, "asset_keys"):
+            # asset_keys 是**字符串**列表（canonical_key），不是对象列表。
+            # 用 as_items 取会把它们全滤掉 —— 于是 missing_assets 永远是空的，
+            # 「缺素材」这道检查从来没真跑过，而它是分镜编译前最后一道闸
+            for key in as_list(params.get("asset_keys")):
                 if key not in by_key and key not in result.missing_assets:
                     result.missing_assets.append(key)
 
@@ -506,6 +569,13 @@ def bind_and_compose(
             merged = dict(params)
             merged["reference_images"] = refs
             frame.params_json = merged
+
+            cjk = cjk_segments(pos)
+            if cjk:
+                result.untranslated.append({
+                    "shot": shot.order_no, "role": frame.role.value,
+                    "segments": cjk,
+                })
 
             for eid in frame.entity_ids_json or []:
                 entity = db.get(WorldEntity, eid)

@@ -26,7 +26,7 @@ from app.models import (
 )
 from app.models.script import BlockType
 from app.worldview import resolve
-from app.pipelines.base import PipelineError, chat_json, fingerprint
+from app.pipelines.base import PipelineError, as_text, chat_json, fingerprint
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,8 @@ SHOT_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "required": ["order", "block_ids", "description",
-                             "first_frame", "last_frame"],
+                             "first_frame", "last_frame",
+                             "first_frame_en", "last_frame_en"],
                 "properties": {
                     "order": {"type": "integer"},
                     "block_ids": {"type": "array", "items": {"type": "string"}},
@@ -61,6 +62,8 @@ SHOT_SCHEMA: dict[str, Any] = {
                     "asset_keys": {"type": "array", "items": {"type": "string"}},
                     "first_frame": {"type": "string"},
                     "last_frame": {"type": "string"},
+                    "first_frame_en": {"type": "string"},
+                    "last_frame_en": {"type": "string"},
                     "derive_instruction": {"type": "string"},
                 },
             },
@@ -82,6 +85,14 @@ SHOT_SYSTEM = """你是分镜师。把剧本切成镜头，并为每个镜头写
 5. first_frame 写首帧的画面内容：谁在哪、在做什么、什么状态。
    **只写内容，不写画风、不写材质细节** —— 那些由素材库提供。
 6. last_frame 写尾帧的画面内容。
+
+6b. first_frame_en / last_frame_en：把上面两句写成**英文**。
+    **图像模型不认中文** —— 中文喂进去出来的是一整版汉字纹样，
+    不是画面（实跑验证过）。这两句是直接拼进出图提示词的那一句。
+    写成短语串，不要句子，不要出现人名（模型读不出人名是谁）：
+      ✓ a man seated behind a door, sabre across his knees, eyes on the door gap
+      ✗ Shen Yan sits behind the door and stares at the crack
+    中文那两句是给人审核的，两份都要填。
 7. derive_instruction 用一句话说明「尾帧相对首帧变了什么」，
    如「他已跨过门槛，侧身背对，雨更大了」。变化要小而明确 ——
    一个镜头内不应发生剧烈变化。"""
@@ -312,8 +323,12 @@ def build_shot_plan(
             # prompt 是合成的**产出**，会被反复覆写。
             # 只存在 prompt 里的话，第二次合成会把上一次的产出
             # 当成镜头内容读回去，一层层套下去
-            first_content = str(item.get("first_frame") or "")
-            last_content = str(item.get("last_frame") or "")
+            # 出图用英文，审核用中文。没有英文时退回中文 ——
+            # 少了这一句画面就没有内容了，而 cjk_segments 会把它报出来
+            first_content = (as_text(item.get("first_frame_en")).strip()
+                             or as_text(item.get("first_frame")).strip())
+            last_content = (as_text(item.get("last_frame_en")).strip()
+                            or as_text(item.get("last_frame")).strip())
 
             db.add(FrameSpec(
                 id=new_id("fs"), shot_id=shot.id, role=FrameRole.first,

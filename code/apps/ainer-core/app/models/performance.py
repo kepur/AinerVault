@@ -101,6 +101,11 @@ class ShotPerformance(Base, StdMixin):
     action_end: Mapped[str | None] = mapped_column(Text)
     #: 手持物。指向 asset_specs 的 canonical_key，让道具跨镜保持同一形态
     props_json: Mapped[list | None] = mapped_column(JSONB)
+    #: 表情与动作的英文渲染 {expression, expression_end, action, action_end}。
+    #: **图像模型不认中文** —— 中文喂进去出来的是汉字纹样不是画面。
+    #: 上面那几个中文字段是给人审核的，这一份是给出图的。
+    #: 不另开四个列：它们只服务提示词拼装，不参与任何查询
+    en_json: Mapped[dict | None] = mapped_column(JSONB)
     #: 与上一镜相比站位是否发生跳变。true 需要人工确认或补一个过渡镜
     position_jump: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

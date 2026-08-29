@@ -322,3 +322,52 @@ def test_callback_signature_roundtrip():
     assert not verify_signature("whsec_other", body, sig)
     assert not verify_signature("whsec_test", body + b" ", sig)
     assert not verify_signature("whsec_test", body, None)
+
+
+class TestEnumMembersExist:
+    """枚举成员名写错了，import 与静态未定义名检查都发现不了 ——
+    它是属性访问，只有真跑到那一行才炸。
+
+    实跑时 cloudflare 方言里写了 CapErrorCode.PROVIDER_ERROR、
+    AUTH_FAILED、TIMEOUT、NETWORK，四个全不存在，
+    而它们只在**错误路径**上，正常出图永远走不到 ——
+    等于把「出错时的行为」变成了「出错时再出一次错」。
+    """
+
+    def test_every_referenced_error_code_exists(self):
+        import ast
+        import pathlib
+
+        from app.capability.errors import CapErrorCode
+
+        names = {m.name for m in CapErrorCode}
+        root = pathlib.Path(__file__).resolve().parent.parent / "app"
+        bad = []
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text("utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "CapErrorCode"
+                        and node.attr not in names):
+                    bad.append(f"{path.name}:{node.lineno} CapErrorCode.{node.attr}")
+        assert not bad, "不存在的错误码：" + "、".join(bad)
+
+    def test_every_referenced_task_state_exists(self):
+        import ast
+        import pathlib
+
+        from app.capability.schemas import TaskState
+
+        names = {m.name for m in TaskState}
+        root = pathlib.Path(__file__).resolve().parent.parent / "app"
+        bad = []
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text("utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "TaskState"
+                        and node.attr not in names):
+                    bad.append(f"{path.name}:{node.lineno} TaskState.{node.attr}")
+        assert not bad, "不存在的任务状态：" + "、".join(bad)

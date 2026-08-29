@@ -13,3 +13,6 @@ dist/
 build/
 *.sql
 !code/db/init_sql/*.sql
+
+# 同步方言落盘的产物。按内容寻址，重跑会重建，不入库
+code/apps/ainer-core/var/

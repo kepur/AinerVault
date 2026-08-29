@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -43,10 +44,46 @@ from app.models import (
     WorldEntity, WorldProfile,
 )
 from app.pipelines.base import PipelineError
+from app.pipelines.entity_epochs import AGE_EN_KEY, EN_KEY
 
 log = logging.getLogger(__name__)
 
 CHAR_INVARIANT = INVARIANT_FIELDS["character"]
+
+#: 地区代码 → 英文族裔词。圈层档案的 axes.region 是机读的 ISO 码，
+#: 拼成英文不需要问模型 —— 规则能算准的就不该花一次调用。
+_DEMONYM = {
+    "RU": "Russian", "GB": "British", "UK": "British", "US": "American",
+    "FR": "French", "DE": "German", "JP": "Japanese", "CN": "Chinese",
+    "KR": "Korean", "IN": "Indian", "ES": "Spanish", "MX": "Mexican",
+    "BR": "Brazilian", "PT": "Portuguese", "IT": "Italian", "SA": "Arab",
+    "EG": "Egyptian", "TR": "Turkish", "BD": "Bengali", "VN": "Vietnamese",
+}
+
+
+def era_phrase(profile: WorldProfile) -> str:
+    """圈层 → 一句英文的年代族裔。
+
+    「帝俄晚期」在提示词里必须写成 late 19th century Russian ——
+    图像模型不认中文，也不认 ru_imperial 这种内部代码。
+    取区间中点定世纪与前后半段：1855–1917 的中点 1886 落在 19 世纪后半。
+    """
+    axes = profile.axes_json or {}
+    who = _DEMONYM.get(str(axes.get("region") or "").upper(), "")
+    span = axes.get("era_span")
+    era = ""
+    if isinstance(span, list) and len(span) == 2:
+        try:
+            mid = (int(span[0]) + int(span[1])) // 2
+        except (TypeError, ValueError):
+            mid = 0
+        if mid:
+            century = mid // 100 + 1
+            half = "early" if mid % 100 < 34 else (
+                "mid" if mid % 100 < 67 else "late")
+            era = f"{half} {century}th century"
+    return " ".join(x for x in (era, who) if x)
+
 
 #: 锚图的构图。**固定不变** —— 锚之间的差别只该来自这个人本身，
 #: 不该来自构图、光线、背景。同一套构图下，两张锚的差别就是两张脸的差别。
@@ -94,18 +131,37 @@ def epochs_of(db: Session, entity_id: str, profile_id: str) -> list[AssetEpoch]:
     ).scalars())
 
 
-def compose_anchor_prompt(epoch: AssetEpoch) -> str:
-    """锚图提示词 = 不变项 + 固定构图。
+_SEX_NOUN = {"male": "man", "female": "woman", "child": "child"}
+
+
+def compose_anchor_prompt(epoch: AssetEpoch,
+                          profile: WorldProfile | None = None) -> str:
+    """锚图提示词 = 不变项（英文）+ 固定构图。
+
+    **必须是英文。** 实跑时把中文外貌描述直接喂给 SDXL，
+    出来的是一整版汉字纹样 —— 一张脸都没有。
+    图像模型不认中文，而中文那几项是给人审核用的。
 
     **不带 variant。** 带上的话，第一期的衣着兵器会渗进后续每一期，
     而那正是该变的部分。锚只回答「这张脸长什么样」。
     """
     inv = epoch.invariant_json or {}
-    bits = [str(inv[f]).strip() for f in CHAR_INVARIANT
-            if str(inv.get(f) or "").strip()]
-    if not bits:
+    en = str(inv.get(EN_KEY) or "").strip()
+    if not en:
         return ""
-    return ", ".join(bits) + ", " + ANCHOR_FRAMING
+    # 性别与年代族裔排最前。都不是「脸的特征」，但少了任何一个，
+    # 模型会自己挑一个 —— 实跑时沈砚（男，帝俄晚期）出来是张现代女性的脸
+    age = str((epoch.variant_json or {}).get(AGE_EN_KEY) or "").strip()
+    era = era_phrase(profile) if profile is not None else ""
+    noun = _SEX_NOUN.get(str(inv.get("sex") or "").strip().lower(), "")
+    # 年龄短语常常自带 man／woman（「man in his late fifties」），
+    # 再补一个就成了「man in his late fifties, ... Russian man」。
+    # 重复对模型无害，但读起来像没校对过 —— 而这段提示词是要给人看的
+    if noun and re.search(rf"\b{noun}\b", age, re.I):
+        noun = ""
+    lead = " ".join(x for x in (era, noun) if x)
+    parts = [p for p in (age, lead, en) if p]
+    return ", ".join(parts) + ", " + ANCHOR_FRAMING
 
 
 def enforce_single_anchor(
@@ -192,12 +248,13 @@ def generate_anchors(
             result.skipped_has_anchor += 1
             continue
         first = group[0]
-        prompt = compose_anchor_prompt(first)
+        prompt = compose_anchor_prompt(first, profile)
         if not prompt:
             # 没有不变项就没有可锚的东西 —— 生成一张也锁不住什么
             result.blocked.append(
-                f"{ent.display_name}：时期里没有不变项（骨相五官疤痕都空着），"
-                f"锚图无从生成")
+                f"{ent.display_name}：时期里没有英文不变项 —— "
+                f"图像模型不认中文（喂中文出来的是汉字纹样不是脸），"
+                f"重跑一次「划分时期」补上 invariant_en")
             continue
         pending.append((ent, first, prompt))
 

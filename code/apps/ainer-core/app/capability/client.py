@@ -14,7 +14,8 @@ from typing import Any
 import httpx
 
 from app.capability.dialects import (
-    DIALECT_OPENAI, openai_catalog, openai_health, openai_invoke,
+    DIALECT_CLOUDFLARE, DIALECT_OPENAI, SYNC_ONLY_DIALECTS, cloudflare_health,
+    cloudflare_invoke, openai_catalog, openai_health, openai_invoke,
 )
 from app.capability.errors import CapabilityError, CapErrorCode
 from app.capability.router import ResolvedRoute
@@ -107,7 +108,7 @@ class CapabilityClient:
     # ── 传输 ─────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
-        if self.dialect != DIALECT_OPENAI:
+        if self.dialect not in SYNC_ONLY_DIALECTS:
             h["X-Capability-Version"] = CONTRACT_VERSION
         mode = str(self.auth.get("mode") or "none").lower()
         token = self.auth.get("token")
@@ -158,6 +159,9 @@ class CapabilityClient:
 
     # ── Discovery ─────────────────────────────────────────────
     def health(self) -> HealthResult:
+        if self.dialect == DIALECT_CLOUDFLARE:
+            return cloudflare_health(
+                self.client, self.base_url, self._headers(), self.timeout_sec)
         if self.dialect == DIALECT_OPENAI:
             return openai_health(self.client, self.base_url, self._headers(), 10)
         return HealthResult.model_validate(self._request("GET", "/health", timeout=10))
@@ -201,11 +205,11 @@ class CapabilityClient:
         idempotency_key: str | None = None,
     ) -> TaskAccepted:
         """异步提交。同 idempotency_key 重复提交返回同一 task_id。"""
-        if self.dialect == DIALECT_OPENAI:
+        if self.dialect in SYNC_ONLY_DIALECTS:
             raise CapabilityError(
                 CapErrorCode.INVALID_REQUEST,
-                "openai 方言没有任务队列，文本能力请走 invoke()（sync=True）；"
-                "图像/音频请指向说 Capability 契约的中间层端点。",
+                f"{self.dialect} 方言没有任务队列，请走 invoke()（submit_task 会"
+                f"对同步方言自动改走同步分支）。",
             )
         req = self._build_request(
             capability, payload, model=model, options=options, idempotency_key=idempotency_key
@@ -230,15 +234,28 @@ class CapabilityClient:
         model: str | None = None, options: TaskOptions | None = None,
         idempotency_key: str | None = None,
     ) -> Task:
-        """同步快捷通道。仅 text.* 能力可用，图像/视频禁止。"""
+        """同步快捷通道。
+
+        走中间层时只有 text.* 能用 —— 图像视频耗时长，占着连接不放
+        会拖垮批量生成。但**直连供应商的同步方言不受这条限制**：
+        它们根本没有任务队列，一次 HTTP 就是全部（Workers AI 出一张图
+        几秒钟），此时禁止同步等于禁止使用。
+        """
         cap = Capability(capability) if isinstance(capability, str) else capability
-        if not cap.value.startswith("text."):
+        if not cap.value.startswith("text.") and self.dialect not in SYNC_ONLY_DIALECTS:
             raise CapabilityError(
                 CapErrorCode.INVALID_REQUEST, f"{cap.value} 不可走同步通道，请用 submit()"
             )
         req = self._build_request(
             cap, payload, model=model, options=options, idempotency_key=idempotency_key
         )
+        if self.dialect == DIALECT_CLOUDFLARE:
+            return cloudflare_invoke(
+                self.client, self.base_url, self._headers(),
+                capability=cap, payload=req.input, model=model,
+                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                task_id=req.idempotency_key,
+            )
         if self.dialect == DIALECT_OPENAI:
             return openai_invoke(
                 self.client, self.base_url, self._headers(),
