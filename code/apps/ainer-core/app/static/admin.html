@@ -650,16 +650,21 @@ const Library = {
       <div class="card">
         <h2>小说 <span class="sub mono" style="color:var(--muted)">${novels.length} 本</span></h2>
         <div class="tblwrap" style="margin-bottom:12px">
-          <table><thead><tr><th></th><th>标题</th><th>源语言</th><th>章节</th><th>字数</th></tr>
+          <table><thead><tr><th></th><th>标题</th><th>源语言</th><th>章节</th><th>字数</th>
+            <th></th></tr>
           </thead><tbody>${
-            novels.length ? novels.map(n => `<tr style="cursor:pointer"
-              onclick="Library.pick('${n.id}')">
-              <td>${n.id===State.novelId ? '<span class="tag t-ok">当前</span>' : ""}</td>
-              <td><b>${h(n.title)}</b></td>
+            novels.length ? novels.map(n => `<tr>
+              <td style="cursor:pointer" onclick="Library.pick('${n.id}')"
+                >${n.id===State.novelId ? '<span class="tag t-ok">当前</span>' : ""}</td>
+              <td style="cursor:pointer" onclick="Library.pick('${n.id}')"
+                ><b>${h(n.title)}</b></td>
               <td class="mono">${h(n.source_language_code)}</td>
               <td class="mono">${n.chapter_count}</td>
-              <td class="mono">${(n.word_count||0).toLocaleString()}</td></tr>`).join("")
-            : `<tr><td colspan="5" class="empty">还没有小说</td></tr>`}
+              <td class="mono">${(n.word_count||0).toLocaleString()}</td>
+              <td><button class="btn sm" style="color:var(--danger)"
+                onclick="event.stopPropagation();Library.askDelete('${n.id}')"
+                >删除</button></td></tr>`).join("")
+            : `<tr><td colspan="6" class="empty">还没有小说</td></tr>`}
           </tbody></table>
         </div>
         <details ${novels.length ? "" : "open"}>
@@ -758,6 +763,21 @@ const Library = {
               >${n} 条/页</option>`).join("")}
           </select>
         </div>
+        <details style="margin-bottom:10px">
+          <summary style="cursor:pointer;color:var(--danger);font-size:12.5px"
+            >按章号区间删除</summary>
+          <div class="row" style="margin-top:8px;gap:6px;align-items:center">
+            <span class="sub" style="font-size:12px">第</span>
+            <input id="bd-from" placeholder="起" style="max-width:90px">
+            <span class="sub" style="font-size:12px">到</span>
+            <input id="bd-to" placeholder="止" style="max-width:90px">
+            <span class="sub" style="font-size:12px">章</span>
+            <button class="btn sm" style="color:var(--danger)"
+              onclick="Library.bulkDelete()">预览并删除</button>
+            <span class="sub" style="font-size:11.5px;color:var(--muted)">
+              留空表示不限。删章会连带剧本、译文、分镜</span>
+          </div>
+        </details>
         <div class="tblwrap"><table><thead><tr>
           <th></th><th>#</th><th>标题</th><th>字数</th><th>剧本</th><th>译文</th><th></th>
         </tr></thead><tbody>${
@@ -806,6 +826,58 @@ const Library = {
       const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
       if (f) Library.upload(f);
     });
+  },
+
+  async askDelete(id) {
+    // **先看影响面再问。**「确定吗？」这三个字不构成信息 ——
+    // 删一本长篇连带几千个块、几百个任务与产物，删了不可恢复
+    let d;
+    try { d = await api("GET", `/novels/${id}/delete-preview`); }
+    catch (e) { return logErr(e.message); }
+    const i = d.impact;
+    const lines = [
+      `章节 ${i.chapters}`, `剧本块 ${i.blocks}`, `译文 ${i.translations}`,
+      `实体 ${i.entities}`, `名物词条 ${i.lexicon}`,
+      `映射 ${i.transforms}`, `生成任务 ${i.gen_tasks}`, `产物 ${i.assets}`,
+    ].filter(x => !/ 0$/.test(x));
+    const ok = confirm(
+      `删除「${d.novel.title}」\n\n连带删掉：\n  ` +
+      (lines.length ? lines.join("\n  ") : "（没有衍生数据）") +
+      `\n\n落盘的图片音频也会删掉。此操作不可恢复。`);
+    if (!ok) return;
+    try {
+      const r = await api("DELETE", `/novels/${id}`);
+      logOk(`已删除「${r.title}」　章节 ${r.impact.chapters}　` +
+            `任务 ${r.impact.gen_tasks}　产物 ${r.impact.assets}　` +
+            `媒体文件 ${r.media_files_removed}`);
+      if (State.novelId === id) {
+        State.novelId = ""; State.chapterId = ""; State.transformId = "";
+        State.save();
+      }
+      App.refresh();
+    } catch (e) { logErr(e.message); }
+  },
+
+  async bulkDelete() {
+    const from = ($("#bd-from").value || "").trim();
+    const to = ($("#bd-to").value || "").trim();
+    if (!from && !to) return logErr("填一个章号区间");
+    const body = {dry_run: true};
+    if (from) body.from_order = +from;
+    if (to) body.to_order = +to;
+    try {
+      const dry = await api("POST",
+        `/novels/${State.novelId}/chapters:bulk-delete`, body);
+      if (!dry.count) return logWarn("这个区间没有章节");
+      const names = dry.sample.map(c=>`  ${c.order_no} ${c.title||""}`).join("\n");
+      if (!confirm(`删除 ${dry.count} 章（${dry.words.toLocaleString()} 字）\n\n` +
+                   names + (dry.count > 10 ? `\n  … 还有 ${dry.count-10} 章` : "") +
+                   `\n\n剧本、译文、分镜会一并删掉。不可恢复。`)) return;
+      const r = await api("POST", `/novels/${State.novelId}/chapters:bulk-delete`,
+        {...body, dry_run: false});
+      logOk(`已删除 ${r.deleted} 章`);
+      App.refresh();
+    } catch (e) { logErr(e.message); }
   },
 
   go(p) { this.page = Math.max(0, p); App.refresh(); },

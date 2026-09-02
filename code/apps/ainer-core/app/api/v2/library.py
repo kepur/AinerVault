@@ -1,6 +1,8 @@
 """书架：小说 / 章节 / 导入分章。"""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, insert, or_, select
@@ -8,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.base import utcnow
+
+log = logging.getLogger(__name__)
 from app.ids import new_id
 from app.models import (
     Chapter, DocStatus, Novel, ScriptDoc, SourceFormat, TranslationBlock,
@@ -156,9 +160,119 @@ def update_novel(novel_id: str, body: NovelIn, db: Session = Depends(get_db)) ->
     return NovelOut.of(n).model_dump()
 
 
-@router.delete("/novels/{novel_id}", status_code=204)
-def delete_novel(novel_id: str, db: Session = Depends(get_db)) -> None:
-    db.delete(_get_novel(db, novel_id))
+def _impact(db: Session, novel_id: str) -> dict[str, int]:
+    """删这本书会连带删掉什么。
+
+    **删除前必须能看见影响面。** 一本长篇连带几千个块、几百个任务与产物，
+    删了不可恢复 —— 而「确定吗？」这三个字不构成信息。
+    """
+    from app.models import (
+        Asset, GenTask, ScriptBlock, WorldEntity, WorldLexicon, WorldTransform,
+    )
+
+    ch = select(Chapter.id).where(Chapter.novel_id == novel_id)
+    docs = select(ScriptDoc.id).where(ScriptDoc.chapter_id.in_(ch))
+    tf = select(WorldTransform.id).where(WorldTransform.novel_id == novel_id)
+
+    def n(stmt) -> int:
+        return db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
+
+    return {
+        "chapters": n(ch),
+        "script_docs": n(docs),
+        "blocks": n(select(ScriptBlock.id).where(ScriptBlock.script_doc_id.in_(docs))),
+        "translations": n(
+            select(TranslationBlock.id).join(
+                ScriptBlock, ScriptBlock.id == TranslationBlock.script_block_id
+            ).where(ScriptBlock.script_doc_id.in_(docs))),
+        "entities": n(select(WorldEntity.id).where(WorldEntity.novel_id == novel_id)),
+        "transforms": n(tf),
+        "lexicon": n(select(WorldLexicon.id).where(WorldLexicon.transform_id.in_(tf))),
+        "gen_tasks": n(select(GenTask.id).where(GenTask.novel_id == novel_id)),
+        "assets": n(select(Asset.id).where(Asset.novel_id == novel_id)),
+    }
+
+
+@router.get("/novels/{novel_id}/delete-preview")
+def preview_delete(novel_id: str, db: Session = Depends(get_db)) -> dict:
+    """删这本书会连带删掉什么。删之前看一眼。"""
+    n = _get_novel(db, novel_id)
+    return {"novel": {"id": n.id, "title": n.title}, "impact": _impact(db, novel_id)}
+
+
+@router.delete("/novels/{novel_id}")
+def delete_novel(novel_id: str, purge_media: bool = Query(True),
+                 db: Session = Depends(get_db)) -> dict:
+    """删一本书及其全部衍生数据。
+
+    多数表挂了 novel_id 外键、`ON DELETE CASCADE`，删小说自动带走。
+    但 **gen_tasks 与 assets 的 novel_id 不是外键** ——
+    它们要跨表引用不同来源（章节、映射、镜头），加外键会把生命周期
+    绑死在小说上，而任务记录有独立的审计价值。
+    代价是删小说时它们不会自动走，所以这里显式删。
+
+    purge_media 连带删掉落盘的媒体文件。**按内容寻址是个陷阱**：
+    同一张图可能被多本书引用（sha256 相同就是同一个文件），
+    删文件前必须确认没有别的 asset 还指着它。
+    """
+    from app.models import Asset, GenTask
+
+    novel = _get_novel(db, novel_id)
+    title = novel.title
+    impact = _impact(db, novel_id)
+
+    # 先收集要删的媒体 URL，删行之后就查不到了
+    urls = [
+        u for (u,) in db.execute(
+            select(Asset.url).where(Asset.novel_id == novel_id)
+        ).all() if u
+    ] if purge_media else []
+
+    db.execute(delete(GenTask).where(GenTask.novel_id == novel_id))
+    db.execute(delete(Asset).where(Asset.novel_id == novel_id))
+    db.delete(novel)
+    db.flush()
+
+    removed_files = 0
+    if urls:
+        # 删行之后再查：还有没有别的 asset 指着同一个文件
+        still_used = {
+            u for (u,) in db.execute(
+                select(Asset.url).where(Asset.url.in_(urls))
+            ).all()
+        }
+        removed_files = _purge_media([u for u in urls if u not in still_used])
+
+    return {
+        "deleted": True, "novel_id": novel_id, "title": title,
+        "impact": impact, "media_files_removed": removed_files,
+    }
+
+
+def _purge_media(urls: list[str]) -> int:
+    """删掉本地媒体目录里的文件。只删本服务落盘的那些。
+
+    URL 指向别处（中间层、对象存储）的一律不碰 —— 那不是我们的文件，
+    而误删别人的存储是不可逆的。
+    """
+    from app.capability.mediastore import media_root
+
+    root = media_root().resolve()
+    n = 0
+    for u in set(urls):
+        name = u.rsplit("/media/", 1)[-1] if "/media/" in u else None
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            continue
+        path = (root / name).resolve()
+        # 解析后仍在媒体目录内才删 —— 防 ../ 逃逸
+        if path.parent != root or not path.is_file():
+            continue
+        try:
+            path.unlink()
+            n += 1
+        except OSError:
+            log.warning("删除媒体文件失败：%s", path)
+    return n
 
 
 # ── 导入分章 ──────────────────────────────────────────────────────────────────
@@ -522,6 +636,52 @@ def update_chapter(chapter_id: str, body: ChapterIn, db: Session = Depends(get_d
 @router.delete("/chapters/{chapter_id}", status_code=204)
 def delete_chapter(chapter_id: str, db: Session = Depends(get_db)) -> None:
     db.delete(_get_chapter(db, chapter_id))
+
+
+class BulkDeleteIn(BaseModel):
+    """按 id 或按章号区间删。两种都要有 —— 前者是在列表里勾选，
+    后者是「把第 800 章之后的全删掉」，而后者在长篇里更常用。"""
+
+    chapter_ids: list[str] = Field(default_factory=list)
+    from_order: int | None = None
+    to_order: int | None = None
+    dry_run: bool = True
+
+
+@router.post("/novels/{novel_id}/chapters:bulk-delete")
+def bulk_delete_chapters(novel_id: str, body: BulkDeleteIn,
+                         db: Session = Depends(get_db)) -> dict:
+    """批量删章。**默认 dry_run** —— 删几百章不可恢复。
+
+    衍生数据（剧本、块、译文、分镜）挂 chapter 外键 CASCADE，
+    删章自动带走，不必也不该分别删。
+    """
+    _get_novel(db, novel_id)
+    q = select(Chapter).where(Chapter.novel_id == novel_id)
+    if body.chapter_ids:
+        q = q.where(Chapter.id.in_(body.chapter_ids))
+    if body.from_order is not None:
+        q = q.where(Chapter.order_no >= body.from_order)
+    if body.to_order is not None:
+        q = q.where(Chapter.order_no <= body.to_order)
+    if not body.chapter_ids and body.from_order is None and body.to_order is None:
+        # 三个条件都空 = 删全部。**不接受** —— 那多半是前端漏传，
+        # 而「整本删」有它自己的端点，走那条路时人知道自己在做什么
+        raise HTTPException(
+            status_code=400,
+            detail="没有指定要删哪些章。整本删请用 DELETE /novels/{id}")
+
+    rows = db.execute(q.order_by(Chapter.order_no)).scalars().all()
+    sample = [{"order_no": c.order_no, "title": c.title} for c in rows[:10]]
+    if body.dry_run:
+        return {"dry_run": True, "count": len(rows), "sample": sample,
+                "words": sum(c.word_count or 0 for c in rows)}
+
+    ids = [c.id for c in rows]
+    if ids:
+        db.execute(delete(Chapter).where(Chapter.id.in_(ids)))
+        db.flush()
+    return {"dry_run": False, "deleted": len(ids), "sample": sample}
 
 
 class ReorderIn(BaseModel):
