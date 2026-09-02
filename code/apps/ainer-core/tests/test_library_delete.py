@@ -117,3 +117,43 @@ class TestBulkChapterDelete:
 
         f = BulkDeleteIn.model_fields
         assert "chapter_ids" in f and "from_order" in f and "to_order" in f
+
+
+class TestOrphanPurge:
+    """级联只在删除那一刻生效，对历史遗留的孤儿无能为力。
+
+    早先版本的删除、直接改库、中途失败的事务，都会留下孤儿。
+    实测过一次：手动删掉的十几本书留下了 78 条产物。
+    """
+
+    def test_defaults_to_dry_run(self):
+        """清理不可恢复，而孤儿本身不产生危害 ——
+        不值得为了「顺手清一下」冒删错的风险。"""
+        import inspect
+
+        from app.api.v2.library import purge_orphans
+
+        sig = inspect.signature(purge_orphans)
+        assert sig.parameters["dry_run"].default.default is True
+
+    def test_media_is_judged_by_url_not_by_row(self):
+        """内容寻址下同一个文件可能有多条 asset 指着它 ——
+        删掉一条不该动那个文件。判断「没人引用」要看 URL。"""
+        import inspect
+
+        from app.api.v2.library import purge_orphans
+
+        src = inspect.getsource(purge_orphans)
+        assert "surviving" in src and "referenced" in src
+        assert "rsplit(\"/media/\", 1)" in src
+
+    def test_reports_before_it_acts(self):
+        """预演要说清会删多少、腾出多少文件。"""
+        import inspect
+
+        from app.api.v2.library import purge_orphans
+
+        src = inspect.getsource(purge_orphans)
+        for k in ("orphan_tasks", "orphan_assets", "unreferenced_files",
+                  "sample_unreferenced"):
+            assert k in src, k

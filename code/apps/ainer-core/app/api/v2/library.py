@@ -708,3 +708,85 @@ def reorder_chapters(novel_id: str, body: ReorderIn, db: Session = Depends(get_d
         rows[cid].order_no = i
     db.flush()
     return {"count": len(body.chapter_ids)}
+
+
+
+# ── 维护 ──────────────────────────────────────────────────────────────────────
+
+@router.post("/maintenance:purge-orphans")
+def purge_orphans(dry_run: bool = Query(True), purge_media: bool = Query(True),
+                  db: Session = Depends(get_db)) -> dict:
+    """清掉指向已删小说的任务与产物，以及没人引用的媒体文件。
+
+    **为什么需要它**：`gen_tasks` 与 `assets` 的 novel_id 不是外键，
+    删小说时靠 delete_novel 显式清理 —— 而那只对**经过这个端点的删除**有效。
+    早先版本的删除、直接改库、或中途失败的事务，都会留下孤儿。
+    实测过一次：手动删掉的十几本书留下了 78 条产物。
+
+    **媒体文件是按内容寻址的**，所以判断「没人引用」要看 URL 而不是行 ——
+    两条 asset 指向同一个文件时，删掉一条不该动那个文件。
+
+    默认 dry_run。清理是不可恢复的，而孤儿本身不产生危害，
+    不值得为了「顺手清一下」冒删错的风险。
+    """
+    from app.capability.mediastore import media_root
+    from app.models import Asset, GenTask
+
+    alive = select(Novel.id)
+    orphan_tasks = select(GenTask.id).where(
+        GenTask.novel_id.isnot(None), GenTask.novel_id.notin_(alive))
+    orphan_assets = select(Asset).where(
+        Asset.novel_id.isnot(None), Asset.novel_id.notin_(alive))
+
+    task_n = db.execute(
+        select(func.count()).select_from(orphan_tasks.subquery())).scalar() or 0
+    assets = db.execute(orphan_assets).scalars().all()
+
+    # 落盘但没有任何 asset 指着的文件。**按 URL 比对而不是按行** ——
+    # 内容寻址下同一个文件可能有多条 asset 指着它
+    root = media_root()
+    on_disk = {p.name for p in root.iterdir() if p.is_file()} if root.exists() else set()
+    referenced = {
+        u.rsplit("/media/", 1)[-1]
+        for (u,) in db.execute(select(Asset.url).where(Asset.url.isnot(None))).all()
+        if u and "/media/" in u
+    }
+    doomed = {a.url for a in assets if a.url and "/media/" in a.url}
+    # 孤儿删掉之后还会被引用的文件，不能碰
+    surviving = {
+        u.rsplit("/media/", 1)[-1]
+        for (u,) in db.execute(
+            select(Asset.url).where(
+                Asset.url.isnot(None),
+                Asset.id.notin_([a.id for a in assets]) if assets else True)
+        ).all() if u and "/media/" in u
+    }
+    unreferenced = sorted(on_disk - referenced)
+    freed = sorted(
+        {u.rsplit("/media/", 1)[-1] for u in doomed} - surviving)
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "orphan_tasks": task_n, "orphan_assets": len(assets),
+            "media_files_on_disk": len(on_disk),
+            "unreferenced_files": len(unreferenced),
+            "files_freed_by_purge": len(freed) if purge_media else 0,
+            "sample_unreferenced": unreferenced[:5],
+        }
+
+    db.execute(delete(GenTask).where(
+        GenTask.novel_id.isnot(None), GenTask.novel_id.notin_(alive)))
+    db.execute(delete(Asset).where(
+        Asset.novel_id.isnot(None), Asset.novel_id.notin_(alive)))
+    db.flush()
+
+    removed = 0
+    if purge_media:
+        removed = _purge_media(
+            [f"/media/{n}" for n in set(freed) | set(unreferenced)])
+    return {
+        "dry_run": False,
+        "orphan_tasks": task_n, "orphan_assets": len(assets),
+        "media_files_removed": removed,
+    }
