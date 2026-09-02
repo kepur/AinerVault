@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.base import utcnow
 from app.ids import new_id
 from app.models import (
     Chapter, DocStatus, Novel, ScriptDoc, SourceFormat, TranslationBlock,
@@ -176,14 +177,12 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
         fallback_chars=body.fallback_chars,
     )
 
-    preview = [
-        {
-            "order_no": c.order_no, "title": c.title, "word_count": c.word_count,
-            "detected_by": c.detected_by,
-            "excerpt": c.content[:120].replace("\n", " "),
-        }
-        for c in result.chapters
-    ]
+    # 预览只回前后各若干条。**全量预览对人没有用** ——
+    # 没人会看三千行分章表，而三千条带正文摘要的响应有好几 MB，
+    # 前端画一遍就卡住了。
+    # 首尾都给：分章出错最常见的两处就是开头（前言被当成第一章）
+    # 与结尾（尾声没被切出来）
+    preview = _preview(result.chapters)
     if body.dry_run:
         return {
             "dry_run": True, "strategy": result.strategy,
@@ -193,22 +192,30 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
         }
 
     if body.replace:
-        for old in db.execute(
-            select(Chapter).where(Chapter.novel_id == novel_id)
-        ).scalars().all():
-            db.delete(old)
+        # 逐个 delete 会把几千行全部载进 session 再逐个发 DELETE。
+        # 整本替换是常见操作（分章错了重来），不该等半分钟
+        db.execute(delete(Chapter).where(Chapter.novel_id == novel_id))
         db.flush()
         base = 0
     else:
         base = _next_order(db, novel_id) - 1
 
-    for c in result.chapters:
-        db.add(Chapter(
-            id=new_id("ch"), novel_id=novel_id, order_no=base + c.order_no,
-            title=c.title, content=c.content, word_count=c.word_count,
-            source_format=SourceFormat.plain,
-            ingest_meta_json={"detected_by": c.detected_by, "strategy": result.strategy},
-        ))
+    # 批量插入。逐个 db.add 会为每一行建一个 ORM 实例并跟踪它 ——
+    # 三千章下来光是身份映射就占满内存，而这里根本不需要跟踪：
+    # 插完就不再碰它们了
+    now = utcnow()
+    db.execute(insert(Chapter), [
+        {
+            "id": new_id("ch"), "novel_id": novel_id,
+            "order_no": base + c.order_no, "title": c.title,
+            "content": c.content, "word_count": c.word_count,
+            "source_format": SourceFormat.plain,
+            "ingest_meta_json": {"detected_by": c.detected_by,
+                                 "strategy": result.strategy},
+            "workspace_id": "default", "created_at": now, "updated_at": now,
+        }
+        for c in result.chapters
+    ])
     db.flush()
     return {
         "dry_run": False, "strategy": result.strategy,
@@ -218,27 +225,85 @@ def import_chapters(novel_id: str, body: ImportIn, db: Session = Depends(get_db)
     }
 
 
+#: 预览返回的条数上限（首尾各一半）。
+#: 分章出错最常见的两处是开头与结尾 —— 前言被当成第一章，
+#: 或尾声没被切出来。中间那几千章长得都一样，看了也看不出问题
+_PREVIEW_N = 24
+
+
+def _preview(chapters: list) -> list[dict]:
+    def one(c) -> dict:
+        return {
+            "order_no": c.order_no, "title": c.title,
+            "word_count": c.word_count, "detected_by": c.detected_by,
+            "excerpt": c.content[:120].replace("\n", " "),
+        }
+
+    if len(chapters) <= _PREVIEW_N:
+        return [one(c) for c in chapters]
+    half = _PREVIEW_N // 2
+    head = [one(c) for c in chapters[:half]]
+    tail = [one(c) for c in chapters[-half:]]
+    return head + [{"order_no": None, "title": f"… 中间 {len(chapters) - _PREVIEW_N} 章省略 …",
+                    "word_count": None, "detected_by": "elided", "excerpt": ""}] + tail
+
+
+#: 整本上传的大小上限。一本三百万字的中文长篇约 6 MB，
+#: 20 MB 足够覆盖任何真实的书，而再往上多半是传错了文件 ——
+#: 不设限的话，一个几百 MB 的文件会被整个读进内存再切成几万个对象
+_MAX_UPLOAD = 20 * 1024 * 1024
+
+#: 编码回落顺序。gb18030 放在 gbk/gb2312 之前 —— 它是超集，
+#: 能解 gbk 的它都能解，反过来不成立
+_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "big5", "shift_jis", "euc-kr")
+
+
 @router.post("/novels/{novel_id}/chapters:upload")
 async def upload_chapters(
     novel_id: str,
     file: UploadFile = File(...),
     dry_run: bool = Query(False),
     replace: bool = Query(False),
+    source_format: str = Query("plain"),
+    min_chars: int = Query(200, ge=0),
+    fallback_chars: int = Query(3000, ge=500),
     db: Session = Depends(get_db),
 ) -> dict:
+    """整本 txt 导入。按标题行分章，纯规则，不调 LLM。
+
+    分章错了后面全错，所以**默认建议先 dry_run 看一眼** ——
+    尤其是前几章与最后几章：前言被当成第一章、尾声没被切出来，
+    是这一步最常见的两种错。
+    """
     _get_novel(db, novel_id)
     raw = await file.read()
-    for enc in ("utf-8", "utf-8-sig", "gb18030", "big5"):
+    if len(raw) > _MAX_UPLOAD:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件 {len(raw) // 1024 // 1024} MB，超过上限 "
+                   f"{_MAX_UPLOAD // 1024 // 1024} MB。"
+                   f"一本三百万字的中文长篇约 6 MB —— 确认没传错文件？")
+    if not raw.strip():
+        raise HTTPException(status_code=400, detail="文件是空的")
+
+    for enc in _ENCODINGS:
         try:
             text = raw.decode(enc)
             break
         except UnicodeDecodeError:
             continue
     else:
-        raise HTTPException(status_code=400, detail="无法识别文件编码（试过 utf-8/gb18030/big5）")
+        raise HTTPException(
+            status_code=400,
+            detail=f"无法识别文件编码（试过 {'/'.join(_ENCODINGS)}）。"
+                   f"用文本编辑器另存为 UTF-8 再传")
 
     return import_chapters(
-        novel_id, ImportIn(text=text, dry_run=dry_run, replace=replace), db
+        novel_id,
+        ImportIn(text=text, dry_run=dry_run, replace=replace,
+                 source_format=source_format, min_chars=min_chars,
+                 fallback_chars=fallback_chars),
+        db,
     )
 
 
@@ -248,12 +313,37 @@ async def upload_chapters(
 def list_chapters(
     novel_id: str,
     with_state: bool = Query(True),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    q: str | None = Query(None, description="按标题或章号搜索"),
     db: Session = Depends(get_db),
 ) -> dict:
-    """列表带状态四联，后台直接画进度条。"""
+    """列表带状态四联，后台直接画进度条。
+
+    **必须分页。** 一本长篇几千章，全量返回既撑爆响应，
+    状态四联那四个 JOIN 也会在几千个 id 上跑 ——
+    而人一次只看得了几十行。
+
+    状态只对**当前页**算：`with_state` 的四个查询用的是本页的 id，
+    不是全书的。翻页时重新算，代价与页大小成正比而不是与书长成正比。
+    """
     _get_novel(db, novel_id)
+
+    base = select(Chapter).where(Chapter.novel_id == novel_id)
+    if q and q.strip():
+        term = q.strip()
+        cond = Chapter.title.ilike(f"%{term}%")
+        if term.isdigit():
+            # 数字既可能是章号也可能出现在标题里，两边都认 ——
+            # 「跳到第 1500 章」是长篇里最常做的动作
+            cond = or_(cond, Chapter.order_no == int(term))
+        base = base.where(cond)
+
+    total = db.execute(
+        select(func.count()).select_from(base.subquery())
+    ).scalar() or 0
     rows = db.execute(
-        select(Chapter).where(Chapter.novel_id == novel_id).order_by(Chapter.order_no)
+        base.order_by(Chapter.order_no).offset(offset).limit(limit)
     ).scalars().all()
 
     states: dict[str, dict] = {}
@@ -285,10 +375,10 @@ def list_chapters(
             ).all()
         }
         trans: dict[str, dict[str, float]] = {}
-        for doc_id, lang, total, done in trans_rows:
+        for doc_id, lang, tot, done in trans_rows:
             cid = doc_to_chapter.get(doc_id)
             if cid:
-                trans.setdefault(cid, {})[lang] = round(done / total, 3) if total else 0.0
+                trans.setdefault(cid, {})[lang] = round(done / tot, 3) if tot else 0.0
 
         asset_rows = db.execute(
             select(GenTask.chapter_id, GenTask.status, func.count())
@@ -307,7 +397,7 @@ def list_chapters(
         shot_docs = {
             d for (d,) in db.execute(
                 select(ShotPlan.script_doc_id)
-                .where(ShotPlan.script_doc_id.in_(list(doc_to_chapter)), 
+                .where(ShotPlan.script_doc_id.in_(list(doc_to_chapter)),
                        ShotPlan.status == DocStatus.active)
             ).all()
         }
@@ -330,7 +420,63 @@ def list_chapters(
             }
             for c in rows
         ],
-        "total": len(rows),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "query": q or None,
+    }
+
+
+@router.get("/novels/{novel_id}/progress")
+def novel_progress(novel_id: str, db: Session = Depends(get_db)) -> dict:
+    """整本的进度总览。**一次聚合，不逐章算。**
+
+    几千章的书，逐章翻页去数「还有多少没译」是不现实的 ——
+    而那恰恰是接手一本长篇时第一个要知道的数字。
+    """
+    _get_novel(db, novel_id)
+    total = db.execute(
+        select(func.count()).select_from(Chapter)
+        .where(Chapter.novel_id == novel_id)
+    ).scalar() or 0
+    words = db.execute(
+        select(func.coalesce(func.sum(Chapter.word_count), 0))
+        .where(Chapter.novel_id == novel_id)
+    ).scalar() or 0
+
+    ch_ids = select(Chapter.id).where(Chapter.novel_id == novel_id)
+    docs = db.execute(
+        select(ScriptDoc.chapter_id).where(
+            ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+    ).scalars().all()
+    doc_ids = select(ScriptDoc.id).where(
+        ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+
+    # 按语言分别统计译完的章数 —— 一本书可以同时译成几种语言，
+    # 合在一起算会得到一个谁也用不上的平均数
+    by_lang: dict[str, int] = {}
+    for lang, cnt in db.execute(
+        select(TranslationBlock.target_language_code,
+               func.count(func.distinct(ScriptDoc.chapter_id)))
+        .join(ScriptBlock, ScriptBlock.id == TranslationBlock.script_block_id)
+        .join(ScriptDoc, ScriptDoc.id == ScriptBlock.script_doc_id)
+        .where(ScriptDoc.chapter_id.in_(ch_ids),
+               TranslationBlock.translated_text.isnot(None))
+        .group_by(TranslationBlock.target_language_code)
+    ).all():
+        by_lang[lang] = cnt
+
+    planned = db.execute(
+        select(func.count(func.distinct(ShotPlan.script_doc_id)))
+        .where(ShotPlan.script_doc_id.in_(doc_ids),
+               ShotPlan.status == DocStatus.active)
+    ).scalar() or 0
+
+    return {
+        "chapters": total, "words": words,
+        "scripted": len(set(docs)),
+        "translated_by_lang": by_lang,
+        "shot_planned": planned,
     }
 
 

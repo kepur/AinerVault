@@ -624,18 +624,31 @@ const Settings = {
 
 // ───────────────────────── 书架 ─────────────────────────
 const Library = {
+  //: 书架的分页状态。**不放进全局 State** —— 它是这一页的临时视图，
+  //: 存进 localStorage 会让人下次进来落在第 37 页，不知道自己在哪
+  page: 0, size: 50, q: "",
+
   async render(v) {
     const novels = (await api("GET", "/novels")).items || [];
-    let chapters = [];
-    if (State.novelId && novels.some(n => n.id === State.novelId)) {
-      chapters = (await api("GET", `/novels/${State.novelId}/chapters`)).items || [];
-    } else if (novels.length) {
-      State.novelId = novels[0].id; State.save();
-      chapters = (await api("GET", `/novels/${State.novelId}/chapters`)).items || [];
+    if (!State.novelId && novels.length) { State.novelId = novels[0].id; State.save(); }
+    const cur = novels.find(n => n.id === State.novelId);
+
+    let data = {items:[], total:0}, prog = null;
+    if (cur) {
+      const qs = `offset=${this.page*this.size}&limit=${this.size}` +
+                 (this.q ? `&q=${encodeURIComponent(this.q)}` : "");
+      [data, prog] = await Promise.all([
+        api("GET", `/novels/${cur.id}/chapters?${qs}`).catch(()=>({items:[],total:0})),
+        api("GET", `/novels/${cur.id}/progress`).catch(()=>null),
+      ]);
     }
+    const pages = Math.max(1, Math.ceil((data.total||0) / this.size));
+    const from = data.total ? this.page*this.size + 1 : 0;
+    const to = Math.min((this.page+1)*this.size, data.total||0);
+
     v.innerHTML = `
       <div class="card">
-        <h2>小说</h2>
+        <h2>小说 <span class="sub mono" style="color:var(--muted)">${novels.length} 本</span></h2>
         <div class="tblwrap" style="margin-bottom:12px">
           <table><thead><tr><th></th><th>标题</th><th>源语言</th><th>章节</th><th>字数</th></tr>
           </thead><tbody>${
@@ -644,7 +657,8 @@ const Library = {
               <td>${n.id===State.novelId ? '<span class="tag t-ok">当前</span>' : ""}</td>
               <td><b>${h(n.title)}</b></td>
               <td class="mono">${h(n.source_language_code)}</td>
-              <td>${n.chapter_count}</td><td>${n.word_count}</td></tr>`).join("")
+              <td class="mono">${n.chapter_count}</td>
+              <td class="mono">${(n.word_count||0).toLocaleString()}</td></tr>`).join("")
             : `<tr><td colspan="5" class="empty">还没有小说</td></tr>`}
           </tbody></table>
         </div>
@@ -662,28 +676,94 @@ const Library = {
           <button class="btn pri" style="margin-top:10px" onclick="Library.create(this)">创建</button>
         </details>
       </div>
-      ${State.novelId ? `
+
+      ${cur && prog ? `<div class="card">
+        <h2>${h(cur.title)} <span class="sub mono" style="color:var(--muted)">
+          ${prog.chapters} 章 · ${(prog.words||0).toLocaleString()} 字</span></h2>
+        <p class="hint">几千章的书，逐页去数「还有多少没译」不现实 ——
+          这一栏是<b>一次聚合算出来的</b>，不逐章统计。</p>
+        <div class="row" style="flex-wrap:wrap;gap:14px">
+          ${Library.bar("已分块", prog.scripted, prog.chapters)}
+          ${Object.entries(prog.translated_by_lang||{}).map(([k,v])=>
+            Library.bar(`已译 ${h(k)}`, v, prog.chapters)).join("")}
+          ${Library.bar("已分镜", prog.shot_planned, prog.chapters)}
+        </div>
+      </div>` : ""}
+
+      ${cur ? `
       <div class="card">
-        <h2>导入章节</h2>
-        <p class="hint">按标题行自动分章。识别不到章节标记时按长度切分。纯规则，不调 LLM。</p>
-        <textarea id="imp-text" rows="7"
-          placeholder="第一章 标题&#10;&#10;正文…&#10;&#10;第二章 标题&#10;&#10;正文…"></textarea>
-        <div class="row" style="margin-top:10px">
-          <button class="btn" onclick="Library.imp(this,true)">预览分章</button>
-          <button class="btn pri" onclick="Library.imp(this,false)">导入</button>
+        <h2>导入</h2>
+        <p class="hint">按标题行自动分章（第一章／Chapter 1／楔子／纯数字行都认），
+          识别不到就按长度切。<b>纯规则，不调 LLM，不花钱</b>。<br>
+          <b>先预览再导入</b> —— 分章错了后面全错。最容易错的是开头与结尾：
+          前言被当成第一章、尾声没被切出来，所以预览首尾都给。</p>
+
+        <div id="drop" class="prop" style="border-style:dashed;text-align:center;
+             padding:18px;cursor:pointer;margin-bottom:10px"
+             onclick="$('#imp-file').click()">
+          <b style="color:var(--ink)">整本 txt 拖到这里</b>
+          <span class="sub" style="display:block;font-size:12px;margin-top:3px">
+            或点击选择文件　·　自动识别 UTF-8／GB18030／BIG5／Shift-JIS　·　上限 20 MB</span>
+          <input type="file" id="imp-file" accept=".txt,.md,.text" style="display:none"
+                 onchange="Library.upload(this.files[0])">
+        </div>
+
+        <details>
+          <summary style="cursor:pointer;color:var(--accent);font-size:13px">
+            或粘贴正文</summary>
+          <textarea id="imp-text" rows="6" style="margin-top:8px"
+            placeholder="第一章 标题&#10;&#10;正文…&#10;&#10;第二章 标题&#10;&#10;正文…"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button class="btn" onclick="Library.imp(this,true)">预览分章</button>
+            <button class="btn pri" onclick="Library.imp(this,false)">导入</button>
+          </div>
+        </details>
+
+        <div class="row" style="margin-top:10px;gap:14px;flex-wrap:wrap">
           <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
                         font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px">
             <input type="checkbox" id="imp-replace" style="width:auto"> 替换现有章节</label>
+          <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
+                        font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px">
+            <input type="checkbox" id="imp-dry" style="width:auto" checked> 先预览不落库</label>
+          <span class="sub mono" style="font-size:11.5px;color:var(--muted)">
+            也可以 POST /api/v2/novels/${cur.id}/chapters:upload（multipart）
+            或 chapters:import（JSON）</span>
         </div>
         <div id="imp-out" style="margin-top:11px"></div>
       </div>
+
       <div class="card">
-        <h2>章节 <span class="sub mono" style="color:var(--muted)">${chapters.length} 章</span></h2>
+        <h2>章节
+          <span class="sub mono" style="color:var(--muted)">
+            ${data.total ? `${from}–${to} / ${data.total}` : "0"}
+            ${this.q ? `　搜「${h(this.q)}」` : ""}</span>
+        </h2>
+        <div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">
+          <input id="ch-q" placeholder="搜标题，或直接输章号跳过去" value="${h(this.q)}"
+                 style="max-width:280px" onkeydown="if(event.key==='Enter')Library.search()">
+          <button class="btn" onclick="Library.search()">搜索</button>
+          ${this.q ? `<button class="btn" onclick="Library.clearQ()">清除</button>` : ""}
+          <span style="flex:1"></span>
+          <button class="btn sm" onclick="Library.go(0)" ${this.page?"":"disabled"}>« 首页</button>
+          <button class="btn sm" onclick="Library.go(${this.page-1})" ${this.page?"":"disabled"}>‹ 上页</button>
+          <span class="mono" style="font-size:12px;color:var(--muted)">
+            ${this.page+1} / ${pages}</span>
+          <button class="btn sm" onclick="Library.go(${this.page+1})"
+                  ${this.page+1>=pages?"disabled":""}>下页 ›</button>
+          <button class="btn sm" onclick="Library.go(${pages-1})"
+                  ${this.page+1>=pages?"disabled":""}>末页 »</button>
+          <select onchange="Library.resize(this.value)" style="width:auto">
+            ${[25,50,100,200].map(n=>`<option value="${n}" ${n===this.size?"selected":""}
+              >${n} 条/页</option>`).join("")}
+          </select>
+        </div>
         <div class="tblwrap"><table><thead><tr>
           <th></th><th>#</th><th>标题</th><th>字数</th><th>剧本</th><th>译文</th><th></th>
         </tr></thead><tbody>${
-          chapters.length ? chapters.map(c => {
-            const tr = c.state && c.state.translation || {};
+          data.items.length ? data.items.map(c => {
+            const st = c.state || {};
+            const tr = st.translation || {};
             const langs = Object.entries(tr).map(([k,vv]) =>
               `<span class="tag ${vv>=1?'t-ok':'t-warn'}">${h(k)} ${Math.round(vv*100)}%</span>`).join(" ");
             return `<tr>
@@ -691,20 +771,55 @@ const Library = {
               <td class="mono">${c.order_no}</td>
               <td>${h(c.title||"")}</td>
               <td class="mono">${c.word_count}</td>
-              <td><span class="tag ${c.state.script==='active'?'t-ok':'t-mute'}">${h(c.state.script)}</span></td>
+              <td><span class="tag ${st.script==='active'?'t-ok':'t-mute'}">${h(st.script||"none")}</span></td>
               <td>${langs || '<span class="tag t-mute">未译</span>'}</td>
               <td><button class="btn sm" onclick="Library.open('${c.id}')">打开译本 →</button></td>
             </tr>`}).join("")
-          : `<tr><td colspan="7" class="empty">还没有章节</td></tr>`}
+          : `<tr><td colspan="7" class="empty">${this.q?"没有匹配的章节":"还没有章节"}</td></tr>`}
         </tbody></table></div>
       </div>` : ""}
     `;
+    if (cur) Library.wireDrop();
   },
+
+  bar(label, done, total) {
+    const pct = total ? Math.round(done/total*100) : 0;
+    return `<div style="min-width:150px">
+      <div class="sub" style="font-size:12px">${label}
+        <span class="mono" style="color:var(--muted)">${done}/${total}</span></div>
+      <div style="height:6px;background:var(--line);border-radius:3px;margin-top:3px">
+        <div style="height:6px;width:${pct}%;border-radius:3px;
+             background:${pct>=100?'var(--ok)':'var(--accent)'}"></div></div>
+    </div>`;
+  },
+
+  wireDrop() {
+    const el = $("#drop"); if (!el || el._wired) return;
+    el._wired = true;
+    ["dragover","dragenter"].forEach(e => el.addEventListener(e, ev => {
+      ev.preventDefault(); el.style.borderColor = "var(--accent)";
+    }));
+    ["dragleave","drop"].forEach(e => el.addEventListener(e, ev => {
+      ev.preventDefault(); el.style.borderColor = "";
+    }));
+    el.addEventListener("drop", ev => {
+      const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
+      if (f) Library.upload(f);
+    });
+  },
+
+  go(p) { this.page = Math.max(0, p); App.refresh(); },
+  resize(n) { this.size = +n; this.page = 0; App.refresh(); },
+  search() { this.q = ($("#ch-q").value||"").trim(); this.page = 0; App.refresh(); },
+  clearQ() { this.q = ""; this.page = 0; App.refresh(); },
+
   pick(id) {
     State.novelId = id; State.chapterId = ""; State.transformId = "";
+    this.page = 0; this.q = "";
     State.save(); App.refresh();
   },
   open(id) { State.chapterId = id; State.save(); App.go("prose"); },
+
   async create(btn) {
     const title = $("#nv-title").value.trim();
     if (!title) return logErr("标题必填");
@@ -714,27 +829,65 @@ const Library = {
       State.novelId = n.id; State.save(); logOk(`小说「${title}」已创建`); App.refresh();
     }, "创建");
   },
+
+  async upload(file) {
+    if (!file) return;
+    const mb = (file.size/1024/1024).toFixed(1);
+    if (file.size > 20*1024*1024) return logErr(`文件 ${mb} MB，超过 20 MB 上限`);
+    const dry = $("#imp-dry").checked, rep = $("#imp-replace").checked;
+    const fd = new FormData(); fd.append("file", file);
+    $("#imp-out").innerHTML = `<div class="sub">读取 ${h(file.name)}（${mb} MB）…</div>`;
+    try {
+      const r = await fetch(
+        `/api/v2/novels/${State.novelId}/chapters:upload?dry_run=${dry?1:0}&replace=${rep?1:0}`,
+        {method:"POST", body: fd});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || r.statusText);
+      Library.showImport(d, dry, file.name);
+      if (!dry) { logOk(`${file.name}：导入 ${d.chapter_count} 章`); App.refresh(); }
+    } catch (e) { $("#imp-out").innerHTML = ""; logErr(e.message); }
+  },
+
   async imp(btn, dry) {
     const text = $("#imp-text").value;
     if (!text.trim()) return logErr("请粘贴正文");
     await run(btn, async () => {
       const r = await api("POST", `/novels/${State.novelId}/chapters:import`,
         {text, dry_run: dry, replace: $("#imp-replace").checked});
-      $("#imp-out").innerHTML = `
-        <div class="row" style="margin-bottom:8px">
-          <span class="tag ${dry?'t-warn':'t-ok'}">${dry?"预览":"已导入"}</span>
-          <span class="mono" style="font-size:12px">策略 ${h(r.strategy)}　
-            ${r.chapter_count} 章　${r.total_words} 字</span></div>
-        <div class="tblwrap"><table><thead><tr><th>#</th><th>标题</th><th>字数</th>
-          <th>识别</th><th>开头</th></tr></thead><tbody>${
-          r.chapters.slice(0,12).map(c=>`<tr><td class="mono">${c.order_no}</td>
-            <td>${h(c.title||"")}</td><td class="mono">${c.word_count}</td>
-            <td class="mono" style="color:var(--muted)">${h(c.detected_by)}</td>
-            <td style="color:var(--muted)">${h(c.excerpt||"")}</td></tr>`).join("")
-        }</tbody></table></div>`;
-      logOk(`${dry?"预览":"导入"} ${r.chapter_count} 章`);
+      Library.showImport(r, dry, "粘贴的正文");
       if (!dry) App.refresh();
-    }, dry?"分析中":"导入中");
+    }, dry ? "预览" : "导入");
+  },
+
+  showImport(r, dry, name) {
+    $("#imp-out").innerHTML = `
+      <div class="row" style="margin-bottom:8px;flex-wrap:wrap">
+        <span class="tag ${dry?'t-warn':'t-ok'}">${dry?"预览（未落库）":"已导入"}</span>
+        <span class="mono" style="font-size:12px">${h(name)}　策略 ${h(r.strategy)}　
+          <b>${r.chapter_count} 章</b>　${(r.total_words||0).toLocaleString()} 字</span>
+        ${dry?`<button class="btn pri sm" onclick="Library.confirmImport()">
+          确认导入这 ${r.chapter_count} 章</button>`:""}
+      </div>
+      ${r.chapter_count > 24 ? `<div class="sub" style="font-size:12px;color:var(--muted)">
+        下表只列首尾各 12 章 —— <b>分章最容易错的就是这两头</b>：
+        前言被当成第一章，或尾声没被切出来。中间那些长得都一样，看了也看不出问题。</div>`:""}
+      <div class="tblwrap" style="margin-top:6px"><table><thead><tr>
+        <th>#</th><th>标题</th><th>字数</th><th>识别</th><th>开头</th></tr></thead><tbody>${
+        (r.chapters||[]).map(c => c.detected_by === "elided"
+          ? `<tr><td colspan="5" class="empty" style="padding:6px">${h(c.title)}</td></tr>`
+          : `<tr><td class="mono">${c.order_no}</td><td>${h(c.title||"")}</td>
+             <td class="mono">${c.word_count}</td>
+             <td><span class="tag t-mute">${h(c.detected_by)}</span></td>
+             <td class="sub" style="font-size:11.5px">${h(c.excerpt||"")}</td></tr>`
+        ).join("")}</tbody></table></div>`;
+  },
+
+  confirmImport() {
+    const f = $("#imp-file").files && $("#imp-file").files[0];
+    $("#imp-dry").checked = false;
+    if (f) return Library.upload(f);
+    if (($("#imp-text").value||"").trim()) return Library.imp(null, false);
+    logErr("找不到刚才预览的内容，请重新选择文件或粘贴");
   },
 };
 

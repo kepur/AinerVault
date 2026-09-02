@@ -164,3 +164,112 @@ def outer(cfg):
     return inner
 '''
     assert not _check(ast.parse(src), pathlib.Path("fake.py"))
+
+
+class TestLibraryScale:
+    """书架必须按几千章设计，不是按几十章。
+
+    一部长篇八百到三千章。全量返回既撑爆响应，状态四联那四个 JOIN
+    也会在几千个 id 上跑 —— 而人一次只看得了几十行。
+    """
+
+    def test_list_chapters_is_paginated(self):
+        import inspect
+
+        from app.api.v2.library import list_chapters
+
+        sig = inspect.signature(list_chapters)
+        for p in ("offset", "limit", "q"):
+            assert p in sig.parameters, f"章节列表缺 {p}"
+
+    def test_state_is_computed_for_the_page_only(self):
+        """状态四联用的是本页的 id，不是全书的 ——
+        翻页的代价与页大小成正比，而不是与书长成正比。"""
+        import inspect
+
+        from app.api.v2.library import list_chapters
+
+        src = inspect.getsource(list_chapters)
+        assert "ids = [c.id for c in rows]" in src
+        assert ".offset(offset).limit(limit)" in src
+
+    def test_import_preview_is_truncated(self):
+        """没人会看三千行分章表，而三千条带摘要的响应有好几 MB。"""
+        from app.api.v2.library import _PREVIEW_N, _preview
+
+        class _C:
+            def __init__(self, i):
+                self.order_no, self.title = i, f"第{i}章"
+                self.word_count, self.detected_by = 100, "heading"
+                self.content = "正文" * 80
+
+        out = _preview([_C(i) for i in range(1, 801)])
+        assert len(out) == _PREVIEW_N + 1        # 首尾 + 一行省略说明
+        elided = [c for c in out if c["detected_by"] == "elided"]
+        assert len(elided) == 1 and "省略" in elided[0]["title"]
+
+    def test_short_books_are_not_truncated(self):
+        from app.api.v2.library import _preview
+
+        class _C:
+            def __init__(self, i):
+                self.order_no, self.title = i, f"第{i}章"
+                self.word_count, self.detected_by = 100, "heading"
+                self.content = "正文"
+
+        out = _preview([_C(i) for i in range(1, 6)])
+        assert len(out) == 5
+        assert not any(c["detected_by"] == "elided" for c in out)
+
+    def test_preview_keeps_both_ends(self):
+        """分章最容易错的是开头与结尾：前言被当成第一章，
+        或尾声没被切出来。中间那些长得都一样。"""
+        from app.api.v2.library import _preview
+
+        class _C:
+            def __init__(self, i, t):
+                self.order_no, self.title = i, t
+                self.word_count, self.detected_by = 100, "heading"
+                self.content = ""
+
+        rows = [_C(1, "楔子")] + [_C(i, f"第{i}章") for i in range(2, 801)] \
+            + [_C(801, "尾声")]
+        out = _preview(rows)
+        assert out[0]["title"] == "楔子"
+        assert out[-1]["title"] == "尾声"
+
+    def test_bulk_insert_not_row_by_row(self):
+        """逐个 db.add 会为每一行建 ORM 实例并跟踪 —— 三千章下来
+        光身份映射就占满内存，而插完就不再碰它们了。"""
+        import inspect
+
+        from app.api.v2.library import import_chapters
+
+        src = inspect.getsource(import_chapters)
+        assert "db.execute(insert(Chapter)" in src
+        assert "delete(Chapter)" in src, "整本替换要一条 DELETE，不是逐行删"
+
+    def test_upload_has_a_size_ceiling(self):
+        """不设限的话，几百 MB 的文件会被整个读进内存
+        再切成几万个对象。"""
+        from app.api.v2.library import _MAX_UPLOAD
+
+        assert 5 * 1024 * 1024 <= _MAX_UPLOAD <= 50 * 1024 * 1024
+
+    def test_encoding_fallbacks_cover_cjk(self):
+        """gb18030 要排在 gbk 之前 —— 它是超集。"""
+        from app.api.v2.library import _ENCODINGS
+
+        assert "utf-8" in _ENCODINGS and "gb18030" in _ENCODINGS
+        assert "big5" in _ENCODINGS
+
+    def test_progress_is_one_aggregate_not_per_chapter(self):
+        """几千章的书，逐章翻页去数「还有多少没译」不现实 ——
+        而那恰恰是接手一本长篇时第一个要知道的数字。"""
+        import inspect
+
+        from app.api.v2.library import novel_progress
+
+        src = inspect.getsource(novel_progress)
+        assert "func.count" in src and "group_by" in src
+        assert "for c in rows" not in src, "进度不该逐章循环"
