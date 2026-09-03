@@ -1457,10 +1457,18 @@ def _wav_duration_ms(media: dict[str, object]) -> int | None:
             ch, rate = struct.unpack("<HI", raw[pos + 10:pos + 16])
             bits = struct.unpack("<H", raw[pos + 22:pos + 24])[0]
         elif cid == b"data":
-            frames = size
+            # **头里的长度不可信。**
+            #
+            # 流式合成写的是占位值：cosyvoice 回的 data 块声明 2147483547 字节
+            #（2GB），而文件实际只有 86KB。照单全收算出 18.6 小时，
+            # 那个数字一路传到镜头时长回填，把一章变成 168 小时 ——
+            # 而它在数据里只是一个大整数，没有任何一层会觉得不对。
+            #
+            # 实际可读的字节才是真的。取两者较小的那个。
+            frames = min(size, len(raw) - (pos + 8))
             break
         pos += 8 + size + (size & 1)
-    if not (rate and bits and ch and frames):
+    if not (rate and bits and ch and frames) or frames <= 0:
         return None
     return int(frames / (rate * ch * bits / 8) * 1000)
 

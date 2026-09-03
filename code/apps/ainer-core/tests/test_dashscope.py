@@ -453,6 +453,36 @@ class TestVideoDurationBounds:
         assert long["parameters"]["duration"] == _DS_VIDEO_MAX_S
 
 
+class TestStreamingWavDuration:
+    def test_placeholder_data_size_is_clamped_to_file_bytes(self, tmp_path, monkeypatch):
+        """流式 WAV 的 data 长度可能是 0x7fffff9b 占位值。
+
+        若相信文件头，86KB 音频会被算成 18.6 小时，并一路放大整片时长。
+        真正可读的数据只能到文件末尾，所以必须取声明值与实际值的较小者。
+        """
+        import struct
+
+        from app.capability import dialects
+
+        pcm = b"\x00\x00" * 16000  # 16kHz / mono / 16-bit = 1 秒
+        fmt = struct.pack("<HHIIHH", 1, 1, 16000, 32000, 2, 16)
+        raw = (
+            b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+            + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+            + b"data" + struct.pack("<I", 2147483547) + pcm
+        )
+        media = tmp_path / "streaming.wav"
+        media.write_bytes(raw)
+        monkeypatch.setattr(dialects, "media_root", lambda: tmp_path, raising=False)
+
+        # _wav_duration_ms currently imports media_root inside the function, so expose
+        # this file through the configured media directory instead of trusting the header.
+        from app.capability import mediastore
+        monkeypatch.setattr(mediastore, "media_root", lambda: tmp_path)
+        got = dialects._wav_duration_ms({"url": "http://localhost/media/streaming.wav"})
+        assert 995 <= got <= 1005
+
+
 class TestFreeTierVoices:
     """sambert 那一批有免费额度（各 3 万），qwen3-tts 没有。
     一本长篇几千句对白，默认落在付费档上是一笔不该花的钱 ——
