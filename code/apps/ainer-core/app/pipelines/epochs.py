@@ -99,6 +99,31 @@ def compose_epoch_prompt(
     """
     inv = epoch.invariant_json or {}
     var = epoch.variant_json or {}
+
+    # **优先用 `_en` 那一份整段渲染。**
+    #
+    # 单个字段存的是中文（build=结实匀称、features=浓眉细长眼），
+    # `_en` 才是给图像模型的英文整段。逐字段拼会把中文拼进提示词 ——
+    # 而图像模型不认中文，那几个词只会变成一片汉字纹样。
+    #
+    # 有锚时**整段跳过 invariant**：锚是一张正面头肩像，
+    # 脸、肤色、眼睛、发际全在里面。文字再写一遍不但冗余，
+    # 还会把权重从「在哪、在做什么」抢走 —— 实跑里镜 6 的提示词是
+    # 「a man seated behind a door」加六十个词的脸型体型，
+    # 场景四个词对人物六十个词，出来的是一张灰底棚拍立姿。
+    # 只留 sex：锚里看得出性别，但写出来能防模型跑偏（§4.3）。
+    if has_anchor and kind == "character":
+        bits = [str(inv.get("sex") or "").strip(),
+                str(var.get("_en") or "").strip()]
+        joined = ", ".join(b for b in bits if b)
+        if joined:
+            return joined
+    elif inv.get("_en") or var.get("_en"):
+        joined = ", ".join(str(x).strip() for x in (inv.get("_en"), var.get("_en"))
+                           if str(x or "").strip())
+        if joined:
+            return joined
+
     skip = set(_CARRIED_BY_ANCHOR) if has_anchor and kind == "character" else set()
     parts: list[str] = []
     for key in INVARIANT_FIELDS.get(kind, ()):

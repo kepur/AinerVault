@@ -365,3 +365,89 @@ class TestSyncRetry:
         except CapabilityError:
             pass
         assert len(calls) == 1
+
+
+class TestEpochPromptWithAnchor:
+    """有锚时文字不该再描述脸。
+
+    实跑：镜 6 的提示词是「a man seated behind a door」加六十个词的
+    脸型体型衣着 —— 场景四个词对人物六十个词，出来的是一张灰底棚拍立姿，
+    而这一镜的描述是「沈砚推门而出，起身迎敌」。
+    """
+
+    class _Epoch:
+        locked = False
+        identity_ref_asset_id = "as_x"
+        invariant_json = {
+            "_en": "square face, thick brows, bronze skin, sturdy build, 178cm",
+            "sex": "male", "build": "结实匀称", "features": "浓眉，细长眼",
+        }
+        variant_json = {
+            "_en": "man in his mid-twenties, grey padded coat, sabre at the hip",
+            "_age_en": "man in his mid-twenties",
+        }
+
+    def test_anchor_drops_the_face_description(self):
+        from app.pipelines.epochs import compose_epoch_prompt
+
+        out = compose_epoch_prompt(self._Epoch(), "character", has_anchor=True)
+        assert "square face" not in out
+        assert "grey padded coat" in out
+
+    def test_sex_survives(self):
+        """锚里看得出性别，但写出来能防模型跑偏。"""
+        from app.pipelines.epochs import compose_epoch_prompt
+
+        assert "male" in compose_epoch_prompt(
+            self._Epoch(), "character", has_anchor=True)
+
+    def test_no_chinese_leaks_in(self):
+        """单个字段存的是中文（build=结实匀称），`_en` 才是英文整段。
+        逐字段拼会把中文拼进提示词，而图像模型不认中文。"""
+        import re
+
+        from app.pipelines.epochs import compose_epoch_prompt
+
+        for anchored in (True, False):
+            out = compose_epoch_prompt(self._Epoch(), "character",
+                                       has_anchor=anchored)
+            assert not re.search(r"[一-鿿]", out), out
+
+    def test_anchored_prompt_is_much_shorter(self):
+        from app.pipelines.epochs import compose_epoch_prompt
+
+        a = compose_epoch_prompt(self._Epoch(), "character", has_anchor=True)
+        b = compose_epoch_prompt(self._Epoch(), "character", has_anchor=False)
+        assert len(a) < len(b)
+
+    def test_stored_prompt_no_longer_short_circuits(self):
+        """`epoch.visual_prompt or compose_...` 让 has_anchor 那条逻辑
+        永远不执行 —— 预存的一存在就短路了。写了没接线的又一例。"""
+        import inspect
+
+        from app.pipelines import frame_compose
+
+        src = inspect.getsource(frame_compose._entity_look)
+        assert "epoch.locked or not anchor" in src
+
+
+class TestVideoDurationBounds:
+    def test_clamped_to_model_limits(self):
+        """模型自己有下限（wan 是 2–15 秒）。上游算出 1.3 秒的快切镜头
+        完全合理，但发过去会在轮询阶段失败，
+        报一句和剪辑无关的话（duration should be between 2 and 15）。"""
+        import httpx
+
+        from app.capability.dialects import (
+            _DS_VIDEO_MAX_S, _DS_VIDEO_MIN_S, _ds_video_body,
+        )
+
+        with httpx.Client() as c:
+            short = _ds_video_body(
+                c, {"first_frame": {"b64": "AA", "mime": "image/png"},
+                    "duration_ms": 1300}, "wan2.7-i2v", 5)
+            long = _ds_video_body(
+                c, {"first_frame": {"b64": "AA", "mime": "image/png"},
+                    "duration_ms": 60000}, "wan2.7-i2v", 5)
+        assert short["parameters"]["duration"] == _DS_VIDEO_MIN_S
+        assert long["parameters"]["duration"] == _DS_VIDEO_MAX_S

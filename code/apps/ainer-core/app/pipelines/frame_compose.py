@@ -106,7 +106,23 @@ def _entity_look(
     epoch = resolve_epoch(db, entity.id, profile_id, chapter_order)
     if epoch is not None:
         anchor = epoch.identity_ref_asset_id
-        text = epoch.visual_prompt or compose_epoch_prompt(
+        # **有锚时重新拼，不用预存的那一份。**
+        #
+        # compose_epoch_prompt 的 has_anchor 会略去脸的那几项 ——
+        # 参考图负责「是谁」，文字再描述一遍只会抢权重。
+        # 但预存的 visual_prompt 一存在，那条逻辑就永远不执行：
+        # `epoch.visual_prompt or compose_...` 短路了。
+        #
+        # 后果很具体：镜 6 的提示词是「a man seated behind a door」
+        # 加上六十个词的脸型体型衣着 —— 场景四个词、人物六十个词，
+        # 模型出的是一张灰底棚拍立姿，而不是「推门而出」。
+        # 写了没接线的又一例。
+        #
+        # 锁定的仍然用预存：那是人手写的，不该被覆盖。
+        text = (epoch.visual_prompt
+                if (epoch.locked or not anchor)
+                else compose_epoch_prompt(epoch, "character", has_anchor=True))
+        text = text or compose_epoch_prompt(
             epoch, "character", has_anchor=bool(anchor))
         refs = list(epoch.ref_asset_ids or [])
         if anchor and anchor not in refs:

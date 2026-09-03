@@ -811,6 +811,13 @@ _DS_TASKS = "/api/v1/tasks"
 #: 视频轮询节奏。首轮等久一点没意义 —— 排队时间远大于这个粒度
 _DS_POLL_SEC = 5.0
 
+#: 视频时长的**模型侧**边界（wan 系列是 2–15 秒）。
+#: 与 screenplay 那边的剪辑上限是两回事：那边管「看着累不累」，
+#: 这边管「模型收不收」。上游算出 1.3 秒的快切镜头完全合理，
+#: 但发过去会在轮询阶段失败，报一句和剪辑无关的话。
+_DS_VIDEO_MIN_S = 2
+_DS_VIDEO_MAX_S = 15
+
 #: 画幅只接受 "宽*高"（星号，不是小写 x）
 _DS_SIZE_SEP = "*"
 
@@ -1054,7 +1061,12 @@ def _ds_video_body(transport: httpx.Client, payload: dict[str, Any], model: str,
     params: dict[str, Any] = {}
     dur = payload.get("duration_ms")
     if dur:
-        params["duration"] = max(1, round(int(dur) / 1000))
+        # **模型自己有时长下限**（wan 是 2–15 秒）。低于它整个任务
+        # 会在轮询阶段失败，报 "duration should be between 2 and 15" ——
+        # 而上游算出 1.3 秒是完全合理的（一个快切镜头就该这么短）。
+        # 两种「合理」撞在一起，谁也没错，只能在这一层夹住。
+        params["duration"] = max(_DS_VIDEO_MIN_S,
+                                 min(_DS_VIDEO_MAX_S, round(int(dur) / 1000)))
     return {"model": model, "input": body_in, "parameters": params}
 
 
