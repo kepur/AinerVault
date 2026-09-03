@@ -410,8 +410,14 @@ def compose_frame_prompt(
         if look:
             positive.append(look)
         for url in _asset_urls(db, look_refs)[:1]:
+            # **标明这是身份锚。** 服装素材的参考图也用 role="character"
+            #（那是对的：衣服要贴在人身上），于是「谁当 i2i 的底图」
+            # 就只由 refs 的拼装顺序决定 —— 人物段恰好排在服装段前面。
+            # 那是个巧合，不是约束：以后谁调一下两段的顺序，
+            # 底图就会从「这个人的脸」变成「一件衣服」，
+            # 而出来的图仍然是一张合理的图，没人会发现。
             refs.append({"ref": {"url": url}, "role": "character", "weight": 0.8,
-                         "tag": entity.canonical_key})
+                         "identity": True, "tag": entity.canonical_key})
 
     # ── 4 服装与道具 ──
     for key in asset_keys:
@@ -912,9 +918,15 @@ def _split_identity_anchor(
     多人同框时取第一张：编辑模型按出现顺序理解主次，
     主要人物做底图、其余作附加参考，比平铺一堆图更稳。
     """
-    base = next((r for r in refs
-                 if isinstance(r, dict) and str(r.get("role")) == "character"
-                 and isinstance(r.get("ref"), dict)), None)
+    def usable(r: Any) -> bool:
+        return isinstance(r, dict) and isinstance(r.get("ref"), dict)
+
+    # 先找明确标了 identity 的；找不到才回落到「第一个 character」。
+    # 回落这一支是为了旧数据 —— 那时的 refs 还没有这个标记
+    base = next((r for r in refs if usable(r) and r.get("identity")), None)
+    if base is None:
+        base = next((r for r in refs if usable(r)
+                     and str(r.get("role")) == "character"), None)
     if base is None:
         return None, refs
     return base["ref"], [r for r in refs if r is not base]

@@ -108,3 +108,70 @@ class TestStageOrdering:
         for key in ("chapters", "entities", "transform", "lexicon",
                     "epochs", "casting"):
             assert f'"{key}"' in src
+
+
+class TestAssetLibrary:
+    """素材库存在的理由是「同一把刀在不同镜头是同一把」。
+    任何让同一件东西分裂成几件的东西，都直接毁掉这个理由。
+    """
+
+    def test_dedup_falls_back_to_display_name(self):
+        """canonical_key 由模型每章现编：同一把三簧锁被编成
+        lock_triple_spring / door_lock / lock_three_spring 三个 key，
+        于是库里躺着三把锁、各拿一张参考图，同一扇门在三章里长得不一样。
+        中文名逐字来自原文，是稳定的那一个。
+        """
+        import inspect
+
+        from app.pipelines import asset_pack
+
+        src = inspect.getsource(asset_pack.extract_assets)
+        assert "by_name" in src
+        assert "merged_by_name" in src
+
+    def test_prior_assets_are_shown_to_the_model(self):
+        """规则层只是兜底。真正的修法是让模型一次做对 ——
+        把已抽出的「中文名=key」列给它看，要求同一件东西沿用同一个 key。"""
+        import inspect
+
+        from app.pipelines import asset_pack
+
+        src = inspect.getsource(asset_pack.extract_assets)
+        assert "prior_txt" in src
+        assert "沿用同一个 key" in src
+
+    def test_merge_count_is_reported(self):
+        """兜底次数长期不降，说明提示词那一半没起作用 ——
+        而只看 created/updated 是看不出来的。"""
+        from app.pipelines.asset_pack import ExtractPackResult
+
+        r = ExtractPackResult()
+        r.merged_by_name = 3
+        assert r.as_dict()["merged_by_name"] == 3
+
+    def test_asset_stage_counts_reference_images_not_specs(self):
+        """抽出来但没有参考图的素材等于没抽：下一次画同一把刀，
+        模型还是照着文字重新捏一把。"""
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console.novel_stages)
+        assert "with_ref" in src
+        assert 'AssetVariant.ref_asset_ids.isnot(None)' in src
+
+
+class TestIdempotencyRace:
+    def test_expunge_is_guarded(self):
+        """savepoint 回滚时 SQLAlchemy 已经把待插入对象踢出会话了，
+        再 expunge 一次会抛 InvalidRequestError ——
+        于是这条「撞车就复用已有任务」的兜底从来没走通过，
+        撞车永远变成 500，而日志指向的位置离真正的原因两层远。
+        """
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "if task in db:" in src
+        assert "db.expunge(task)" in src

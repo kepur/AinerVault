@@ -139,7 +139,14 @@ def submit_task(
             # 幂等键唯一约束撞车：另一个请求在我们查完 existing 之后插了同一把键。
             # 后台连点两次、或前一次请求还在跑就重发，都会走到这里。
             # 这不是错误 —— 幂等的语义本就是「让后来者拿到同一个任务」。
-            db.expunge(task)
+            #
+            # **savepoint 回滚时已经把这个待插入对象踢出会话了**，
+            # 再 expunge 一次会抛 InvalidRequestError（"not present in this Session"），
+            # 于是这条兜底路径从来没真正走通过 —— 撞车永远变成 500。
+            # 写了安全网却每次都死在清理那一行，而日志里看到的是
+            # 「另一个异常」，指向的位置离真正的原因两层远。
+            if task in db:
+                db.expunge(task)
             raced = db.execute(
                 select(GenTask).where(GenTask.idempotency_key == idem)
             ).scalars().first()

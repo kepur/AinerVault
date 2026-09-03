@@ -85,11 +85,16 @@ EXTRACT_SYSTEM = """你是影视美术指导。从小说文本中抽离出【基
 class ExtractPackResult:
     created: int = 0
     updated: int = 0
+    #: 靠中文名兜住的次数 —— 模型没沿用旧 key 的那些。
+    #: **要报出来**：这个数字长期不降，说明提示词那一半没起作用，
+    #: 而只看 created/updated 是看不出来的
+    merged_by_name: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
     names: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"created": self.created, "updated": self.updated,
+                "merged_by_name": self.merged_by_name,
                 "by_kind": self.by_kind, "names": self.names}
 
 
@@ -123,12 +128,28 @@ def extract_assets(
         ).scalars()
     }
     known = ", ".join(sorted(entities)[:40])
+
+    # **把已抽出的素材摆给模型看。**
+    # canonical_key 是模型自己编的英文 slug，而它每章独立跑一次 ——
+    # 同一把「三簧锁」第一章编成 lock_triple_spring、第二章 door_lock、
+    # 第三章 lock_three_spring，于是库里躺着三把锁，
+    # 各拿一张参考图，同一扇门在三章里长得不一样。
+    # 让模型跨独立调用复现同一个任意 slug 是在要求它做不到的事，
+    # 但把已有的列给它看、要求"同一件东西沿用同一个 key"，它能做到。
+    prior = list(db.execute(
+        select(AssetSpec).where(AssetSpec.novel_id == chapter.novel_id)
+        .order_by(AssetSpec.importance.desc()).limit(120)).scalars())
+    prior_txt = "；".join(
+        f"{a.display_name}={a.canonical_key}" for a in prior) or "（暂无）"
+
     data, _ = chat_json(
         db,
         [
             {"role": "system", "content": EXTRACT_SYSTEM},
             {"role": "user",
-             "content": f"【已知人物】{known}\n\n【原文】\n{text}"},
+             "content": (f"【已知人物】{known}\n"
+                         f"【已抽出的素材 · 同一件东西必须沿用同一个 key】"
+                         f"{prior_txt}\n\n【原文】\n{text}")},
         ],
         EXTRACT_SCHEMA,
         purpose="extract",
@@ -136,12 +157,20 @@ def extract_assets(
         ref_kind="asset_extract", ref_id=chapter.id,
     )
 
-    existing = {
-        a.canonical_key: a
-        for a in db.execute(
-            select(AssetSpec).where(AssetSpec.novel_id == chapter.novel_id)
-        ).scalars()
-    }
+    # 两条索引：key 一条，(类别, 中文名) 一条。
+    # **中文名才是稳定的那一个** —— 它逐字来自原文，模型没有发挥余地；
+    # 英文 key 是模型现编的，同一件东西每次编得不一样。
+    # 提示词已经让模型沿用旧 key，这一层是它没照做时的兜底。
+    existing: dict[str, AssetSpec] = {}
+    by_name: dict[tuple[str, str], AssetSpec] = {}
+    for a in db.execute(
+        select(AssetSpec).where(AssetSpec.novel_id == chapter.novel_id)
+    ).scalars():
+        existing[a.canonical_key] = a
+        by_name[(getattr(a.kind, "value", str(a.kind)), a.display_name)] = a
+        for alias in a.aliases_json or []:
+            by_name.setdefault(
+                (getattr(a.kind, "value", str(a.kind)), str(alias)), a)
 
     out = ExtractPackResult()
     for item in as_items(data, "assets"):
@@ -161,6 +190,13 @@ def extract_assets(
         excerpt = as_text(item.get("excerpt"))
 
         row = existing.get(key)
+        if row is None:
+            # key 对不上就按中文名找。命中时把模型这次编的 key 收成别名 ——
+            # 下一章它可能又编回这个，收下来就认得出
+            row = by_name.get((kind.value, name))
+            if row is not None and key not in (row.aliases_json or []):
+                aliases = [*aliases, key]
+                out.merged_by_name += 1
         if row is not None:
             merged = sorted(set(row.aliases_json or []) | set(aliases))
             ev = dict(row.evidence_json or {})

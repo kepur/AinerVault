@@ -103,6 +103,21 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
         lex_done = _count(db, WorldLexicon, WorldLexicon.transform_id.in_(tf_ids),
                           WorldLexicon.target_term.isnot(None))
 
+    # 素材库：抽出来的刀剑、宗门、场景。**每件都要有参考图** ——
+    # 没有参考图的素材等于没抽：下一次画同一把刀，模型还是照着
+    # 文字重新捏一把，两镜之间对不上。
+    specs = _count(db, AssetSpec, AssetSpec.novel_id == novel_id)
+    with_ref = 0
+    if specs:
+        from app.models import AssetVariant
+
+        spec_ids = select(AssetSpec.id).where(AssetSpec.novel_id == novel_id)
+        with_ref = db.execute(
+            select(func.count(func.distinct(AssetVariant.asset_spec_id)))
+            .where(AssetVariant.asset_spec_id.in_(spec_ids),
+                   AssetVariant.ref_asset_ids.isnot(None))
+        ).scalar() or 0
+
     anchors = 0
     castings = 0
     if entities:
@@ -136,12 +151,29 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
         _stage("lexicon", "名物词表", lex_done, lex_total, page="world",
                hint="直译会破坏世界观真实感的词，在这里定译法",
                blocked_by=no_tf),
+        _stage("assets", "素材库 · 参考图", with_ref, specs, page="prompts",
+               hint="刀剑 宗门 服装 场景 —— 抽一次，全书复用。"
+                    "有参考图的才叫备好：没有的话下一镜还是重新捏一把",
+               blocked_by=no_ch),
         _stage("epochs", "人物时期与身份锚", anchors, entities, page="epochs",
                hint="脸跨期不变，衣着兵器随期变；锚是保脸的底图",
                blocked_by=no_ent),
         _stage("casting", "配音表", castings, entities + 1, page="casting",
                hint="整本一起配，撞声才检得出来", blocked_by=no_ent),
     ]
+
+
+def _default_transform(db: Session, novel_id: str) -> str | None:
+    """这本书默认用哪个映射。
+
+    多数页面（提示词台账、力度与导读、素材包）都要 transform_id 才工作，
+    而它一直得靠人先去「映射与词表」点一下 —— 跳过来的人不知道还有这一步，
+    只会看到「先在映射与词表选一个世界观映射」。
+    只有一个映射时不该问，有多个时取最新的那个当默认。
+    """
+    return db.execute(
+        select(WorldTransform.id).where(WorldTransform.novel_id == novel_id)
+        .order_by(WorldTransform.created_at.desc()).limit(1)).scalars().first()
 
 
 def _novel_card(db: Session, novel: Novel) -> dict[str, Any]:
@@ -161,6 +193,7 @@ def _novel_card(db: Session, novel: Novel) -> dict[str, Any]:
     return {
         "id": novel.id, "title": novel.title,
         "author": getattr(novel, "author", None),
+        "transform_id": _default_transform(db, novel.id),
         "chapters": chapters,
         "scripted": scripted, "shot_planned": planned,
         "stages": stages,
@@ -321,7 +354,8 @@ def novel_desk(novel_id: str, offset: int = Query(0, ge=0),
     stages = novel_stages(db, novel_id)
     return {
         "novel": {"id": novel.id, "title": novel.title,
-                  "author": getattr(novel, "author", None)},
+                  "author": getattr(novel, "author", None),
+                  "transform_id": _default_transform(db, novel_id)},
         "stages": stages,
         "next": _next_step(stages),
         "entities_by_kind": ent_by_kind,
@@ -342,5 +376,6 @@ def chapter_desk(chapter_id: str, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="chapter not found")
     novel = db.get(Novel, chapter.novel_id)
     row = _chapter_row(db, chapter)
-    row["novel"] = {"id": novel.id, "title": novel.title} if novel else None
+    row["novel"] = {"id": novel.id, "title": novel.title,
+                    "transform_id": _default_transform(db, novel.id)} if novel else None
     return row
