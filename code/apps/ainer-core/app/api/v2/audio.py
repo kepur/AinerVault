@@ -205,6 +205,9 @@ class BindVoicesIn(BaseModel):
     profile_id: str
     endpoint_id: str | None = None
     overwrite: bool = False
+    #: 默认只用有免费额度的音色。**付费要人明确说** ——
+    #: 「免费的用完就自动顺延」是静默花钱
+    free_only: bool = True
 
 
 @router.post("/novels/{novel_id}/casting:bind-engine-voices")
@@ -254,7 +257,8 @@ def bind_engine_voices(novel_id: str, body: BindVoicesIn,
             detail=f"端点 {ep.name} 没有可用音色清单，无法落地")
     out = casting.bind_engine_voices(
         db, novel_id=novel_id, profile_id=body.profile_id,
-        engine=ep.dialect or ep.name, voices=voices, overwrite=body.overwrite)
+        engine=ep.dialect or ep.name, voices=voices, overwrite=body.overwrite,
+        free_only=body.free_only)
     out["language"] = lang
     out["voice_pool"] = len(voices)
     if fallback_note:

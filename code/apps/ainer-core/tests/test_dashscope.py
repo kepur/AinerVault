@@ -459,11 +459,41 @@ class TestFreeTierVoices:
     而这笔钱是**静默**花掉的：数据正常、音频也正常出，只有账单会说话。
     """
 
-    def test_sambert_is_tagged_free(self):
+    def test_free_tier_is_tagged(self):
+        """免费档现在有两族：sambert（音色即模型名）与 cosyvoice（模型+voice）。
+        判据用 tags，不在调用方硬编模型名 —— 哪些免费是供应商的事，会变。"""
         from app.capability.dialects import dashscope_voices
 
         free = [v for v in dashscope_voices() if "free-tier" in (v.tags or [])]
-        assert free and all(v.voice_id.startswith("sambert-") for v in free)
+        assert free
+        assert all(v.voice_id.startswith(("sambert-", "cosyvoice-v1:"))
+                   for v in free)
+        assert any(v.voice_id.startswith("sambert-") for v in free)
+        assert any(v.voice_id.startswith("cosyvoice-v1:") for v in free)
+
+    def test_cosyvoice_widens_the_free_male_pool(self):
+        """英语的免费男声原来只有 sambert-brian 一个，而一章可能有五个男角色 ——
+        不把 cosyvoice 算进来就只能落到付费档。
+        cosyvoice 是「一个模型 + voice 参数」，与 sambert 的「音色即模型名」
+        是同一族里的两种约定，写成 `cosyvoice-v1:longcheng` 塞进同一个格子。
+        """
+        from app.capability.dialects import dashscope_voices
+
+        males = [v for v in dashscope_voices(language="en-GB", gender="male")
+                 if "free-tier" in (v.tags or [])]
+        assert len(males) > 1
+        assert any(v.voice_id.startswith("cosyvoice-v1:") for v in males)
+
+    def test_free_only_never_reaches_paid(self):
+        """付费是要人明确说「可以花钱」才发生的事，
+        不是「免费的用完了就自动顺延」—— 顺延是静默的。"""
+        import inspect
+
+        from app.pipelines import casting
+
+        src = inspect.getsource(casting.bind_engine_voices)
+        assert "free_only: bool = True" in inspect.getsource(casting.bind_engine_voices)
+        assert "reused.append" in src
 
     def test_language_filter_excludes_wrong_accent(self):
         """不过滤的话英文剧本会配上中文音色 —— sambert-zhida 念英语能出声，
@@ -484,7 +514,7 @@ class TestFreeTierVoices:
 
         src = inspect.getsource(casting.bind_engine_voices)
         assert "free_pool" in src and "paid_pool" in src
-        assert "for tier in (free_pool, paid_pool)" in src
+        assert "tiers = (free_pool,) if free_only else" in src
 
     def test_paid_fallback_is_reported(self):
         """免费档不够用是真实的资源约束，不是 bug ——

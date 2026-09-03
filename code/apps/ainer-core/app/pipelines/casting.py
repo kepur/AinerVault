@@ -777,6 +777,7 @@ def casting_params(row: VoiceCasting | None) -> dict[str, Any]:
 def bind_engine_voices(
     db: Session, *, novel_id: str, profile_id: str, engine: str,
     voices: Sequence[Any], overwrite: bool = False,
+    free_only: bool = True,
 ) -> dict[str, Any]:
     """把配音表的中性描述落到某家引擎的具体音色上。
 
@@ -836,6 +837,8 @@ def bind_engine_voices(
     free_ids = {getattr(v, "voice_id", None) for v in voices
                 if "free-tier" in (getattr(v, "tags", None) or [])}
     paid_fallback: list[dict[str, Any]] = []
+    #: 因为免费档不够而与他人共用嗓子的角色
+    reused: list[dict[str, Any]] = []
     bound = skipped = 0
     collisions: list[str] = []
     missing: list[str] = []
@@ -865,8 +868,15 @@ def bind_engine_voices(
         # 排序只在「从头开始扫」时才有意义。要优先就得分段。
         free_pool = [c for c in candidates if c in free_ids]
         paid_pool = [c for c in candidates if c not in free_ids]
+        # **默认只用免费档。**
+        #
+        # 付费是要人明确说「可以花钱」才发生的事，不是「免费的用完了就自动
+        # 顺延」。顺延是静默的：数据正常、音频正常出，只有账单会说话。
+        # 免费不够时宁可复用同一把嗓子并报出来 ——
+        # 「两个配角声音一样」是看得见的取舍，「这个月扣了十美元」不是。
+        tiers = (free_pool,) if free_only else (free_pool, paid_pool)
         pick = None
-        for tier in (free_pool, paid_pool):
+        for tier in tiers:
             if not tier:
                 continue
             start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(tier)
@@ -891,8 +901,23 @@ def bind_engine_voices(
                        f"（共 {sum(1 for c in candidates if c in free_ids)} 个），"
                        f"这一位落到了付费档",
             })
+        if pick is None and free_only and free_pool:
+            # 免费档占满了：复用一把，而不是去付费池。
+            # 用哈希选复用哪一把 —— 至少让重复分散开，
+            # 不至于所有配角都撞同一个声音
+            pick = free_pool[
+                int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(free_pool)]
+            reused.append({
+                "cast_key": key, "voice": pick, "gender": gender,
+                "why": f"{gender} 的免费音色只有 {len(free_pool)} 个且已全部占用，"
+                       f"这一位与他人共用同一把嗓子；"
+                       f"要各不相同需开通付费或换供应商",
+            })
         if pick is None:
-            pick = candidates[0]
+            pick = candidates[0] if candidates else None
+            if pick is None:
+                missing.append(f"{key}（{gender} 没有任何可用音色）")
+                continue
             collisions.append(f"{key} → {pick}（{gender} 音色不够，与他人重复）")
         taken.add(pick)
         assigned[key] = pick
@@ -908,6 +933,8 @@ def bind_engine_voices(
         "collisions": collisions,
         "no_voice_for": missing,
         "paid_fallback": paid_fallback,
+        "reused_voices": reused,
+        "free_only": free_only,
         "free_voices": len(free_ids),
         # 报清楚哪一部分没查 —— 只报「0 处冲突」会让人以为全查过了
         "not_checked": [

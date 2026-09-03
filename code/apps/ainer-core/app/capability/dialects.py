@@ -1196,10 +1196,30 @@ def _ds_await_video(transport: httpx.Client, base_url: str, headers: dict[str, s
 
 _SAMBERT_PREFIXES = ("sambert-", "cosyvoice-")
 
+#: 落地音色里 cosyvoice 的写法：`cosyvoice-v1:longcheng`
+
 
 def _is_sdk_tts(model: str) -> bool:
     return model.startswith(_SAMBERT_PREFIXES)
 
+
+
+def _default_voice_for(lang: str) -> str:
+    """某个语种下的兜底音色。**只从免费档里挑。**
+
+    挑第一个而不是随机 —— 兜底音色应该是稳定的：
+    同一本书里所有「没解析出说话人」的句子共用一把嗓子，
+    听起来像一个没露面的旁人，而不是每句换一个人。
+    """
+    if not lang:
+        return ""
+    for vid, _g, lg in _SAMBERT_VOICES:
+        if lg == lang:
+            return vid
+    # cosyvoice 中英通吃，英语找不到 sambert 时用它
+    if lang == "en" and _COSY_VOICES:
+        return f"{_COSY_MODEL}:{_COSY_VOICES[0][0]}"
+    return ""
 
 def _sambert_invoke(headers: dict[str, str], *, payload: dict[str, Any],
                     model: str, task_id: str,
@@ -1239,13 +1259,41 @@ def _sambert_invoke(headers: dict[str, str], *, payload: dict[str, Any],
     # 说明配音表还没为这条路由落地，说出来而不是默默用错嗓子
     voice = str(payload.get("voice_id") or "").strip()
     use_model = model
-    if voice:
+    cosy_voice = ""
+    if voice.startswith(f"{_COSY_MODEL}:"):
+        # cosyvoice 是「模型 + voice」，写成 `cosyvoice-v1:longcheng`
+        # 塞进同一个 voice_id 字段 —— 配音表那边只有一个格子，
+        # 而两种约定必须都能落进去
+        use_model, cosy_voice = _COSY_MODEL, voice.split(":", 1)[1]
+    elif voice:
         if voice.startswith(_SAMBERT_PREFIXES):
             use_model = voice
         else:
             warnings.append(
                 f"音色「{voice}」不是 sambert 模型名，本次用 {model}；"
                 f"这一族的音色就是模型名（如 sambert-beth-v1）")
+
+    # **没有音色时，按语种挑一个，而不是用路由上的默认模型。**
+    #
+    # 路由的默认只能是一个模型，不可能对所有语种都合适：
+    # 英文剧本里五条没解析出说话人的对白，全落到了 sambert-zhide（中文音色）。
+    # 它念英语能出声，只是口音重到听不出在说什么，而数据上完全正常。
+    #
+    # 说话人没解析出来是上游的问题（那一条会被 missing_voice 报出来），
+    # 但**在这里至少不要用错语种的嗓子** —— 那是两个独立的缺陷叠加，
+    # 修不了前一个不代表要连后一个一起犯。
+    if not voice:
+        lang = str(payload.get("language") or "").split("-")[0].lower()
+        fallback = _default_voice_for(lang)
+        if fallback and fallback != use_model:
+            warnings.append(
+                f"这一条没有绑定音色（说话人多半没解析出来），"
+                f"按语种 {lang or '未知'} 回落到 {fallback}；"
+                f"路由默认的 {use_model} 是另一个语种的嗓子")
+            if fallback.startswith(f"{_COSY_MODEL}:"):
+                use_model, cosy_voice = _COSY_MODEL, fallback.split(":", 1)[1]
+            else:
+                use_model = fallback
 
     extra = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     if extra.get("style_prompt"):
@@ -1264,15 +1312,19 @@ def _sambert_invoke(headers: dict[str, str], *, payload: dict[str, Any],
             kw[dst] = max(0.5, min(2.0, float(v)))
 
     try:
-        result = SpeechSynthesizer.call(model=use_model, text=text, **kw)
-        raw = result.get_audio_data()
+        if cosy_voice:
+            from dashscope.audio.tts_v2 import SpeechSynthesizer as _V2
+
+            raw = _V2(model=use_model, voice=cosy_voice).call(text)
+        else:
+            result = SpeechSynthesizer.call(model=use_model, text=text, **kw)
+            raw = result.get_audio_data()
     except Exception as exc:  # noqa: BLE001 - SDK 的异常类型不稳定
         raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
-                              f"sambert 合成失败：{exc}", retryable=True) from exc
+                              f"{use_model} 合成失败：{exc}", retryable=True) from exc
     if not raw:
         raise CapabilityError(
-            CapErrorCode.UPSTREAM_ERROR,
-            f"sambert 没有返回音频：{str(result.get_response())[:200]}")
+            CapErrorCode.UPSTREAM_ERROR, f"{use_model} 没有返回音频")
 
     media = store_bytes(bytes(raw), mime="audio/wav")
     dur = _wav_duration_ms(media)
@@ -1522,6 +1574,19 @@ _SAMBERT_VOICES: tuple[tuple[str, str, str], ...] = (
     ("sambert-hanna-v1", "female", "he"),
 )
 
+#: cosyvoice-v1 的音色（1 万免费额度）。**它是「一个模型 + voice 参数」**，
+#: 与 sambert 的「音色即模型名」不同 —— 同一族里两种约定，接的时候要分开。
+#: 这些嗓子中英文都念得了，所以不按语种收窄：
+#: 英语的免费男声本来只有 sambert-brian 一个，而一章可能有五个男角色，
+#: 不把这一批算进来就只能落到付费档。
+_COSY_VOICES: tuple[tuple[str, str], ...] = (
+    ("longcheng", "male"), ("longshu", "male"), ("longshuo", "male"),
+    ("longyuan", "male"), ("longjing", "male"),
+    ("longxiaochun", "female"), ("longxiaoxia", "female"), ("longwan", "female"),
+    ("longhua", "female"), ("longmiao", "female"), ("longyue", "female"),
+)
+_COSY_MODEL = "cosyvoice-v1"
+
 
 def dashscope_voices(*, language: str | None = None,
                      gender: str | None = None) -> list[Voice]:
@@ -1539,6 +1604,14 @@ def dashscope_voices(*, language: str | None = None,
               tags=["dashscope", "sambert", "free-tier"])
         for vid, g, lg in _SAMBERT_VOICES
         if (not want or want == g) and (not lang or lang == lg)
+    ]
+    # cosyvoice 中英文通吃，不按语种筛
+    out += [
+        Voice(voice_id=f"{_COSY_MODEL}:{vid}", display_name=f"CosyVoice {vid}",
+              gender=g, languages=["zh", "en"],
+              tags=["dashscope", "cosyvoice", "free-tier"])
+        for vid, g in _COSY_VOICES
+        if not want or want == g
     ]
     out += [
         Voice(voice_id=vid, display_name=vid, gender=g,
