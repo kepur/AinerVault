@@ -183,6 +183,106 @@ def format_audio_cue(prompt: str, *, duration_ms: int | None,
     return "\n".join(lines)
 
 
+
+# ── 中文那一份 ────────────────────────────────────────────────────────────────
+#
+# **每格两份，不是一份加翻译。**
+#
+# 英文那份是给模型的：frame.prompt 已经是各条产线渲染好的英文，
+# 顺序、术语、否定词都按图像模型的习惯排过。
+#
+# 中文那份不是它的译文，而是**同一批数据的中文侧**：
+# shot.description、表演的中文表情动作、八工种的中文单 —— 全都本来就存着，
+# 只是从来没有一处把它们拼成一段可以直接粘走的话。
+#
+# 它有两个真实用途：给人审核（英文提示词看不出「这一镜到底在拍什么」），
+# 以及**喂国产模型** —— qwen-image 这类模型认中文，
+# 手搓时用中文那份出图往往比用英文那份更贴原文。
+
+_CN_ORDER = ("cinematography", "lighting", "production_design",
+             "costume_makeup", "vfx", "color_grading")
+
+
+def compose_image_cn(shot_desc: str, people: Sequence[dict[str, Any]],
+                     sheets: dict[str, str], *, aspect: str | None,
+                     negative: str | None = None) -> str:
+    """首尾帧的中文提示词。
+
+    顺序照着「先拍什么、谁在里面、怎么拍」排 ——
+    和英文那份同一个道理：把工种细节排在主体之前，
+    出来的是一张打光样片而不是这一镜。
+    """
+    bits: list[str] = []
+    if shot_desc:
+        bits.append(shot_desc.strip())
+    for who in people:
+        seg = [str(who.get("角色") or "")]
+        for key in ("表情", "动作"):
+            if who.get(key):
+                seg.append(str(who[key]))
+        props = who.get("手持")
+        if isinstance(props, list):
+            props = "、".join(str(x) for x in props if x)
+        # 手持要带标签。不带的话拼出来是「……身体前倾，腰刀」——
+        # 一个光杆名词挂在动作后面，读的人分不清是「又拿了一把刀」
+        # 还是「刚才那把」，模型也一样
+        if props:
+            seg.append(f"手持{props}")
+        joined = "，".join(x for x in seg if x)
+        if joined:
+            bits.append(joined)
+    for role in _CN_ORDER:
+        text = (sheets.get(role) or "").strip()
+        if text:
+            bits.append(f"{CREW_CN.get(role, role)}：{text}")
+    out = "\n".join(bits)
+    if negative:
+        out += f"\n\n【不要】{negative.strip()}"
+    if aspect:
+        out += f"\n【画幅】{aspect}"
+    return out
+
+
+def compose_video_cn(motion: dict[str, Any], *, first_url: str | None,
+                     last_url: str | None, duration_ms: int) -> str:
+    """运动的中文提示词。"""
+    order = ("起幅", "落幅", "相机", "主体", "节奏")
+    bits = [f"{k}：{motion[k]}" for k in order if motion.get(k)]
+    if not bits:
+        bits = ["机位固定，无相机运动"]
+    bits.append(f"【时长】{duration_ms / 1000:.1f}s")
+    bits.append(f"【首帧】{first_url or '未生成 —— 需先出首帧'}")
+    bits.append(f"【尾帧】{last_url or '未生成 —— 可只用首帧'}")
+    return "\n".join(bits)
+
+
+def compose_speech_cn(text: str, *, speaker: str | None, voice: str | None,
+                      instruct: str | None, habits: str | None,
+                      language: str | None, source_text: str | None) -> str:
+    """对白的中文侧。
+
+    **台词本身不翻回中文** —— 它是目标语言的成品，翻回去就不是要念的那句了。
+    中文侧给的是「谁在说、用什么嗓子、怎么演」，加上原文以便对照：
+    审的人要能看出这句译得对不对，而那需要原文在旁边。
+    """
+    bits = [text.strip()]
+    meta = []
+    if speaker:
+        meta.append(f"说话人 {speaker}")
+    if voice:
+        meta.append(f"音色 {voice}")
+    if language:
+        meta.append(f"语种 {language}")
+    if meta:
+        bits.append("【" + " · ".join(meta) + "】")
+    if instruct:
+        bits.append(f"【表演指示】{instruct}")
+    if habits:
+        bits.append(f"【语言习惯】{habits}")
+    if source_text and source_text.strip() != text.strip():
+        bits.append(f"【原文对照】{source_text.strip()}")
+    return "\n".join(bits)
+
 # ── 主编译 ────────────────────────────────────────────────────────────────────
 
 def build_handoff(
@@ -212,8 +312,11 @@ def build_handoff(
         select(ShotMotion).where(ShotMotion.shot_id.in_(shot_ids))).scalars()}
 
     crew: dict[str, dict[str, CrewSheet]] = {}
+    cn_sheets: dict[str, dict[str, str]] = {}
     for c in db.execute(select(CrewSheet).where(CrewSheet.shot_id.in_(shot_ids))).scalars():
         crew.setdefault(c.shot_id, {})[c.role] = c
+        if c.prompt:
+            cn_sheets.setdefault(c.shot_id, {})[c.role] = c.prompt
 
     perfs: dict[str, list[ShotPerformance]] = {}
     for p in db.execute(
@@ -283,6 +386,10 @@ def build_handoff(
                 track, shot, cursor, shot.duration_ms, label, url,
                 copy=format_image(prompt, (frame.negative_prompt if frame else "") or "",
                                   target=target, aspect=aspect),
+                copy_cn=compose_image_cn(
+                    shot.description or "", detail.get("人物") or [],
+                    cn_sheets.get(shot.id, {}), aspect=aspect,
+                    negative=_cn_negative(frame)),
                 detail=detail,
                 refs=_refs(frame, entities, assets, db),
             ))
@@ -294,6 +401,9 @@ def build_handoff(
             _url_by_id(assets, shot.video_asset_id),
             copy=format_video(motion_text, first_url=first_url, last_url=last_url,
                               duration_ms=shot.duration_ms),
+            copy_cn=compose_video_cn(
+                detail.get("运动") or {}, first_url=first_url, last_url=last_url,
+                duration_ms=shot.duration_ms),
             detail=detail, refs=[],
         ))
 
@@ -312,23 +422,36 @@ def build_handoff(
                 est = estimated_any = bool(dur)
             params = spec.params_json or {}
             speaker = entities.get(spec.entity_id or "")
+            copy_cn = ""
             if spec.kind in (AudioKind.dialogue, AudioKind.narration):
+                voice_id = params.get("voice_asset_key") or params.get("voice_id")
+                instruct = params.get("style_prompt") or params.get("instruct")
                 copy = format_speech(
                     spec.text or "", speaker=speaker.display_name if speaker else None,
-                    voice=params.get("voice_asset_key") or params.get("voice_id"),
-                    instruct=params.get("style_prompt") or params.get("instruct"),
+                    voice=voice_id, instruct=instruct,
                     language=spec.language_code)
-                if not (params.get("voice_asset_key") or params.get("voice_id")):
+                copy_cn = compose_speech_cn(
+                    spec.text or "",
+                    speaker=speaker.display_name if speaker else None,
+                    voice=voice_id, instruct=instruct,
+                    habits=params.get("speech_habits"),
+                    language=spec.language_code,
+                    source_text=params.get("source_text"))
+                if not voice_id:
                     gaps.append({"track": track, "shot": shot.order_no,
                                  "why": "这句没有绑定音色",
                                  "fix": "到「配音表」为该角色配音色"})
             else:
                 copy = format_audio_cue(
                     params.get("prompt") or spec.text or "", duration_ms=dur or None)
+                # 声景编译时把中文那句存在 prompt_cn（soundscape.py）——
+                # 存了从来没人读，正是「加字段不接线」那个老毛病
+                copy_cn = format_audio_cue(
+                    params.get("prompt_cn") or "", duration_ms=dur or None)
             clip = _clip(track, shot, cursor + local, dur or 0,
                          (spec.text or params.get("prompt_cn") or "")[:60] or label,
                          asset.url if asset else None,
-                         copy=copy, detail=detail, refs=[])
+                         copy=copy, copy_cn=copy_cn, detail=detail, refs=[])
             clip["estimated_duration"] = est
             if speaker:
                 clip["speaker"] = speaker.display_name
@@ -358,6 +481,9 @@ def build_handoff(
                 copy=format_audio_cue(params.get("prompt") or spec.text or "",
                                       duration_ms=total,
                                       loop=spec.kind == AudioKind.ambience),
+                copy_cn=format_audio_cue(params.get("prompt_cn") or "",
+                                         duration_ms=total,
+                                         loop=spec.kind == AudioKind.ambience),
                 detail={"场景": _scene_detail(scene)} if scene else {}, refs=[]))
             clips[track][-1]["shot_range"] = [rng[0].order_no, rng[-1].order_no]
 
@@ -418,7 +544,8 @@ def _empty(chapter, plan, target, aspect) -> dict[str, Any]:
 
 
 def _clip(track: str, shot: Shot, start: int, dur: int, label: str,
-          url: str | None, *, copy: str, detail: dict[str, Any],
+          url: str | None, *, copy: str, copy_cn: str = "",
+          detail: dict[str, Any],
           refs: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "key": f"{track}:{shot.order_no}:{start}",
@@ -429,7 +556,10 @@ def _clip(track: str, shot: Shot, start: int, dur: int, label: str,
         "asset_url": url,
         # ready = 已经有产物，手搓时可跳过；manual = 这一格要人去出
         "status": "ready" if url else "manual",
+        # 两份都给。英文给模型，中文给人审核 ——
+        # 也能直接喂国产模型（qwen-image 这类认中文）
         "copy": copy,
+        "copy_cn": copy_cn,
         "detail": detail,
         "refs": refs,
     }
@@ -486,6 +616,22 @@ def _detail(shot: Shot, scene: Scene | None, perfs: Sequence[ShotPerformance],
             out[CREW_CN.get(role, role)] = block
     return out
 
+
+
+def _cn_negative(frame: FrameSpec | None) -> str:
+    """负面词里的中文那部分。
+
+    文化包的 `visual_dont`（「美式元素」「工业流水线」）本来就是中文，
+    它在英文提示词里是有害的（模型不认，还可能被当成要画的内容），
+    但在中文那份里恰恰是**对的** —— 中文侧就是给认中文的模型和人看的。
+    所以这里挑出中文条目放进中文版，英文条目留给英文版。
+    """
+    if frame is None or not frame.negative_prompt:
+        return ""
+    from app.pipelines.frame_compose import _CJK
+
+    items = [x.strip() for x in frame.negative_prompt.split(",")]
+    return "、".join(x for x in items if x and _CJK.search(x))
 
 def _scene_detail(scene: Scene | None) -> dict[str, Any]:
     if scene is None:
@@ -610,7 +756,8 @@ def to_csv(handoff: dict[str, Any]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["轨道", "镜号", "开始时间码", "开始毫秒", "时长毫秒",
-                "状态", "说话人", "标题", "素材地址", "时长是否估算", "提示词"])
+                "状态", "说话人", "标题", "素材地址", "时长是否估算",
+                "提示词（英文·给模型）", "提示词（中文·给人／国产模型）"])
     for track in as_items(handoff, "tracks"):
         for clip in track["clips"]:
             w.writerow([
@@ -621,6 +768,7 @@ def to_csv(handoff: dict[str, Any]) -> str:
                 clip.get("asset_url") or "",
                 "是" if clip.get("estimated_duration") else "",
                 (clip.get("copy") or "").replace("\n", " ⏎ "),
+                (clip.get("copy_cn") or "").replace("\n", " ⏎ "),
             ])
     return buf.getvalue()
 
@@ -664,7 +812,13 @@ def to_markdown(handoff: dict[str, Any]) -> str:
             out.append(f"### 镜 {clip['shot']} · {clip['tc']} · {flag}")
             if clip.get("label"):
                 out.append(f"*{clip['label']}*")
-            out += ["", "```", (clip.get("copy") or "").strip(), "```", ""]
+            en = (clip.get("copy") or "").strip()
+            cn = (clip.get("copy_cn") or "").strip()
+            if en:
+                out += ["", "**英文 · 给模型**", "```", en, "```"]
+            if cn:
+                out += ["", "**中文 · 给人审核，也可直接喂国产模型**", "```", cn, "```"]
+            out.append("")
             for ref in as_items(clip, "refs"):
                 out.append(f"- 参考图（{ref.get('role')}）：`{ref['url']}`")
             if clip.get("asset_url"):

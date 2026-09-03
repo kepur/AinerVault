@@ -3009,7 +3009,11 @@ const Handoff = {
         <h2>手动模式 · ${h(d.chapter.title || "本章")}
           <span class="sub mono" style="color:var(--muted)">${d.shots} 镜　${mm}分${ss}秒　${d.aspect_ratio}</span>
         </h2>
-        <p class="hint">${h(d.notes || "")}</p>
+        <p class="hint">${h(d.notes || "")}<br>
+          <b>每格两份提示词</b>：英文给模型（各条产线渲染好的，术语与顺序都排过），
+          中文给人审核 —— 英文提示词看不出「这一镜到底在拍什么」。
+          中文那份也能<b>直接喂国产模型</b>（qwen-image 这类认中文，
+          手搓时用它出图往往比英文那份更贴原文）。</p>
         <div class="row">
           <label style="font-size:12px;color:var(--muted)">出图目标</label>
           <select id="ho-target" onchange="Handoff.setTarget(this.value)">
@@ -3134,14 +3138,29 @@ const Handoff = {
         <span style="flex:1;color:var(--muted);font-size:12px;overflow:hidden;
               text-overflow:ellipsis;white-space:nowrap">${h(c.label||"")}</span>
         <button class="btn pri" style="padding:2px 8px;font-size:12px"
-          onclick="Handoff.copyClip(this,'${c.key}')">复制提示词</button>
+          onclick="Handoff.copyClip(this,'${c.key}','en')">复制英文</button>
+        <button class="btn" style="padding:2px 8px;font-size:12px"
+          onclick="Handoff.copyClip(this,'${c.key}','cn')"
+          ${c.copy_cn?"":"disabled"}>复制中文</button>
         <button class="btn" style="padding:2px 8px;font-size:12px"
           onclick="Handoff.toggle('${c.key}')">${shown?"收起":"细部"}</button>
       </div>
-      <pre id="cp_${id}" style="white-space:pre-wrap;font-size:12px;margin:6px 0 0;
-           padding:8px;background:var(--bg2,#0000000a);border-radius:5px;
-           max-height:${shown?"none":"84px"};overflow:hidden"
-        >${h(c.copy||"（这一格没有提示词）")}</pre>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <div style="flex:1;min-width:260px">
+          <div class="sub" style="font-size:11px;color:var(--muted)">英文 · 给模型</div>
+          <pre id="cp_${id}" style="white-space:pre-wrap;font-size:12px;margin:2px 0 0;
+               padding:8px;background:var(--bg2,#0000000a);border-radius:5px;
+               max-height:${shown?"none":"84px"};overflow:hidden"
+            >${h(c.copy||"（这一格没有英文提示词）")}</pre>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <div class="sub" style="font-size:11px;color:var(--muted)">中文 · 给人审核／国产模型</div>
+          <pre style="white-space:pre-wrap;font-size:12px;margin:2px 0 0;
+               padding:8px;background:var(--bg2,#0000000a);border-radius:5px;
+               max-height:${shown?"none":"84px"};overflow:hidden"
+            >${h(c.copy_cn||"（这一格没有中文提示词）")}</pre>
+        </div>
+      </div>
       ${(c.refs||[]).length?`<div class="sub" style="font-size:11px;margin-top:4px">
         要上传的参考图：${c.refs.map(r=>
           `<a href="${r.url}" target="_blank">${h(r.role||"ref")}</a>`).join("　")}</div>`:""}
@@ -3177,9 +3196,10 @@ const Handoff = {
   toggleTrack(id) { this.fold[id] = !this.fold[id]; App.refresh(); },
   setTarget(t) { localStorage.setItem("an.hotarget", t); App.refresh(); },
 
-  copyClip(btn, key) {
+  copyClip(btn, key, lang) {
     const c = this.find(key);
-    this.copy(btn, c ? (c.copy||"") : "");
+    if (!c) return;
+    this.copy(btn, lang === "cn" ? (c.copy_cn||"") : (c.copy||""));
   },
   async copy(btn, text) {
     if (!text) { logErr("这一格没有可复制的内容"); return; }

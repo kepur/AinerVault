@@ -627,12 +627,17 @@ class FrameGenResult:
     blocked: list[str] = field(default_factory=list)
     estimated_cost: float | None = None
     requires_confirm: bool = False
+    #: 这一批里哪些镜头只能用中性的英文变化。**不是 blocked** ——
+    #: 图照样出得来，只是尾帧与首帧的差异会很小。
+    #: 不报的话，「尾帧几乎没变」会被当成模型不给力，而不是缺英文渲染
+    thin_derive: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "submitted_first": self.submitted_first,
             "submitted_last": self.submitted_last,
             "skipped": self.skipped, "blocked": self.blocked,
+            "thin_derive": self.thin_derive,
             "estimated_cost": self.estimated_cost,
             "requires_confirm": self.requires_confirm,
         }
@@ -784,15 +789,22 @@ def generate_last_frames(
         return result
 
     novel_id, chapter_id = _plan_scope(db, plan)
+    # 尾帧的画幅要和首帧一致。**不能靠跟随底图** ——
+    # 首帧那边一旦是从方形身份锚编辑出来的，尾帧就会继承那个方形
+    width_last, height_last = _size_for((plan.config_json or {}).get("aspect_ratio") or "16:9")
+    deltas = _deltas_en(db, [s.id for _, s, _ in pending])
     for frame, shot, first_url in pending:
         params = frame.params_json or {}
-        instruction = frame.derive_instruction or "slight natural progression of the moment"
+        instruction, why = _derive_en(frame, deltas.get(shot.id))
+        if why:
+            result.thin_derive.append({"shot": shot.order_no, "why": why})
         payload: dict[str, Any] = {
             "image": {"url": first_url},
             # 同一段描述 + 变化说明；同 seed 提升连贯度
             "prompt": f"{frame.prompt or ''} ; {instruction}".strip(" ;"),
             "negative_prompt": frame.negative_prompt or "",
             "strength": strength,
+            "width": width_last, "height": height_last,
             "params": {"seed": params.get("seed")},
         }
         refs = params.get("reference_images") or []
@@ -811,6 +823,45 @@ def generate_last_frames(
     db.flush()
     return result
 
+
+
+def _deltas_en(db: Session, shot_ids: list[str]) -> dict[str, list[str]]:
+    """各镜首尾之间变了什么，**英文**。"""
+    from app.models import ShotMotion
+
+    if not shot_ids:
+        return {}
+    return {
+        m.shot_id: [str(x) for x in (m.deltas_en_json or []) if x]
+        for m in db.execute(
+            select(ShotMotion).where(ShotMotion.shot_id.in_(shot_ids))
+        ).scalars()
+    }
+
+
+def _derive_en(frame: FrameSpec, deltas: list[str] | None) -> tuple[str, str]:
+    """尾帧的「变了什么」，返回（英文指令, 需要报告的问题）。
+
+    **优先用运动描述的 deltas_en。** `ShotMotion.deltas_en_json` 的注释写着
+    「i2i 读的是这一条」，但这里从前读的是 `derive_instruction` —— 那是中文，
+    由分镜编译时的模型写的（「门外脚步声由远及近，轻重分明」）。
+    它被直接接在英文提示词后面送进图像模型，而图像模型不认中文：
+    这一段既起不到指导作用，还可能被画成一片汉字纹样。
+    设计了但没接线，又一例。
+
+    没有 deltas_en 时**不回落到中文**。宁可给一句中性的英文，
+    也不要把读不懂的文字混进提示词 —— 但要把这一镜报出来，
+    否则「尾帧和首帧几乎一样」会被当成模型不给力，而不是缺英文渲染。
+    """
+    if deltas:
+        return ", ".join(deltas), ""
+    raw = (frame.derive_instruction or "").strip()
+    if raw and not _CJK.search(raw):
+        return raw, ""
+    fallback = "slight natural progression of the moment"
+    if raw:
+        return fallback, f"派生指令只有中文：{raw[:40]}"
+    return fallback, "这一镜没有派生指令，尾帧只能给一句中性变化"
 
 def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
     """把已完成任务的产图挂回 FrameSpec。回调/轮询之后调一次。"""
