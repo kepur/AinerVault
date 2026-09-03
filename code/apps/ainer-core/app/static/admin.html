@@ -367,6 +367,7 @@ const PAGES = GROUPS.flatMap(g => g.pages);
 const DRILL = [
   {id:"novel",   ico:"📖", name:"小说工作台", sub:"整本共享的素材 · 章节列表"},
   {id:"chapter", ico:"📄", name:"章节工作台", sub:"这一章的十步 · 现在该做哪一步"},
+  {id:"media",   ico:"🗂", name:"资源库", sub:"这本书的全部图片 音频 视频 · 用在哪"},
 ];
 const ALL_PAGES = [...PAGES, ...DRILL];
 
@@ -3323,6 +3324,7 @@ const Console = {
           <button class="btn pri" onclick="goto('${nx.page}','${n.id}',null,'${n.transform_id||""}')">去做</button>`
         : `<span class="tag t-ok">整本素材已备齐</span>`}
         <button class="btn" onclick="goto('novel','${n.id}')">打开工作台 →</button>
+        <button class="btn" onclick="goto('media','${n.id}')" title="这本书的全部图片 音频 视频">🗂 资源</button>
       </div>
     </div>`;
   },
@@ -3352,6 +3354,9 @@ const NovelDesk = {
           <span class="tag t-mute">素材规格 ${d.asset_specs}</span>
           ${(d.transforms || []).map(t =>
             `<span class="tag t-info">译本 ${h(t.target_language_code || "?")}</span>`).join("")}
+        </div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn" onclick="goto('media','${d.novel.id}')">🗂 资源库 · 看全部图片音频视频</button>
         </div>
       </div>
 
@@ -3445,6 +3450,99 @@ const ChapterDesk = {
         }).join("")}
       </div>`;
   },
+};
+
+
+// ── 资源库 ────────────────────────────────────────────────────────────────
+// 一本小说跑下来会攒下几百个文件。它们原来散在五个页面里 ——
+// 人物时期看锚、提示词台账看素材、分镜看帧、有声书看音频 ——
+// 没有任何一处能回答「这本书一共有哪些文件」。
+//
+// 而**一屏缩略图并不解决问题**：三十张灰蒙蒙的夜戏截图摆在一起，
+// 人分不出哪张是镜 7 的尾帧。所以每个文件都要带着用途、归属、镜号
+// 一起出现 —— 那才是人脑用来定位的东西。
+const MediaLib = {
+  use: "", offset: 0,
+
+  async render(v) {
+    if (!State.novelId) { State.page = "console"; State.save(); return App.refresh(); }
+    const q = `?offset=${this.offset}&limit=60${this.use?`&use=${this.use}`:""}`;
+    const d = await api("GET", `/novels/${State.novelId}/media${q}`);
+    this.data = d;
+    const mb = n => (n/1048576).toFixed(1) + " MB";
+
+    v.innerHTML = `
+      <div class="card">
+        <h2><a href="#" onclick="goto('novel','${d.novel.id}');return false"
+            style="color:var(--muted);font-weight:400">${h(d.novel.title)}</a>
+          <span style="color:var(--muted)"> › </span>资源库
+          <span class="sub mono" style="color:var(--muted)">${d.total} 个 · ${mb(d.total_bytes)}</span></h2>
+        <p class="hint">这本书生成过的全部文件。<b>每个都带着「用在哪」</b> ——
+          三十张灰蒙蒙的夜戏截图摆在一起，光看图分不出哪张是镜 7 的尾帧。<br>
+          「未被引用」多半是重出时被替换掉的旧产物：占着磁盘，
+          混在缩略图里还会让人以为这一镜有两张图。</p>
+        <div class="row" style="flex-wrap:wrap">
+          <button class="btn ${this.use?"":"pri"}" onclick="MediaLib.filter('')"
+            >全部 <span class="mono">${d.total}</span></button>
+          ${d.groups.map(g=>`<button class="btn ${this.use===g.use?"pri":""}"
+            onclick="MediaLib.filter('${g.use}')">${h(g.name)}
+            <span class="mono" style="opacity:.7">${g.count}</span></button>`).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        ${d.items.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px">
+          ${d.items.map(i=>this.tile(i)).join("")}</div>`
+          : `<div class="empty">这一类还没有文件</div>`}
+        ${d.total > d.limit ? `<div class="row" style="margin-top:10px">
+          <button class="btn" ${d.offset?"":"disabled"} onclick="MediaLib.page(-1)">上一页</button>
+          <span class="sub mono" style="color:var(--muted)">${
+            d.offset+1}–${Math.min(d.offset+d.limit, d.total)} / ${d.total}</span>
+          <button class="btn" ${d.offset+d.limit<d.total?"":"disabled"}
+            onclick="MediaLib.page(1)">下一页</button></div>` : ""}
+      </div>`;
+  },
+
+  tile(i) {
+    const isImg = (i.mime||"").startsWith("image/");
+    const isAud = (i.mime||"").startsWith("audio/");
+    const isVid = (i.mime||"").startsWith("video/");
+    const kb = i.bytes ? (i.bytes>1048576 ? (i.bytes/1048576).toFixed(1)+"M"
+                                          : Math.round(i.bytes/1024)+"K") : "";
+    // 音频不给缩略图给播放器 —— 一个音频文件的「预览」就是能听一下，
+    // 而不是一个统一的喇叭图标（那等于没有预览）
+    const body = isImg
+      ? `<img src="${i.url}" loading="lazy" style="width:100%;height:104px;
+           object-fit:cover;border-radius:6px 6px 0 0;display:block;background:var(--panel-2)">`
+      : isVid
+      ? `<video src="${i.url}" preload="metadata" controls
+           style="width:100%;height:104px;border-radius:6px 6px 0 0;background:#000"></video>`
+      : isAud
+      ? `<div style="padding:14px 8px 8px"><audio src="${i.url}" preload="none" controls
+           style="width:100%;height:32px"></audio></div>`
+      : `<div style="height:104px;display:flex;align-items:center;justify-content:center;
+           color:var(--muted);font-size:12px">${h(i.mime||"未知类型")}</div>`;
+    return `<div style="width:172px;border:1px solid var(--line);border-radius:7px;
+         overflow:hidden;background:var(--panel)">
+      ${body}
+      <div style="padding:6px 8px 8px">
+        <div style="font-size:12px;color:var(--ink);line-height:1.35;
+             max-height:2.7em;overflow:hidden">${h(i.label)}</div>
+        <div class="sub mono" style="font-size:10.5px;color:var(--muted);margin-top:3px">
+          ${h(i.use_cn)}${kb?" · "+kb:""}</div>
+        <div class="row" style="gap:4px;margin-top:5px">
+          <a class="btn" style="padding:2px 6px;font-size:11px" href="${i.url}"
+             target="_blank">打开</a>
+          <button class="btn" style="padding:2px 6px;font-size:11px"
+            onclick="Handoff.copy(this,${JSON.stringify(i.url).replace(/"/g,"&quot;")})"
+            >复制地址</button>
+        </div>
+      </div>
+    </div>`;
+  },
+
+  filter(u) { this.use = u; this.offset = 0; App.refresh(); },
+  page(d) { this.offset = Math.max(0, this.offset + d*60); App.refresh(); },
 };
 
 const Tasks = {
@@ -3557,7 +3655,7 @@ const App = {
       b.classList.toggle("on", b.dataset.p === p.id));
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
-    const R = {console:Console, novel:NovelDesk, chapter:ChapterDesk,
+    const R = {console:Console, novel:NovelDesk, chapter:ChapterDesk, media:MediaLib,
                settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,

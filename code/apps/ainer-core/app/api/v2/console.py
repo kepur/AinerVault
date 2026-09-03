@@ -379,3 +379,179 @@ def chapter_desk(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     row["novel"] = {"id": novel.id, "title": novel.title,
                     "transform_id": _default_transform(db, novel.id)} if novel else None
     return row
+
+
+# ── 资源库 ────────────────────────────────────────────────────────────────────
+#
+# 一本小说跑下来会攒下几百个文件：身份锚、素材参考图、每镜的首尾帧、
+# 每句对白的音频、成片。它们原来散在五个页面里 ——
+# 人物时期看锚、提示词台账看素材、分镜看帧、有声书看音频 ——
+# **没有任何一处能回答「这本书一共有哪些文件」**。
+#
+# 更要紧的是「用在哪」。一屏缩略图不解决问题：三十张灰蒙蒙的夜戏截图摆在
+# 一起，人分不出哪张是镜 7 的尾帧。所以每个文件都要带着它的用途、
+# 归属对象、所在镜号一起出现 —— 那才是人脑用来定位的东西。
+
+#: 用途 → 中文与排序。顺序照「从整本到单镜」排 ——
+#: 找东西时人先想「是哪本书的什么」，再想「第几镜」
+_USE_ORDER: tuple[tuple[str, str], ...] = (
+    ("identity", "身份锚"),
+    ("asset_ref", "素材参考图"),
+    ("first_frame", "首帧"),
+    ("last_frame", "尾帧"),
+    ("video", "镜头视频"),
+    ("dialogue", "对白"),
+    ("narration", "旁白"),
+    ("sfx", "音效"),
+    ("bgm", "配乐"),
+    ("ambience", "环境声"),
+    ("scene_bg", "场景背景"),
+    ("orphan", "未被引用"),
+)
+_USE_CN = dict(_USE_ORDER)
+
+
+def _media_index(db: Session, novel_id: str) -> dict[str, dict[str, Any]]:
+    """资产 id → 它被谁引用。
+
+    **反查而不是正查。** 资产表本身只记「哪个任务生成了它」，
+    而任务的 purpose 不足以定位（三十条 first_frame 长得一模一样）。
+    要定位得知道它挂在哪个镜头、哪个角色、哪句台词上 ——
+    那些信息只在引用方那里。
+    """
+    from app.models import (
+        Asset, AssetEpoch, AssetVariant, AudioSpec, EntityWorldVisual,
+        FrameSpec, Scene, Shot, WorldEntity,
+    )
+
+    idx: dict[str, dict[str, Any]] = {}
+
+    def mark(aid: str | None, use: str, label: str, **extra: Any) -> None:
+        if not aid:
+            return
+        idx.setdefault(aid, {"use": use, "label": label, **extra})
+
+    ent_names = {
+        e.id: e.display_name
+        for e in db.execute(
+            select(WorldEntity).where(WorldEntity.novel_id == novel_id)).scalars()
+    }
+
+    # 身份锚：跨期共用的那张脸
+    for ep in db.execute(
+        select(AssetEpoch).where(AssetEpoch.entity_id.in_(list(ent_names) or [""]))
+    ).scalars():
+        mark(ep.identity_ref_asset_id, "identity",
+             f"{ent_names.get(ep.entity_id or '', '?')} · 身份锚",
+             entity=ent_names.get(ep.entity_id or ""))
+
+    # 素材参考图：刀剑宗门场景，抽一次全书复用
+    spec_names = {
+        s.id: s.display_name
+        for s in db.execute(
+            select(AssetSpec).where(AssetSpec.novel_id == novel_id)).scalars()
+    }
+    for var in db.execute(
+        select(AssetVariant).where(
+            AssetVariant.asset_spec_id.in_(list(spec_names) or [""]))
+    ).scalars():
+        for aid in var.ref_asset_ids or []:
+            mark(aid, "asset_ref",
+                 f"{spec_names.get(var.asset_spec_id, '?')} · 参考图",
+                 asset_name=spec_names.get(var.asset_spec_id))
+
+    # 每镜的帧、视频、音频
+    ch_ids = [c.id for c in db.execute(
+        select(Chapter).where(Chapter.novel_id == novel_id)).scalars()]
+    doc_ids = [d.id for d in db.execute(
+        select(ScriptDoc).where(ScriptDoc.chapter_id.in_(ch_ids or [""]))).scalars()]
+    plan_ids = [p.id for p in db.execute(
+        select(ShotPlan).where(ShotPlan.script_doc_id.in_(doc_ids or [""]))).scalars()]
+    shots = {
+        s.id: s for s in db.execute(
+            select(Shot).where(Shot.shot_plan_id.in_(plan_ids or [""]))).scalars()
+    }
+    for shot in shots.values():
+        mark(shot.video_asset_id, "video", f"镜 {shot.order_no} · 视频",
+             shot=shot.order_no)
+    for f in db.execute(
+        select(FrameSpec).where(FrameSpec.shot_id.in_(list(shots) or [""]))
+    ).scalars():
+        shot = shots.get(f.shot_id)
+        role = "first_frame" if f.role == FrameRole.first else "last_frame"
+        mark(f.asset_id, role,
+             f"镜 {shot.order_no if shot else '?'} · {_USE_CN[role]}",
+             shot=shot.order_no if shot else None)
+    for a in db.execute(
+        select(AudioSpec).where(AudioSpec.shot_id.in_(list(shots) or [""]))
+    ).scalars():
+        shot = shots.get(a.shot_id or "")
+        who = ent_names.get(a.entity_id or "")
+        text = (a.text or "").strip().replace("\n", " ")
+        mark(a.asset_id, a.kind.value,
+             f"镜 {shot.order_no if shot else '?'} · {who or _USE_CN.get(a.kind.value, '')}"
+             + (f"「{text[:16]}」" if text else ""),
+             shot=shot.order_no if shot else None, speaker=who or None)
+
+    for sc in db.execute(
+        select(Scene).where(Scene.script_doc_id.in_(doc_ids or [""]))
+    ).scalars():
+        mark(sc.bg_asset_id, "scene_bg", f"{sc.title or '场景'} · 背景")
+        mark(sc.bgm_asset_id, "bgm", f"{sc.title or '场景'} · 配乐")
+        mark(sc.ambience_asset_id, "ambience", f"{sc.title or '场景'} · 环境声")
+    return idx
+
+
+@router.get("/novels/{novel_id}/media")
+def novel_media(novel_id: str, use: str | None = Query(None),
+                kind: str | None = Query(None),
+                offset: int = Query(0, ge=0),
+                limit: int = Query(120, ge=1, le=500),
+                db: Session = Depends(get_db)) -> dict:
+    """这本小说的全部素材文件，按用途分组，每个都带着「用在哪」。"""
+    from app.models import Asset
+
+    novel = db.get(Novel, novel_id)
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+
+    idx = _media_index(db, novel_id)
+    rows = list(db.execute(
+        select(Asset).where(Asset.novel_id == novel_id)
+        .order_by(Asset.created_at.desc())).scalars())
+
+    items: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    bytes_by_use: dict[str, int] = {}
+    for a in rows:
+        meta = idx.get(a.id) or {}
+        # **未被引用的要单列出来，不能混进正常分组。**
+        # 它们多半是重出时被替换掉的旧产物 —— 占着磁盘、
+        # 混在缩略图里让人以为「这一镜有两张图」
+        u = str(meta.get("use") or "orphan")
+        counts[u] = counts.get(u, 0) + 1
+        bytes_by_use[u] = bytes_by_use.get(u, 0) + int(a.bytes or 0)
+        if (use and u != use) or (kind and a.kind.value != kind):
+            continue
+        items.append({
+            "id": a.id, "url": a.url, "kind": a.kind.value, "mime": a.mime,
+            "bytes": a.bytes, "created_at": a.created_at.isoformat() if a.created_at else None,
+            "use": u, "use_cn": _USE_CN.get(u, u),
+            "label": meta.get("label") or "（未被任何地方引用）",
+            "shot": meta.get("shot"), "speaker": meta.get("speaker"),
+            "entity": meta.get("entity"), "asset_name": meta.get("asset_name"),
+        })
+
+    total = len(items)
+    page = items[offset:offset + limit]
+    return {
+        "novel": {"id": novel.id, "title": novel.title},
+        "groups": [
+            {"use": u, "name": cn, "count": counts.get(u, 0),
+             "bytes": bytes_by_use.get(u, 0)}
+            for u, cn in _USE_ORDER if counts.get(u)
+        ],
+        "total": total, "offset": offset, "limit": limit,
+        "total_bytes": sum(bytes_by_use.values()),
+        "items": page,
+    }

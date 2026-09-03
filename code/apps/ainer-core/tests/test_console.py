@@ -175,3 +175,46 @@ class TestIdempotencyRace:
         src = inspect.getsource(service.submit_task)
         assert "if task in db:" in src
         assert "db.expunge(task)" in src
+
+
+class TestMediaLibrary:
+    """一本小说跑下来会攒下几百个文件，原来散在五个页面里 ——
+    人物时期看锚、提示词台账看素材、分镜看帧、有声书看音频 ——
+    没有任何一处能回答「这本书一共有哪些文件」。
+    """
+
+    def test_index_is_built_by_reverse_lookup(self):
+        """资产表只记「哪个任务生成了它」，而任务的 purpose 不足以定位：
+        三十条 first_frame 长得一模一样。要定位得知道它挂在哪个镜头、
+        哪个角色、哪句台词上 —— 那些信息只在引用方那里。"""
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console._media_index)
+        for ref in ("AssetEpoch", "AssetVariant", "FrameSpec", "AudioSpec", "Shot"):
+            assert ref in src, f"{ref} 的引用没有被反查"
+
+    def test_every_use_has_a_chinese_name(self):
+        """用途码直接显示在界面上，漏一个就是一格看不懂的英文。"""
+        from app.api.v2.console import _USE_CN, _USE_ORDER
+
+        assert len(_USE_CN) == len(_USE_ORDER)
+        assert all(cn and cn.strip() for _, cn in _USE_ORDER)
+
+    def test_orphans_have_their_own_bucket(self):
+        """未被引用的多半是重出时被替换掉的旧产物：占着磁盘，
+        混在缩略图里还会让人以为这一镜有两张图。"""
+        from app.api.v2.console import _USE_CN
+
+        assert _USE_CN["orphan"] == "未被引用"
+
+    def test_use_order_goes_from_book_wide_to_per_shot(self):
+        """找东西时人先想「是哪本书的什么」，再想「第几镜」——
+        顺序反过来会让人从三十张帧里翻起。"""
+        from app.api.v2.console import _USE_ORDER
+
+        keys = [k for k, _ in _USE_ORDER]
+        assert keys.index("identity") < keys.index("first_frame")
+        assert keys.index("asset_ref") < keys.index("first_frame")
+        assert keys[-1] == "orphan"
