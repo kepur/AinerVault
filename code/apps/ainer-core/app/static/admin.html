@@ -766,6 +766,25 @@ const Library = {
       </div>
 
       <div class="card">
+        <h2>加一章 <span class="sub mono" style="color:var(--muted)">逐章录入</span></h2>
+        <p class="hint">上面的整本 txt 是给「已经有全本」的情况。
+          <b>连载中、或者一章一章写的，用这里</b> ——
+          原来批量入口是唯一的入口，只有一章要加的人只能去拼一个假的整本再拖进来。<br>
+          章号留空就接着往后排；填了就插到那个位置。</p>
+        <div class="grid g2">
+          <div><label>章号（可留空）</label>
+            <input id="one-order" type="number" min="1" placeholder="留空 = 接着排"></div>
+          <div><label>标题</label>
+            <input id="one-title" placeholder="第三章 · 夜访"></div>
+        </div>
+        <label style="margin-top:8px">正文</label>
+        <textarea id="one-body" rows="9" placeholder="把这一章的正文粘进来"></textarea>
+        <div class="row" style="margin-top:9px">
+          <button class="btn pri" onclick="Library.addOne(this)">加入书架</button>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>章节
           <span class="sub mono" style="color:var(--muted)">
             ${data.total ? `${from}–${to} / ${data.total}` : "0"}
@@ -905,6 +924,27 @@ const Library = {
       logOk(`已删除 ${r.deleted} 章`);
       App.refresh();
     } catch (e) { logErr(e.message); }
+  },
+
+  // 逐章录入。整本导入是给「已经有全本」的情况，
+  // 而连载中的小说是一章一章来的 —— 原来没有这个入口，
+  // 只有一章要加的人只能去拼一个假的整本 txt 再拖进来
+  async addOne(btn) {
+    const g = id => (document.getElementById(id) || {}).value || "";
+    const title = g("one-title").trim();
+    const body = g("one-body");
+    const orderRaw = g("one-order").trim();
+    if (!body.trim()) { logErr("正文是空的"); return; }
+    const payload = {title: title || null, content: body};
+    if (orderRaw) payload.order_no = parseInt(orderRaw, 10);
+    await run(btn, async () => {
+      const r = await api("POST", `/novels/${State.novelId}/chapters`, payload);
+      logOk(`第 ${r.order_no} 章「${r.title || "无标题"}」已加入，${r.word_count} 字`);
+      ["one-title", "one-body", "one-order"].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = "";
+      });
+      App.refresh();
+    }, "加入中");
   },
 
   go(p) { this.page = Math.max(0, p); App.refresh(); },
