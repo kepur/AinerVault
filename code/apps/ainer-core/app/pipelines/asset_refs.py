@@ -24,7 +24,7 @@ from app.models import (
     Asset, AssetKindSpec, AssetSpec, AssetVariant, ReviewStatus, WorldProfile,
     WorldTransform,
 )
-from app.pipelines.base import PipelineError, as_text
+from app.pipelines.base import PipelineError, as_text, checkpoint
 
 log = logging.getLogger(__name__)
 
@@ -317,6 +317,7 @@ def generate_refs(
                 novel_id=transform.novel_id,
             )
             result.submitted += 1
+            checkpoint(db)   # 这一张已经付过费了，先落库
             result.tasks.append({
                 "variant_id": variant.id, "asset": spec.display_name,
                 "kind": spec.kind.value, "capability": cap.value,
@@ -351,6 +352,7 @@ def generate_refs(
         )
         variant.gen_note = None if not hasattr(variant, "gen_note") else None
         result.submitted += 1
+        checkpoint(db)   # 同上
         result.tasks.append({
             "variant_id": variant.id,
             "asset": spec.display_name,

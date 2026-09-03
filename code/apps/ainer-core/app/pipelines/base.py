@@ -113,6 +113,28 @@ def as_int(value: Any, default: int = 0, *, lo: int | None = None,
     return n
 
 
+
+def checkpoint(db: Session, *, why: str = "") -> None:
+    """把已经完成的那一步立刻落库。
+
+    **同步方言下每次 submit_task 都是一次已经付过费的模型调用。**
+    而 `get_db` 只在请求末尾 commit —— 出 30 张图是一次 HTTP 请求里
+    串行调 30 次模型、约 40 分钟，其间任何一处异常（哪怕只是客户端
+    等不及断开）都会让事务回滚：30 张图全生成、全付费、甚至已经
+    落盘到 var/media，但 gen_tasks 与 assets 一条不留，重跑要重新付一遍。
+
+    所以长循环里每完成一项就 checkpoint 一次。代价是三十次 COMMIT，
+    换来的是「花掉的钱一定留得住」。
+
+    expire_on_commit=False，所以 commit 之后循环里的对象仍可直接用，
+    不会因为 commit 触发一轮重新加载。
+    """
+    try:
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        raise
+
 def fingerprint(*parts: Any) -> str:
     blob = json.dumps(parts, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()

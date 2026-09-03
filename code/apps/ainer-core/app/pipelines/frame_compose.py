@@ -30,7 +30,7 @@ from app.models import (
     EntityWorldVisual, FrameRole, FrameSpec, ReviewStatus, Scene, Shot, ShotAssetBinding,
     ShotPlan, SpecStatus, WorldEntity, WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, as_items, as_list
+from app.pipelines.base import PipelineError, as_items, as_list, checkpoint
 from app.pipelines.epochs import compose_epoch_prompt, resolve_epoch
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
 
@@ -737,6 +737,7 @@ def generate_first_frames(
         frame.gen_task_id = task.id
         frame.status = SpecStatus.generating
         result.submitted_first += 1
+        checkpoint(db)   # 这一张已经付过费了，先落库
 
     db.flush()
     return result
@@ -819,6 +820,7 @@ def generate_last_frames(
         frame.gen_task_id = task.id
         frame.status = SpecStatus.generating
         result.submitted_last += 1
+        checkpoint(db)   # 同上
 
     db.flush()
     return result

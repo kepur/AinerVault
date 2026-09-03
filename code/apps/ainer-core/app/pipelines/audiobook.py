@@ -25,7 +25,7 @@ from app.models import (
     WorldTransform,
 )
 from app.pipelines import casting
-from app.pipelines.base import PipelineError
+from app.pipelines.base import PipelineError, checkpoint
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +246,7 @@ def generate_audiobook(
         spec.gen_task_id = task.id
         spec.status = SpecStatus.generating
         result.submitted += 1
+        checkpoint(db)   # 这一条已经付过费了，先落库
 
     db.flush()
     return result
