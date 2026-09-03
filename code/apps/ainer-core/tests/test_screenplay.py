@@ -153,3 +153,67 @@ class TestQuoteLossInTranslation:
         assert sp.has_quotes("「不巧。」")
         assert sp.has_quotes('"Not so fortunate."')
         assert not sp.has_quotes("Not so fortunate.")
+
+
+class TestVisibleChange:
+    """首尾帧之间必须有看得见的变化。
+
+    实跑里分镜给的是：
+        镜 3  油布掀开声响结束，沈砚依然静坐
+        镜 4  门外传来低骂声，沈砚依然静止
+        镜 8  裴无咎收起笑容，铁钎直立地面   ← 这一句被七个镜头共用
+    「声响结束」在画面上什么都不变，「依然静坐」是明说不动。
+    首尾帧于是几乎相同，i2v 插不出任何东西 —— 那就是幻灯片。
+    30 镜里有 24 镜是这样。
+    """
+
+    def test_physical_action_passes(self):
+        for t in ("他向前走两步，推开药匣子", "沈砚推门而出，站起身来",
+                  "he steps forward and opens the chest"):
+            ok, _ = sp.is_visible_change(t)
+            assert ok, t
+
+    def test_sound_only_is_rejected(self):
+        ok, why = sp.is_visible_change("门外脚步声由远及近")
+        assert not ok and "声音" in why
+
+    def test_explicit_no_change_is_rejected_first(self):
+        """判据顺序有讲究：「油布掀开声响结束，沈砚依然静坐」里
+        「掀开」是可见动词，但整句的意思是「什么都没变」——
+        先看动词会判成通过。"""
+        ok, why = sp.is_visible_change("油布掀开声响结束，沈砚依然静坐")
+        assert not ok and "没有变化" in why
+
+    def test_expression_change_is_rejected(self):
+        """表情微变在五秒的镜头里看不出来。"""
+        ok, _ = sp.is_visible_change("裴无咎收起笑容，铁钎直立地面")
+        assert not ok
+
+    def test_empty_is_rejected_with_its_own_reason(self):
+        ok, why = sp.is_visible_change("")
+        assert not ok and "没有写" in why
+
+    def test_duplicates_are_found(self):
+        """几镜共用同一句，意味着那几镜的尾帧长得一样，
+        剪在一起像同一个画面播了几遍 ——
+        重复本身就是「这几镜其实没分开」的证据。"""
+        dups = sp.duplicate_changes([(8, "A"), (10, "A"), (12, "A"), (9, "B")])
+        assert dups == [{"text": "A", "shots": [8, 10, 12]}]
+
+    def test_blank_instructions_are_not_counted_as_duplicates(self):
+        assert sp.duplicate_changes([(1, ""), (2, None), (3, "  ")]) == []
+
+
+class TestShotPlanPrompt:
+    def test_prompt_demands_a_physical_action(self):
+        """原来的提示词写的是「变化要小而明确」，模型照做了，
+        于是写出「依然静坐」—— 那不是模型不听话，
+        是没人告诉过它「变化必须看得见」。"""
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan)
+        assert "必须是一个看得见的物理动作" in src
+        assert "脚步声由远及近" in src      # 反例要写进去
+        assert "每一镜的变化说明必须互不相同" in src

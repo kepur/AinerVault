@@ -292,3 +292,82 @@ def translation_junk(text: str) -> list[str]:
     out += sorted({m.group(0).strip() for m in _JUNK.finditer(text or "")
                    if m.group(0).strip()})
     return sorted(set(out))
+
+
+# ── 首尾帧之间必须有「看得见的变化」 ──────────────────────────────────────────
+#
+# 实跑里分镜给出的变化说明是这样的：
+#
+#     镜 3  油布掀开声响结束，沈砚依然静坐
+#     镜 4  门外传来低骂声，沈砚依然静止
+#     镜 8  裴无咎收起笑容，铁钎直立地面
+#     镜 10 裴无咎收起笑容，铁钎直立地面      ← 与镜 8 一字不差
+#
+# 「声响结束」「传来低骂」在画面上什么都不变；「依然静坐」是明说不动。
+# 首尾帧于是几乎相同，i2v 插不出任何东西 —— 那就是幻灯片。
+#
+# **这不是模型不听话，是没人告诉过它「变化必须看得见」。**
+# 提示词里要写死，规则层要能判出来。
+
+#: 只有声音、没有画面的说法
+_SOUND_ONLY = (
+    "声", "响", "音", "听", "喊", "叫", "骂", "笑声", "脚步",
+    "sound", "noise", "voice", "heard", "audible", "footstep",
+)
+
+#: 明说「不动」的说法。**这类最要命** —— 它把「这一镜没有变化」
+#: 写成了一句看起来像变化说明的话，评审时一眼扫过去还以为填了
+_NO_CHANGE = (
+    "依然", "仍然", "仍旧", "保持不变", "未动", "不动", "静止", "不变",
+    "no change", "remains", "unchanged", "still seated", "motionless",
+)
+
+#: 看得见的动作。人在画面里能看到的位移、开合、抬落、器物移动
+_VISIBLE = (
+    "走", "跑", "站", "坐下", "起身", "转身", "俯身", "抬", "低头", "伸手",
+    "推", "拉", "开", "关", "拔", "举", "放下", "递", "接", "掀", "撬开",
+    "跪", "倒", "扑", "挥", "指", "握紧", "松开", "迈", "退",
+    "walk", "step", "stand", "sit", "rise", "turn", "lean", "reach",
+    "push", "pull", "open", "close", "draw", "lift", "lower", "hand",
+    "kneel", "fall", "swing", "point", "grip", "release", "enter", "exit",
+)
+
+
+def is_visible_change(text: str | None) -> tuple[bool, str]:
+    """首尾帧之间的变化看不看得见。返回（看得见, 说不清的理由）。
+
+    判据顺序有讲究：**先排除「明说不动」**。
+    「油布掀开声响结束，沈砚依然静坐」里有「掀开」这个可见动词，
+    可整句的意思是「什么都没变」—— 先看动词会判成通过。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False, "没有写变化说明，尾帧无从派生"
+    low = raw.lower()
+
+    if any(w in raw or w in low for w in _NO_CHANGE):
+        return False, ("这句话说的是「没有变化」。首尾帧会几乎相同，"
+                       "i2v 插不出任何东西 —— 需要一个看得见的动作："
+                       "走动、开门、拔刀、抬手")
+    if any(w in raw or w in low for w in _VISIBLE):
+        return True, ""
+    if any(w in raw or w in low for w in _SOUND_ONLY):
+        return False, ("这是声音上的变化，画面上什么都不变。"
+                       "声音归音轨，首尾帧要的是看得见的动作")
+    return False, ("看不出这一镜有什么在动。首尾帧要的是物体或人的位移、"
+                   "开合、抬落 —— 比如「他向前走两步」「推开药匣子」")
+
+
+def duplicate_changes(items: list[tuple[int, str | None]]) -> list[dict[str, Any]]:
+    """哪些镜头的变化说明是重复的。
+
+    实跑里镜 8/10/12/14 用了同一句「裴无咎收起笑容，铁钎直立地面」——
+    四个镜头的尾帧因此长得一样，剪在一起像同一个画面播了四遍。
+    **重复本身就是「这几镜其实没分开」的证据。**
+    """
+    seen: dict[str, list[int]] = {}
+    for order_no, text in items:
+        key = (text or "").strip()
+        if key:
+            seen.setdefault(key, []).append(order_no)
+    return [{"text": k, "shots": v} for k, v in seen.items() if len(v) > 1]

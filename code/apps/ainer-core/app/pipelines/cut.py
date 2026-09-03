@@ -152,6 +152,8 @@ def build_timeline(
     #: 需要补机位的镜头。切成几段只是权宜 ——
     #: 真正该做的是让分镜按「一个镜头能承载多长」切，而不是按段落切
     needs_coverage: list[dict[str, Any]] = []
+    #: 首尾帧之间没有可见变化的镜头 —— 成片里就是静止画面
+    still_shots: list[dict[str, Any]] = []
     cursor = 0
 
     for shot in shots:
@@ -208,6 +210,19 @@ def build_timeline(
             gaps.append({"track": "video", "shot": shot.order_no,
                          "why": "既没有视频也没有首帧，这一镜是黑的",
                          "fix": "去「章节工作台」出首帧"})
+
+        # **首尾帧之间有没有看得见的变化。**
+        # 「脚步声渐近」「他依然静坐」在画面上什么都不变，
+        # i2v 插不出任何东西 —— 那一镜在成片里就是一张静止画面停几秒。
+        # 缺图会黑屏（看得出来），缺变化只是「有点闷」（看不出原因）。
+        vis_ok, vis_why = sp.is_visible_change(
+            last.derive_instruction if last else None)
+        if not vis_ok:
+            still_shots.append({
+                "shot": shot.order_no,
+                "instruction": (last.derive_instruction if last else None),
+                "why": vis_why,
+            })
 
         # **一镜太长就切成几段画面，声音不动。**
         #
@@ -328,6 +343,12 @@ def build_timeline(
         "gaps": gaps,
         "retimed": retimed,
         "needs_coverage": needs_coverage,
+        "still_shots": still_shots,
+        "duplicate_changes": sp.duplicate_changes(
+            [(s_.order_no,
+              (frames.get(s_.id, {}).get(FrameRole.last.value).derive_instruction
+               if frames.get(s_.id, {}).get(FrameRole.last.value) else None))
+             for s_ in shots]),
         "notes": (
             "影片投影：**旁白不出现** —— 那是小说的手法，影片里由画面承担。"
             if not voiceover else
@@ -389,7 +410,8 @@ def _empty(chapter, plan, aspect, fps, voiceover) -> dict[str, Any]:
                    for t, n, l in TRACKS if not (t == "narration" and not voiceover)],
         "gaps": [{"track": "video", "shot": 0, "why": "这一章还没有分镜",
                   "fix": "先到「剧本转换」编译分镜"}],
-        "retimed": [], "needs_coverage": [],
+        "retimed": [], "needs_coverage": [], "still_shots": [],
+        "duplicate_changes": [],
         "notes": "这一章还没有分镜。",
     }
 
