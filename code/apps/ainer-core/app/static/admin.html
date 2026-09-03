@@ -368,6 +368,7 @@ const DRILL = [
   {id:"novel",   ico:"📖", name:"小说工作台", sub:"整本共享的素材 · 章节列表"},
   {id:"chapter", ico:"📄", name:"章节工作台", sub:"这一章的十步 · 现在该做哪一步"},
   {id:"media",   ico:"🗂", name:"资源库", sub:"这本书的全部图片 音频 视频 · 用在哪"},
+  {id:"cut",     ico:"🎬", name:"剪辑台", sub:"多轨时间线 · 播放 · 导出成片"},
 ];
 const ALL_PAGES = [...PAGES, ...DRILL];
 
@@ -3424,7 +3425,9 @@ const ChapterDesk = {
             <span class="mono" style="color:var(--muted)">${
               nx.total ? nx.done + "/" + nx.total : ""}</span></span>
           <button class="btn pri" onclick="goto('${nx.page}','${
-            d.novel ? d.novel.id : ""}','${d.id}','${d.novel ? (d.novel.transform_id||"") : ""}')">去做 →</button></div>`
+            d.novel ? d.novel.id : ""}','${d.id}','${d.novel ? (d.novel.transform_id||"") : ""}')">去做 →</button>
+          <button class="btn" onclick="goto('cut','${d.novel ? d.novel.id : ""}','${d.id}')"
+            >🎬 剪辑台 · 播一遍看看</button></div>`
         : `<span class="tag t-ok">这一章十步都走完了</span>`}
       </div>
 
@@ -3545,6 +3548,267 @@ const MediaLib = {
   page(d) { this.offset = Math.max(0, this.offset + d*60); App.refresh(); },
 };
 
+
+// ── 剪辑台 ────────────────────────────────────────────────────────────────
+// 前两种投影是「给下游程序的 JSON」与「给人照着手搓的提示词」。
+// 这是第三种：**给眼睛和耳朵**。
+//
+// 它回答的是前两种回答不了的那个问题：**拼起来到底是什么样**。
+// 分镜看着合理、每张图单看都不错、每句配音单听都对，连起来却可能
+// 这一镜停三秒没事发生、下一镜台词还没说完就切了 —— 只有播一遍才知道。
+//
+// 播放靠一个**软时钟**驱动，不靠某一条音轨当主时钟：
+// 音频是一堆独立的短片段，随时可能缺一段（还没生成），
+// 拿其中任何一条当基准，缺了它整条时间线就停摆。
+const CutRoom = {
+  tl: null, t: 0, playing: false, raf: 0, last: 0,
+  mute: {}, voiceover: false,
+
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」或控制台选一个章节</div></div>`;
+      return;
+    }
+    const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`).catch(()=>null);
+    const pid = plan && plan.shot_plan_id;
+    if (!pid) {
+      v.innerHTML = `<div class="card"><h2>剪辑台</h2>
+        <p class="hint">这一章还没有分镜。</p>
+        <button class="btn pri" onclick="goto('script')">去编译分镜</button></div>`;
+      return;
+    }
+    this.pid = pid;
+    const d = await api("GET",
+      `/shot-plans/${pid}/timeline?voiceover=${this.voiceover}`);
+    this.tl = d; this.stop();
+
+    const secs = d.duration_ms/1000;
+    v.innerHTML = `
+      <div class="card">
+        <h2>剪辑台 · ${h(d.chapter.title || "")}
+          <span class="sub mono" style="color:var(--muted)">${d.shots} 镜 ·
+            ${Math.floor(secs/60)}分${Math.round(secs%60)}秒 · ${d.aspect_ratio} ·
+            ${h(d.language||"")}</span></h2>
+        <p class="hint">${h(d.notes)}<br>
+          没出视频的镜头用<b>首尾帧交叉溶解</b>顶上 —— 静止两张图也远比黑屏有用，
+          而且一眼看得出这一镜还没出视频。</p>
+        <div class="row">
+          <label style="font-size:12px;color:var(--muted)">
+            <input type="checkbox" ${d.voiceover?"checked":""}
+              onchange="CutRoom.setVO(this.checked)"> 保留旁白（有声书式）</label>
+          <button class="btn" onclick="CutRoom.export(this)">导出成片 .mp4</button>
+          <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.srt" target="_blank">字幕 .srt</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <div id="cut-stage" style="position:relative;width:100%;max-width:760px;margin:0 auto;
+             aspect-ratio:${(d.aspect_ratio||'16:9').replace(':','/')};background:#000;
+             border-radius:8px;overflow:hidden">
+          <img id="cut-a" style="position:absolute;inset:0;width:100%;height:100%;
+               object-fit:cover;opacity:1">
+          <img id="cut-b" style="position:absolute;inset:0;width:100%;height:100%;
+               object-fit:cover;opacity:0">
+          <video id="cut-v" style="position:absolute;inset:0;width:100%;height:100%;
+                 object-fit:cover;display:none" muted playsinline></video>
+          <div id="cut-sub" style="position:absolute;left:0;right:0;bottom:14px;
+               text-align:center;font-size:15px;color:#fff;text-shadow:0 1px 3px #000;
+               padding:0 22px;line-height:1.4"></div>
+        </div>
+        <div class="row" style="margin-top:10px;align-items:center">
+          <button class="btn pri" id="cut-play" onclick="CutRoom.toggle()">▶ 播放</button>
+          <span class="mono" id="cut-time" style="font-size:12px;color:var(--muted)">
+            00:00.0 / ${CutRoom.fmt(d.duration_ms)}</span>
+          <span id="cut-shot" class="tag t-mute">镜 —</span>
+          <input type="range" id="cut-seek" min="0" max="${d.duration_ms}" value="0"
+            style="flex:1;min-width:180px" oninput="CutRoom.seek(+this.value)">
+        </div>
+      </div>
+
+      ${d.gaps.length ? `<div class="card">
+        <h2>⚠ 缺口 <span class="tag t-bad">${d.gaps.length}</span></h2>
+        ${this.gapList(d.gaps)}</div>` : ""}
+      ${d.retimed.length ? `<div class="card">
+        <h2>镜头长度被重算 <span class="tag t-warn">${d.retimed.length} 镜</span></h2>
+        <p class="hint">镜头时长本来按「对白+旁白」的真实时长回填。
+          影片投影里旁白不出现，只有旁白的镜头就失去了长度依据 ——
+          画面停在那里不动，观众会以为卡住了。这些按画面拍子重算。</p>
+        ${d.retimed.slice(0,8).map(r=>`<div class="gap" style="margin-bottom:6px">
+          <div class="gh"><b style="color:var(--ink)">镜 ${r.shot}</b>
+          <span class="mono" style="color:var(--muted)">${(r.from_ms/1000).toFixed(1)}s →
+            ${(r.to_ms/1000).toFixed(1)}s</span></div>
+          <div class="eff">${h(r.why)}</div></div>`).join("")}
+      </div>` : ""}
+
+      <div class="card">
+        <h2>轨道</h2>
+        <div id="cut-tracks">${d.tracks.map(t=>this.track(t, d.duration_ms)).join("")}</div>
+      </div>`;
+
+    this.mount();
+  },
+
+  gapList(gaps) {
+    const by = {};
+    gaps.forEach(g => { const k=g.why+"|"+g.fix;
+      (by[k] = by[k] || {...g, shots:[]}).shots.push(g.shot); });
+    return Object.values(by).map(x=>`<div class="gap" style="margin-bottom:6px">
+      <div class="gh"><b style="color:var(--ink)">${h(x.why)}</b>
+        <span class="tag t-mute">镜 ${x.shots.slice(0,10).join("、")}${
+          x.shots.length>10?" 等":""}</span></div>
+      <div class="eff">${h(x.fix)}</div></div>`).join("");
+  },
+
+  track(t, total) {
+    const muted = this.mute[t.id];
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <button class="btn" style="width:88px;padding:3px 6px;font-size:11px;
+        opacity:${muted?.45:1}" onclick="CutRoom.toggleMute('${t.id}')"
+        title="${muted?"已静音":"点击静音"}">${muted?"🔇":"🔊"} ${h(t.name)}</button>
+      <div style="flex:1;position:relative;height:20px;background:var(--panel-2);
+           border-radius:3px;overflow:hidden">
+        ${t.clips.map(c=>{
+          const ready = c.ready || c.video_url || c.first_url;
+          const kind = c.kind || "";
+          const col = kind==="video" ? "var(--accent)"
+                    : kind==="stills" ? "var(--warn)"
+                    : kind==="black" ? "var(--danger)"
+                    : ready ? "var(--accent)" : "var(--line)";
+          return `<div title="镜${c.shot} ${(c.text||c.label||"").slice(0,40)}"
+            style="position:absolute;left:${(c.start_ms/total*100).toFixed(3)}%;
+            width:${Math.max(0.3,c.duration_ms/total*100).toFixed(3)}%;top:2px;bottom:2px;
+            background:${col};opacity:.85;border-radius:2px;
+            border-right:1px solid #0002"></div>`;}).join("")}
+        <div class="cut-head" style="position:absolute;top:0;bottom:0;width:2px;
+             background:var(--danger);left:0;pointer-events:none"></div>
+      </div>
+      <span class="mono" style="width:52px;font-size:11px;color:var(--muted);text-align:right"
+        >${t.ready}/${t.total}</span>
+    </div>`;
+  },
+
+  // ── 播放 ──
+  // 每条音频一个 <audio>，按时间码起播。**不预加载全部** ——
+  // 一章上百个片段，全预载会让页面开头卡好几秒
+  mount() {
+    this.audio = [];
+    (this.tl.tracks||[]).forEach(t => {
+      if (t.layer !== "audio") return;
+      t.clips.forEach(c => {
+        if (!c.url) return;
+        const el = new Audio(); el.preload = "none"; el.src = c.url;
+        this.audio.push({el, track: t.id, start: c.start_ms,
+                         end: c.start_ms + (c.duration_ms || 0), started: false});
+      });
+    });
+    this.paint(0);
+  },
+
+  toggle() { this.playing ? this.stop() : this.play(); },
+
+  play() {
+    if (!this.tl) return;
+    this.playing = true;
+    $("#cut-play").textContent = "⏸ 暂停";
+    this.last = performance.now();
+    const step = (now) => {
+      if (!this.playing) return;
+      this.t += (now - this.last); this.last = now;
+      if (this.t >= this.tl.duration_ms) { this.t = this.tl.duration_ms; this.stop(); }
+      this.paint(this.t);
+      this.raf = requestAnimationFrame(step);
+    };
+    this.raf = requestAnimationFrame(step);
+  },
+
+  stop() {
+    this.playing = false;
+    cancelAnimationFrame(this.raf);
+    const b = $("#cut-play"); if (b) b.textContent = "▶ 播放";
+    (this.audio||[]).forEach(a => { a.el.pause(); a.started = false; });
+    const v = $("#cut-v"); if (v) v.pause();
+  },
+
+  seek(ms) {
+    this.t = ms;
+    (this.audio||[]).forEach(a => { a.el.pause(); a.started = false; });
+    this.paint(ms);
+  },
+
+  paint(ms) {
+    const d = this.tl; if (!d) return;
+    const vt = d.tracks.find(t => t.id === "video");
+    const cur = vt && vt.clips.find(c => ms >= c.start_ms && ms < c.start_ms + c.duration_ms);
+
+    const a = $("#cut-a"), b = $("#cut-b"), vid = $("#cut-v");
+    if (cur && a) {
+      if (cur.video_url) {
+        vid.style.display = "block"; a.style.opacity = 0; b.style.opacity = 0;
+        if (vid.src !== cur.video_url) vid.src = cur.video_url;
+        const into = (ms - cur.start_ms) / 1000;
+        if (this.playing && vid.paused) { vid.currentTime = into; vid.play().catch(()=>{}); }
+        if (!this.playing && !vid.paused) vid.pause();
+      } else {
+        vid.style.display = "none";
+        // 首尾帧交叉溶解：**这就是「这一镜还没出视频」的样子**，
+        // 不假装成一段真视频
+        if (a.src !== (cur.first_url||"")) a.src = cur.first_url || "";
+        if (b.src !== (cur.last_url||"")) b.src = cur.last_url || "";
+        const p = (ms - cur.start_ms) / Math.max(1, cur.duration_ms);
+        const x = cur.last_url ? Math.max(0, Math.min(1, (p - 0.35) / 0.5)) : 0;
+        a.style.opacity = 1 - x; b.style.opacity = x;
+      }
+    }
+
+    (this.audio||[]).forEach(x => {
+      const inside = ms >= x.start && ms < x.end;
+      const on = this.playing && inside && !this.mute[x.track];
+      if (on && !x.started) {
+        x.el.currentTime = Math.max(0, (ms - x.start)/1000);
+        x.el.play().catch(()=>{}); x.started = true;
+      } else if (!on && x.started) { x.el.pause(); x.started = false; }
+    });
+
+    // 字幕：只显示当前正在说的那一句
+    const sub = $("#cut-sub");
+    if (sub) {
+      let line = "";
+      for (const t of d.tracks) {
+        if (t.id !== "dialogue" && t.id !== "narration") continue;
+        const c = t.clips.find(c => ms >= c.start_ms && ms < c.start_ms + c.duration_ms);
+        if (c && c.text) { line = (c.speaker ? c.speaker + "：" : "") + c.text; break; }
+      }
+      sub.textContent = line;
+    }
+
+    const tm = $("#cut-time");
+    if (tm) tm.textContent = `${CutRoom.fmt(ms)} / ${CutRoom.fmt(d.duration_ms)}`;
+    const sh = $("#cut-shot");
+    if (sh) sh.textContent = cur ? `镜 ${cur.shot}` : "镜 —";
+    const sk = $("#cut-seek"); if (sk && this.playing) sk.value = ms;
+    document.querySelectorAll(".cut-head").forEach(el => {
+      el.style.left = (ms / Math.max(1, d.duration_ms) * 100).toFixed(3) + "%";
+    });
+  },
+
+  toggleMute(id) { this.mute[id] = !this.mute[id]; App.refresh(); },
+  setVO(on) { this.voiceover = on; App.refresh(); },
+
+  fmt(ms) {
+    const s = Math.max(0, ms)/1000;
+    return `${String(Math.floor(s/60)).padStart(2,"0")}:${(s%60).toFixed(1).padStart(4,"0")}`;
+  },
+
+  async export(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/shot-plans/${this.pid}/render`,
+                          {voiceover: this.voiceover});
+      logOk(`成片已导出：${(r.bytes/1048576).toFixed(1)} MB　${r.note}`);
+      window.open(r.url, "_blank");
+    }, "导出中（逐镜编码，一章要几分钟）");
+  },
+};
+
 const Tasks = {
   async render(v) {
     const [sum, list] = await Promise.all([
@@ -3656,6 +3920,7 @@ const App = {
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
     const R = {console:Console, novel:NovelDesk, chapter:ChapterDesk, media:MediaLib,
+               cut:CutRoom,
                settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,

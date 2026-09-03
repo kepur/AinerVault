@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import subprocess
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -348,4 +350,39 @@ def compile_soundscape(plan_id: str, transform_id: str = Query(...),
     try:
         return soundscape.compile_soundscape(db, plan, t).as_dict()
     except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# ── 剪辑台 ────────────────────────────────────────────────────────────────────
+
+class RenderIn(BaseModel):
+    voiceover: bool = False
+    width: int = 1280
+    height: int = 720
+    fps: int = 24
+
+
+@router.get("/shot-plans/{plan_id}/timeline")
+def get_timeline(plan_id: str, voiceover: bool = Query(False),
+                 db: Session = Depends(get_db)) -> dict:
+    """可播放的时间线。轨道排开、按时间码对齐。"""
+    from app.pipelines import cut
+
+    return cut.build_timeline(db, _plan(db, plan_id), voiceover=voiceover)
+
+
+@router.post("/shot-plans/{plan_id}/render")
+def render_cut(plan_id: str, body: RenderIn, db: Session = Depends(get_db)) -> dict:
+    """把时间线渲成一支 mp4。"""
+    from app.pipelines import cut
+
+    if not cut.ffmpeg_available():
+        raise HTTPException(
+            status_code=422,
+            detail="这台机器上没有 ffmpeg。剪辑台仍可在浏览器里预览播放，"
+                   "导出成片需要先装 ffmpeg。")
+    try:
+        return cut.render(db, _plan(db, plan_id), voiceover=body.voiceover,
+                          width=body.width, height=body.height, fps=body.fps)
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
