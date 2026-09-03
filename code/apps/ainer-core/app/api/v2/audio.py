@@ -371,6 +371,25 @@ def get_timeline(plan_id: str, voiceover: bool = Query(False),
     return cut.build_timeline(db, _plan(db, plan_id), voiceover=voiceover)
 
 
+class VideoGenIn(BaseModel):
+    limit: int = 6
+    regenerate: bool = False
+    max_ms: int | None = None
+
+
+@router.post("/shot-plans/{plan_id}/videos:generate")
+def generate_shot_videos(plan_id: str, body: VideoGenIn,
+                         db: Session = Depends(get_db)) -> dict:
+    """给镜头出图生视频。limit 默认很小 —— 一支两三分钟且按次计费。"""
+    from app.pipelines import cut
+
+    try:
+        return cut.generate_videos(db, _plan(db, plan_id), limit=body.limit,
+                                   regenerate=body.regenerate, max_ms=body.max_ms)
+    except CapabilityError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/shot-plans/{plan_id}/render")
 def render_cut(plan_id: str, body: RenderIn, db: Session = Depends(get_db)) -> dict:
     """把时间线渲成一支 mp4。"""

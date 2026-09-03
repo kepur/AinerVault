@@ -149,6 +149,9 @@ def build_timeline(
     clips: dict[str, list[dict[str, Any]]] = {t[0]: [] for t in TRACKS}
     gaps: list[dict[str, Any]] = []
     retimed: list[dict[str, Any]] = []
+    #: 需要补机位的镜头。切成几段只是权宜 ——
+    #: 真正该做的是让分镜按「一个镜头能承载多长」切，而不是按段落切
+    needs_coverage: list[dict[str, Any]] = []
     cursor = 0
 
     for shot in shots:
@@ -182,15 +185,10 @@ def build_timeline(
         # 台词比上限还长时**不砍台词** —— 砍了话就说不完。
         # 那种镜头要拆成两镜，而拆镜是分镜那一步的事，这里只报出来。
         capped, cap_why = sp.clamp_shot_ms(dur, action=action_beat)
-        if capped != dur and voiced_ms and capped < dur:
-            gaps.append({
-                "track": "video", "shot": shot.order_no,
-                "why": f"台词 {dur/1000:.1f}s 超过{'动态' if action_beat else '静态'}"
-                       f"场景上限，这一镜该拆成两镜",
-                "fix": "回「剧本转换」把这一段拆成两个镜头",
-            })
-        elif capped != dur:
+        if capped != dur and not voiced_ms:
             dur, why = capped, cap_why or why
+        # 有台词且超上限的不在这里砍 —— 砍了话就说不完。
+        # 它们在下面按「画面拍子」切成多段，声音仍然连续。
 
         if abs(dur - shot.duration_ms) > 500:
             retimed.append({
@@ -211,20 +209,44 @@ def build_timeline(
                          "why": "既没有视频也没有首帧，这一镜是黑的",
                          "fix": "去「章节工作台」出首帧"})
 
-        clips["video"].append({
-            "key": f"video:{shot.order_no}", "shot": shot.order_no,
-            "start_ms": cursor, "duration_ms": dur,
-            "video_url": video_url,
-            # 没有视频时用首尾帧做一次交叉溶解 —— 静止两张图也比黑屏好，
-            # 而且它正好说明了「这一镜还没出视频」
-            "first_url": first_url, "last_url": last_url,
-            "label": (shot.description or "").strip()[:48] or f"镜 {shot.order_no}",
-            "shot_size": shot.shot_size,
-            "motion": (motion.motion_prompt_en if motion else None),
-            "scene": (scenes.get(shot.scene_id or "").title
-                      if scenes.get(shot.scene_id or "") else None),
-            "kind": "video" if video_url else ("stills" if first_url else "black"),
-        })
+        # **一镜太长就切成几段画面，声音不动。**
+        #
+        # 这是让成片不像 PPT 的第一因，比缺 i2v 更靠前：分镜是按段落切的，
+        # 一段二十秒的台词就得到一个二十秒的镜头。而首尾帧之间超过五秒
+        # i2v 就插不动了，剩下的时间画面是静止的 —— 那就是幻灯片。
+        #
+        # 真实剪辑里，一段长台词本来就由好几个镜头覆盖（说话人、听者、手、
+        # 环境）。这里没有那么多素材，退而求其次：把同一对首尾帧切成几段，
+        # 每段独立走一次 i2v。**切点数量报出来** ——
+        # 它等于「这一镜缺几个机位」，是回头补分镜的依据。
+        n_seg = 1
+        seg_cap = sp.ACTION_MAX_MS if action_beat else sp.STATIC_MAX_MS
+        if dur > seg_cap:
+            n_seg = -(-dur // seg_cap)      # 向上取整
+            needs_coverage.append({
+                "shot": shot.order_no, "duration_ms": dur, "segments": n_seg,
+                "why": f"{dur/1000:.1f}s 的镜头切成 {n_seg} 段画面；"
+                       f"真正该做的是补 {n_seg - 1} 个机位",
+            })
+        seg_ms = dur // n_seg
+        for k in range(n_seg):
+            start = cursor + k * seg_ms
+            length = (dur - k * seg_ms) if k == n_seg - 1 else seg_ms
+            clips["video"].append({
+                "key": f"video:{shot.order_no}.{k}", "shot": shot.order_no,
+                "seg": k, "segments": n_seg,
+                "start_ms": start, "duration_ms": length,
+                "video_url": video_url,
+                "first_url": first_url, "last_url": last_url,
+                "label": ((shot.description or "").strip()[:48]
+                          or f"镜 {shot.order_no}")
+                         + (f" · 第 {k+1}/{n_seg} 段" if n_seg > 1 else ""),
+                "shot_size": shot.shot_size,
+                "motion": (motion.motion_prompt_en if motion else None),
+                "scene": (scenes.get(shot.scene_id or "").title
+                          if scenes.get(shot.scene_id or "") else None),
+                "kind": "video" if video_url else ("stills" if first_url else "black"),
+            })
 
         local = _PAD_MS if voiced_ms else 0
         for spec in specs:
@@ -305,6 +327,7 @@ def build_timeline(
         "tracks": out_tracks,
         "gaps": gaps,
         "retimed": retimed,
+        "needs_coverage": needs_coverage,
         "notes": (
             "影片投影：**旁白不出现** —— 那是小说的手法，影片里由画面承担。"
             if not voiceover else
@@ -366,7 +389,7 @@ def _empty(chapter, plan, aspect, fps, voiceover) -> dict[str, Any]:
                    for t, n, l in TRACKS if not (t == "narration" and not voiceover)],
         "gaps": [{"track": "video", "shot": 0, "why": "这一章还没有分镜",
                   "fix": "先到「剧本转换」编译分镜"}],
-        "retimed": [],
+        "retimed": [], "needs_coverage": [],
         "notes": "这一章还没有分镜。",
     }
 
@@ -545,3 +568,107 @@ def _run(cmd: list[str], timeout_sec: int) -> None:
 def to_edl_json(tl: dict[str, Any]) -> str:
     """时间线的机器可读形态，给外部剪辑工具。"""
     return json.dumps(tl, ensure_ascii=False, indent=1)
+
+
+# ── 图生视频 ──────────────────────────────────────────────────────────────────
+
+def generate_videos(
+    db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = False,
+    max_ms: int | None = None,
+) -> dict[str, Any]:
+    """给镜头出 i2v。首尾帧都在的才发 —— 只有首帧的插不出运动。
+
+    **limit 是必须的，不是可选的。** 一支 i2v 两三分钟、额度按次算，
+    一章三十镜就是一小时和三十次额度。没有 limit 的话，
+    一次手滑就把整月的额度花在一章上。
+
+    max_ms 收住单支时长：i2v 在首尾帧之间插值，超过五秒就开始
+    变成慢动作糊影 —— 那正是「看起来像 PPT」的另一半原因。
+    """
+    from app.capability.schemas import Capability
+    from app.models import SpecStatus
+    from app.pipelines.base import checkpoint
+    from app.capability.service import submit_task
+
+    shots = list(db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
+    ).scalars())
+    sids = [s.id for s in shots]
+    frames: dict[str, dict[str, FrameSpec]] = {}
+    for f in db.execute(select(FrameSpec).where(FrameSpec.shot_id.in_(sids))).scalars():
+        frames.setdefault(f.shot_id, {})[f.role.value] = f
+    motions = {m.shot_id: m for m in db.execute(
+        select(ShotMotion).where(ShotMotion.shot_id.in_(sids))).scalars()}
+    assets = _assets(db, [f.asset_id for d in frames.values() for f in d.values()])
+
+    doc = db.get(ScriptDoc, plan.script_doc_id)
+    chapter = db.get(Chapter, doc.chapter_id) if doc else None
+
+    todo: list[tuple[Shot, str, str, int]] = []
+    skipped: list[dict[str, Any]] = []
+    for shot in shots:
+        if shot.video_asset_id and not regenerate:
+            continue
+        pair = frames.get(shot.id, {})
+        a = _url(assets, pair.get(FrameRole.first.value))
+        b = _url(assets, pair.get(FrameRole.last.value))
+        if not a:
+            skipped.append({"shot": shot.order_no, "why": "没有首帧"})
+            continue
+        if not b:
+            # 只有首帧也能出，但那是「从一张图生一段运动」，
+            # 模型自己编运动 —— 与分镜算好的首尾差异无关，说清楚
+            skipped.append({"shot": shot.order_no,
+                            "why": "只有首帧，没有尾帧；出来的运动是模型自己编的，"
+                                   "与分镜算好的首尾差异无关"})
+            continue
+        motion = motions.get(shot.id)
+        action = sp.is_action_beat(
+            shot.description, motion.subject_move if motion else None)
+        cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
+        todo.append((shot, a, b, min(shot.duration_ms, cap)))
+
+    if limit:
+        todo = todo[:limit]
+
+    submitted = []
+    for shot, a, b, dur in todo:
+        motion = motions.get(shot.id)
+        prompt = (motion.motion_prompt_en if motion else None) or _camera_text(shot)
+        task = submit_task(
+            db, Capability.video_i2v,
+            {"first_frame": {"url": a}, "last_frame": {"url": b},
+             "prompt": prompt, "duration_ms": dur},
+            purpose="shot_video", ref_kind="shot", ref_id=shot.id,
+            novel_id=chapter.novel_id if chapter else None,
+            chapter_id=chapter.id if chapter else None,
+            force=regenerate,
+        )
+        out = (task.result_json or {}).get("video") or {}
+        if out.get("url"):
+            from app.models import Asset as _A
+
+            asset = db.execute(
+                select(_A).where(_A.gen_task_id == task.id,
+                                 _A.url == out["url"])).scalars().first()
+            if asset is not None:
+                shot.video_asset_id = asset.id
+                shot.status = SpecStatus.ready
+        submitted.append({"shot": shot.order_no, "task": task.id,
+                          "status": task.status.value,
+                          "duration_ms": dur, "prompt": prompt[:60]})
+        checkpoint(db)      # 一支视频两三分钟且按次计费，出一支落一支
+
+    return {
+        "submitted": len(submitted), "items": submitted,
+        "skipped": skipped,
+        "remaining": max(0, len([s for s in shots if not s.video_asset_id])),
+    }
+
+
+def _camera_text(shot: Shot) -> str:
+    cam = shot.camera_json or {}
+    bits = [str(cam.get("move") or "static").replace("_", " ")]
+    if cam.get("speed") is not None:
+        bits.append(f"speed {cam['speed']}")
+    return ", ".join(bits)

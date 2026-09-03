@@ -3309,8 +3309,13 @@ const Console = {
       ${d.novels.map(n => this.card(n)).join("")}`;
   },
 
+  // **章节直接列在卡片上。**
+  // 原来要「打开工作台 → 章节表 → 进入 → 剪辑台」四步才看得到成品，
+  // 而人打开后台想干的第一件事往往就是「看看第三章做成什么样了」。
   card(n) {
     const nx = n.next;
+    const rows = n.chapter_rows || [];
+    const tf = n.transform_id || "";
     return `<div class="card">
       <h2 style="cursor:pointer" onclick="goto('novel','${n.id}')">
         ${h(n.title)}
@@ -3318,15 +3323,43 @@ const Console = {
           整本素材 ${n.ready}/${n.total_stages}</span>
       </h2>
       <div style="margin:8px 0 4px">${n.stages.map(st =>
-        stageChip(st, {onclick: `goto('${st.page}','${n.id}',null,'${n.transform_id||""}')`})).join("")}</div>
+        stageChip(st, {onclick: `goto('${st.page}','${n.id}',null,'${tf}')`})).join("")}</div>
       <div class="row" style="margin-top:8px;align-items:center">
         ${nx ? `<span style="font-size:13px">下一步：<b style="color:var(--ink)">${h(nx.name)}</b>
             <span class="mono" style="color:var(--muted)">${nx.done}/${nx.total}</span></span>
-          <button class="btn pri" onclick="goto('${nx.page}','${n.id}',null,'${n.transform_id||""}')">去做</button>`
+          <button class="btn pri" onclick="goto('${nx.page}','${n.id}',null,'${tf}')">去做</button>`
         : `<span class="tag t-ok">整本素材已备齐</span>`}
-        <button class="btn" onclick="goto('novel','${n.id}')">打开工作台 →</button>
         <button class="btn" onclick="goto('media','${n.id}')" title="这本书的全部图片 音频 视频">🗂 资源</button>
+        <button class="btn" onclick="goto('novel','${n.id}')">全部章节 →</button>
       </div>
+
+      ${rows.length ? `<table class="tbl" style="margin-top:10px"><thead><tr>
+        <th style="width:38px">章</th><th>标题</th>
+        <th style="width:120px">进度</th><th style="width:150px">下一步</th>
+        <th style="width:170px"></th></tr></thead><tbody>
+        ${rows.map(c => `<tr>
+          <td class="mono">${c.order_no}</td>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            ><b style="color:var(--ink)">${h(c.title||"（无标题）")}</b></td>
+          <td>${c.stages.map(st=>`<span title="${h(st.name)} ${st.done}/${st.total}"
+            style="display:inline-block;width:10px;height:5px;border-radius:2px;margin-right:2px;
+            background:${st.state==="done"?"var(--accent)":st.state==="partial"?"var(--warn)"
+              :st.state==="blocked"?"var(--line)":"var(--line-soft)"}"></span>`).join("")}
+            <span class="mono" style="font-size:11px;color:var(--muted);margin-left:4px"
+              >${c.done_stages}/${c.total_stages}</span></td>
+          <td style="font-size:12px">${c.next
+            ? h(c.next.name)+` <span class="mono" style="color:var(--muted)">${
+                c.next.total?c.next.done+"/"+c.next.total:""}</span>`
+            : `<span class="tag t-ok">走完了</span>`}</td>
+          <td><button class="btn pri" style="padding:3px 8px;font-size:12px"
+              onclick="goto('cut','${n.id}','${c.id}','${tf}')">🎬 成品</button>
+            <button class="btn" style="padding:3px 8px;font-size:12px"
+              onclick="goto('chapter','${n.id}','${c.id}','${tf}')">工作台</button></td>
+        </tr>`).join("")}</tbody></table>
+        ${n.chapter_total > rows.length ? `<div class="sub" style="font-size:12px;
+          color:var(--muted);margin-top:6px">还有 ${n.chapter_total-rows.length} 章 —
+          <a href="#" onclick="goto('novel','${n.id}');return false">全部章节</a></div>` : ""}`
+      : ""}
     </div>`;
   },
 };

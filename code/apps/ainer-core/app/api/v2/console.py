@@ -205,14 +205,27 @@ def _novel_card(db: Session, novel: Novel) -> dict[str, Any]:
 
 @router.get("/console")
 def console(limit: int = Query(50, ge=1, le=200),
+            chapters: int = Query(8, ge=0, le=50),
             db: Session = Depends(get_db)) -> dict:
-    """首页。所有小说 + 各自做到哪了 + 下一步。"""
+    """首页。所有小说 + 各自做到哪了 + 下一步 + **前几章直接列出来**。
+
+    章节原来要「打开工作台 → 章节表 → 进入」三步才看得到，
+    而人打开后台想干的第一件事往往就是「看看第三章做成什么样了」。
+    把前几章带在卡片上，那一步就从三次点击变成零次。
+    """
     novels = list(db.execute(
         select(Novel).order_by(Novel.created_at.desc()).limit(limit)).scalars())
-    return {
-        "novels": [_novel_card(db, n) for n in novels],
-        "count": len(novels),
-    }
+    out = []
+    for n in novels:
+        card = _novel_card(db, n)
+        if chapters:
+            rows = list(db.execute(
+                select(Chapter).where(Chapter.novel_id == n.id)
+                .order_by(Chapter.order_no).limit(chapters)).scalars())
+            card["chapter_rows"] = [_chapter_row(db, c) for c in rows]
+            card["chapter_total"] = _count(db, Chapter, Chapter.novel_id == n.id)
+        out.append(card)
+    return {"novels": out, "count": len(novels)}
 
 
 # ── 章节级 ────────────────────────────────────────────────────────────────────
