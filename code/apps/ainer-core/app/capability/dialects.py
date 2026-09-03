@@ -1327,7 +1327,7 @@ def _sambert_invoke(headers: dict[str, str], *, payload: dict[str, Any],
             CapErrorCode.UPSTREAM_ERROR, f"{use_model} 没有返回音频")
 
     media = store_bytes(bytes(raw), mime="audio/wav")
-    dur = _wav_duration_ms(media)
+    dur = _audio_duration_ms(media)
     if dur is not None:
         media.setdefault("meta", {})["duration_ms"] = dur
     else:
@@ -1386,7 +1386,7 @@ def dashscope_invoke(
         media = _ds_fetch(transport, str(url), mime="audio/wav", timeout=timeout)
         # **时长权威是 TTS 的真实时长**（交付清单靠它对齐字幕与镜头长度）。
         # 百炼不回时长，只能从 wav 头算 —— 算不出就不填，绝不估。
-        dur = _wav_duration_ms(media)
+        dur = _audio_duration_ms(media)
         if dur is not None:
             # **写进 meta，不是顶层。** 产物落库时只有 item["meta"] 会进
             # Asset.meta_json，而回挂音频时长读的正是那一处 ——
@@ -1433,8 +1433,12 @@ def _ds_images(data: dict[str, Any]) -> list[str]:
     return out
 
 
-def _wav_duration_ms(media: dict[str, object]) -> int | None:
-    """从落盘的 wav 头读真实时长。读不出返回 None —— 宁可缺也不要估。"""
+def _audio_duration_ms(media: dict[str, object]) -> int | None:
+    """从落盘的 WAV/MP3 读真实时长。读不出返回 None —— 宁可缺也不要估。
+
+    sambert 返回 WAV，cosyvoice 返回 MP3。只实现 WAV 会造成一种很隐蔽的
+    半成功：两者都生成了、都能播放，但只有 sambert 那几句进入时间轴。
+    """
     import struct
     from pathlib import Path
 
@@ -1449,7 +1453,7 @@ def _wav_duration_ms(media: dict[str, object]) -> int | None:
     except OSError:
         return None
     if raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
-        return None
+        return _mp3_duration_ms(raw)
     pos, rate, bits, ch, frames = 12, 0, 0, 0, 0
     while pos + 8 <= len(raw):
         cid, size = raw[pos:pos + 4], struct.unpack("<I", raw[pos + 4:pos + 8])[0]
@@ -1471,6 +1475,69 @@ def _wav_duration_ms(media: dict[str, object]) -> int | None:
     if not (rate and bits and ch and frames) or frames <= 0:
         return None
     return int(frames / (rate * ch * bits / 8) * 1000)
+
+
+# 保留旧名，避免外部脚本和既有测试瞬间失效；新代码一律调通用入口。
+_wav_duration_ms = _audio_duration_ms
+
+
+def _mp3_duration_ms(raw: bytes) -> int | None:
+    """逐帧累计 MP3 样本数，不依赖 ffprobe/mutagen。
+
+    不能拿文件字节数除以一个猜测码率：cosyvoice 可能输出 VBR，长句误差会
+    在整章叠加成数秒。MP3 每帧头里已经写了码率和采样率，按它跳帧即可。
+    """
+    pos = 0
+    if raw.startswith(b"ID3") and len(raw) >= 10:
+        # ID3v2 的四个长度字节是 sync-safe integer，每字节只用低 7 位。
+        size = 0
+        for b in raw[6:10]:
+            size = (size << 7) | (b & 0x7F)
+        pos = 10 + size
+
+    mpeg1_bitrates = (0, 32, 40, 48, 56, 64, 80, 96,
+                      112, 128, 160, 192, 224, 256, 320, 0)
+    mpeg2_bitrates = (0, 8, 16, 24, 32, 40, 48, 56,
+                      64, 80, 96, 112, 128, 144, 160, 0)
+    base_rates = (44100, 48000, 32000, 0)
+    samples = 0
+    rate_seen = 0
+    frames = 0
+    while pos + 4 <= len(raw):
+        h = int.from_bytes(raw[pos:pos + 4], "big")
+        if (h & 0xFFE00000) != 0xFFE00000:
+            pos += 1
+            continue
+        version = (h >> 19) & 0b11
+        layer = (h >> 17) & 0b11
+        br_idx = (h >> 12) & 0xF
+        sr_idx = (h >> 10) & 0x3
+        padding = (h >> 9) & 1
+        if version == 0b01 or layer != 0b01:  # version=01 是保留值
+            pos += 1
+            continue
+        if version == 0b11:                  # MPEG-1 Layer III
+            br = mpeg1_bitrates[br_idx] * 1000
+            rate = base_rates[sr_idx]
+            samples_per_frame, coeff = 1152, 144
+        else:                                # MPEG-2 / 2.5 Layer III
+            br = mpeg2_bitrates[br_idx] * 1000
+            divisor = 2 if version == 0b10 else 4
+            rate = base_rates[sr_idx] // divisor
+            samples_per_frame, coeff = 576, 72
+        if not br or not rate:
+            pos += 1
+            continue
+        frame_len = coeff * br // rate + padding
+        if frame_len < 4 or pos + frame_len > len(raw):
+            break
+        samples += samples_per_frame
+        rate_seen = rate
+        frames += 1
+        pos += frame_len
+    if not frames or not rate_seen:
+        return None
+    return int(samples / rate_seen * 1000)
 
 
 def dashscope_health(transport: httpx.Client, base_url: str,

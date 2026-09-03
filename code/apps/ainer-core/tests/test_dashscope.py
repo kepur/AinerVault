@@ -482,6 +482,17 @@ class TestStreamingWavDuration:
         got = dialects._wav_duration_ms({"url": "http://localhost/media/streaming.wav"})
         assert 995 <= got <= 1005
 
+    def test_mp3_frames_are_counted_without_guessing_bitrate(self):
+        """cosyvoice 返回 MP3；只会算 WAV 会让免费音色在时间轴里变成 0 秒。"""
+        from app.capability.dialects import _mp3_duration_ms
+
+        # MPEG-1 Layer III, 128kbps, 44.1kHz，无 padding：每帧 417 字节/1152 samples。
+        header = bytes.fromhex("fffb9000")
+        frame = header + b"\x00" * (417 - 4)
+        got = _mp3_duration_ms(frame * 100)
+        assert got is not None
+        assert 2600 <= got <= 2620
+
 
 class TestFreeTierVoices:
     """sambert 那一批有免费额度（各 3 万），qwen3-tts 没有。
