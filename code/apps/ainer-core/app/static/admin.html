@@ -311,6 +311,15 @@ const State = {
   },
 };
 
+// 方言不是厂商名而是协议名 —— 一个方言下可以挂任意家兼容服务。
+// 直连方言都是同步的：它们没有任务队列，一次 HTTP 就是全部。
+const DIALECT_CN = {
+  capability: "能力契约（中间层 · 全能力 · 异步）",
+  openai:     "OpenAI 兼容（仅文本 · 同步）",
+  cloudflare: "Cloudflare Workers AI（仅图像 · 同步 · 无参考图）",
+  dashscope:  "阿里云百炼（图像／语音／视频 · 同步 · 编辑模型可吃参考图）",
+};
+
 // 菜单按「工作流的先后」分组，不按功能相似度 ——
 // 用户是顺着流程走的，把「世界观」和「译本」分在两个抽屉里
 // 只会让人每次都要开两个抽屉。
@@ -336,6 +345,7 @@ const GROUPS = [
     {id:"crew",     ico:"🎥", name:"制作单", sub:"摄影 · 灯光 · 美术 · 声音 · 剪辑 · 场记"},
     {id:"casting",  ico:"🎙", name:"配音表", sub:"音色绑定 · 撞声 · 时期演化"},
     {id:"audio",    ico:"🎧", name:"有声书", sub:"音色与时间轴"},
+    {id:"handoff",  ico:"🎛", name:"手动模式", sub:"时间轴轨道 · 提示词一键复制 · 自己剪辑"},
   ]},
   {id:"g-sys", name:"系统", pages:[
     {id:"tasks",    ico:"⚡", name:"任务", sub:"生成任务与成本"},
@@ -405,8 +415,8 @@ const Settings = {
             eps.length ? eps.map(e => `<tr>
               <td><b>${h(e.name)}</b></td>
               <td class="mono">${h(e.base_url)}</td>
-              <td><span class="tag ${e.dialect==="openai"?"t-warn":"t-ok"}">${
-                e.dialect==="openai"?"OpenAI 兼容":"能力契约"}</span></td>
+              <td><span class="tag ${e.dialect==="capability"?"t-ok":"t-warn"}">${
+                DIALECT_CN[e.dialect]||e.dialect}</span></td>
               <td class="mono" style="color:var(--muted)">${h(e.auth_preview||e.auth_mode)}</td>
               <td>${e.capabilities_count || 0}</td>
               <td>${e.health ? (e.health.ok
@@ -430,9 +440,8 @@ const Settings = {
             <div><label>Base URL</label>
               <input id="ep-url" placeholder="https://your-gateway/cap/v1"></div>
             <div><label>方言</label>
-              <select id="ep-dialect">
-                <option value="capability">能力契约（中间层，全能力、异步）</option>
-                <option value="openai">OpenAI 兼容（仅文本、同步）</option>
+              <select id="ep-dialect">${Object.entries(DIALECT_CN).map(([k,v])=>
+                `<option value="${k}">${v}</option>`).join("")}
               </select></div>
             <div><label>鉴权方式</label>
               <select id="ep-mode">
@@ -2959,6 +2968,237 @@ const Casting = {
 };
 
 // ───────────────────────── 任务 ─────────────────────────
+
+// ── 手动模式 ──────────────────────────────────────────────────────────────
+// API 用不了的时候，这一页就是整个系统的出口。
+//
+// 交付清单是给程序看的 JSON；这里把同一批产出按**轨道**排在时间轴上，
+// 每格配一块能直接粘走的文本。人按轨道一条条做完，再自己拉进剪辑软件。
+//
+// 界面上最要紧的两件事：复制要一下就成，缺什么要说在最前面。
+const TRACK_ICO = {frame_first:"🖼", frame_last:"🖼", video:"🎞",
+  dialogue:"💬", narration:"📖", sfx:"🔊", bgm:"🎵", ambience:"🌫"};
+
+const Handoff = {
+  data: null,
+  open: {},          // 展开了哪几格的细部
+  fold: {},          // 折起了哪几条轨道
+
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">先在「书架」选一个章节</div></div>`;
+      return;
+    }
+    const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`).catch(()=>null);
+    const pid = plan && plan.shot_plan_id;
+    if (!pid) {
+      v.innerHTML = `<div class="card"><h2>手动模式</h2>
+        <p class="hint">这一章还没有分镜，没有可排的内容。
+          先到「剧本转换」编译分镜。</p></div>`;
+      return;
+    }
+    this.pid = pid;
+    const tgt = localStorage.getItem("an.hotarget") || "generic";
+    const d = await api("GET", `/shot-plans/${pid}/handoff?target=${tgt}`);
+    this.data = d;
+
+    const dur = (d.total_duration_ms/1000);
+    const mm = Math.floor(dur/60), ss = Math.round(dur%60);
+    v.innerHTML = `
+      <div class="card">
+        <h2>手动模式 · ${h(d.chapter.title || "本章")}
+          <span class="sub mono" style="color:var(--muted)">${d.shots} 镜　${mm}分${ss}秒　${d.aspect_ratio}</span>
+        </h2>
+        <p class="hint">${h(d.notes || "")}</p>
+        <div class="row">
+          <label style="font-size:12px;color:var(--muted)">出图目标</label>
+          <select id="ho-target" onchange="Handoff.setTarget(this.value)">
+            ${(d.targets||[]).map(t=>`<option value="${t.id}"${
+              t.id===d.target?" selected":""}>${h(t.name)}</option>`).join("")}
+          </select>
+          <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.md?target=${d.target}"
+             target="_blank">下载手册 .md</a>
+          <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.csv?target=${d.target}"
+             target="_blank">剪辑标记表 .csv</a>
+          <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.srt"
+             target="_blank">字幕 .srt</a>
+        </div>
+      </div>
+
+      ${this.gapsCard(d)}
+      ${this.resCard(d)}
+      ${this.stripCard(d)}
+      ${(d.tracks||[]).filter(t=>t.clips.length).map(t=>this.trackCard(t)).join("")}
+    `;
+  },
+
+  gapsCard(d) {
+    const g = d.gaps || [];
+    if (!g.length) return `<div class="card"><h2>缺口
+      <span class="tag t-ok">没有</span></h2>
+      <p class="hint">每一格都拿得到该拿的东西。</p></div>`;
+    // 同一条缺口可能出现在几十格上，按内容归并 —— 逐格列出会把真正
+    // 不同的那几条淹掉，人看到第五条重复的就不看了
+    const by = {};
+    g.forEach(x => {
+      const k = x.why + "|" + x.fix;
+      (by[k] = by[k] || {...x, shots: []}).shots.push(x.shot);
+    });
+    return `<div class="card">
+      <h2>⚠ 开工前要补的缺口 <span class="tag t-bad">${Object.keys(by).length} 类</span></h2>
+      <p class="hint">这些不是警告是<b>验收结果</b> ——
+        带着缺口手搓，出来的东西跨镜对不上，而那时时间已经花掉了。</p>
+      ${Object.values(by).map(x=>`
+        <div class="gap" style="margin-bottom:7px"><div class="gh">
+          <b style="color:var(--ink)">${h(x.why)}</b>
+          <span class="tag t-mute">${x.shots.filter(n=>n).length
+            ? "镜 " + x.shots.filter(n=>n).slice(0,8).join("、") +
+              (x.shots.length>8?" 等":"")
+            : "整章"}</span>
+        </div><div class="eff">${h(x.fix)}</div></div>`).join("")}
+    </div>`;
+  },
+
+  resCard(d) {
+    const a = (d.resources||{}).anchors || [];
+    if (!a.length) return "";
+    return `<div class="card">
+      <h2>要先备好的参考图 <span class="tag t-info">${a.length} 张</span></h2>
+      <p class="hint">同一张图多镜复用，<b>下载一次就够</b> ——
+        每镜重新下会得到不同的文件名，上传到出图网站后就再也对不上是谁了。</p>
+      <div class="row" style="flex-wrap:wrap;gap:10px">
+        ${a.map(x=>`<div style="width:104px;text-align:center">
+          <img src="${x.url}" style="width:100px;height:100px;object-fit:cover;
+               border-radius:6px;border:1px solid var(--line)">
+          <div class="sub mono" style="font-size:11px;color:var(--muted);margin-top:3px">
+            ${h(x.role||"")}<br>镜 ${(x.shots||[]).slice(0,4).join("、")}${
+              (x.shots||[]).length>4?"…":""}</div>
+          <button class="btn" style="padding:2px 6px;font-size:11px;margin-top:2px"
+            onclick="Handoff.copy(this,${JSON.stringify(x.url).replace(/"/g,"&quot;")})"
+            >复制地址</button>
+        </div>`).join("")}
+      </div></div>`;
+  },
+
+  // 时间轴总览：每条轨道一行，格子按时长成比例。
+  // 有它才看得出「哪一段是空的」—— 逐格列表看不出空缺在哪
+  stripCard(d) {
+    const total = d.total_duration_ms || 1;
+    return `<div class="card">
+      <h2>时间轴总览</h2>
+      <p class="hint">绿=已生成，橙=待手搓。宽度按时长成比例，
+        看得出哪一段还是空的。</p>
+      ${(d.tracks||[]).filter(t=>t.clips.length).map(t=>`
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <div style="width:52px;font-size:12px;color:var(--muted);text-align:right"
+            >${h(t.name)}</div>
+          <div style="flex:1;position:relative;height:16px;background:var(--bg2,#00000010);
+               border-radius:3px;overflow:hidden">
+            ${t.clips.map(c=>`<div title="镜${c.shot} ${c.tc}"
+              style="position:absolute;left:${(c.start_ms/total*100).toFixed(3)}%;
+              width:${Math.max(0.4,(c.duration_ms/total*100)).toFixed(3)}%;
+              top:0;bottom:0;background:${c.status==="ready"?"var(--ok,#3a9)":"var(--warn,#e90)"};
+              opacity:.8;border-right:1px solid #0003"></div>`).join("")}
+          </div>
+        </div>`).join("")}
+    </div>`;
+  },
+
+  trackCard(t) {
+    const folded = this.fold[t.id];
+    return `<div class="card">
+      <h2 style="cursor:pointer" onclick="Handoff.toggleTrack('${t.id}')">
+        ${TRACK_ICO[t.id]||"▪"} ${h(t.name)}
+        <span class="tag ${t.manual?"t-warn":"t-ok"}">${
+          t.manual?`${t.manual} 格待手搓`:"全部已生成"}</span>
+        <span class="sub mono" style="color:var(--muted)">${t.clips.length} 格　${
+          folded?"▸ 展开":"▾ 收起"}</span>
+      </h2>
+      <p class="hint">${h(t.hint)}</p>
+      ${folded ? "" : t.clips.map(c=>this.clip(c)).join("")}
+    </div>`;
+  },
+
+  clip(c) {
+    const id = c.key.replace(/[^A-Za-z0-9_]/g,"_");
+    const shown = this.open[c.key];
+    const det = c.detail || {};
+    return `<div class="gap" style="margin-bottom:8px">
+      <div class="gh" style="gap:8px;align-items:center">
+        <span class="tag ${c.status==="ready"?"t-ok":"t-warn"}">${
+          c.status==="ready"?"已生成":"待手搓"}</span>
+        <span class="mono" style="font-size:12px;color:var(--muted)">${c.tc}</span>
+        <b style="color:var(--ink)">镜 ${c.shot}</b>
+        ${c.speaker?`<span class="tag t-info">${h(c.speaker)}</span>`:""}
+        ${c.estimated_duration?`<span class="tag t-bad" title="没有生成音频，时长按字数估算">时长为估算</span>`:""}
+        <span style="flex:1;color:var(--muted);font-size:12px;overflow:hidden;
+              text-overflow:ellipsis;white-space:nowrap">${h(c.label||"")}</span>
+        <button class="btn pri" style="padding:2px 8px;font-size:12px"
+          onclick="Handoff.copyClip(this,'${c.key}')">复制提示词</button>
+        <button class="btn" style="padding:2px 8px;font-size:12px"
+          onclick="Handoff.toggle('${c.key}')">${shown?"收起":"细部"}</button>
+      </div>
+      <pre id="cp_${id}" style="white-space:pre-wrap;font-size:12px;margin:6px 0 0;
+           padding:8px;background:var(--bg2,#0000000a);border-radius:5px;
+           max-height:${shown?"none":"84px"};overflow:hidden"
+        >${h(c.copy||"（这一格没有提示词）")}</pre>
+      ${(c.refs||[]).length?`<div class="sub" style="font-size:11px;margin-top:4px">
+        要上传的参考图：${c.refs.map(r=>
+          `<a href="${r.url}" target="_blank">${h(r.role||"ref")}</a>`).join("　")}</div>`:""}
+      ${c.asset_url?`<div class="sub" style="font-size:11px;margin-top:4px">
+        已有产物：<a href="${c.asset_url}" target="_blank">打开</a></div>`:""}
+      ${shown?`<div style="margin-top:8px">${
+        Object.entries(det).map(([k,val])=>`
+          <div style="margin-bottom:6px">
+            <b style="font-size:12px;color:var(--ink)">${h(k)}</b>
+            <pre style="white-space:pre-wrap;font-size:11px;margin:2px 0 0;
+                 color:var(--muted)">${h(Handoff.fmt(val))}</pre>
+          </div>`).join("")}</div>`:""}
+    </div>`;
+  },
+
+  // 细部里什么都有可能：字符串、对象、数组。统一压成人能读的几行，
+  // 直接 JSON.stringify 会把中文转成 \uXXXX，一眼看过去全是乱码
+  fmt(val) {
+    if (val == null) return "";
+    if (typeof val === "string") return val;
+    if (Array.isArray(val)) return val.map(x=>Handoff.fmt(x)).join("\n");
+    return Object.entries(val).filter(([,v])=>v!=null && v!=="")
+      .map(([k,v])=>`${k}：${typeof v==="object"?Handoff.fmt(v).replace(/\n/g,"　"):v}`)
+      .join("\n");
+  },
+
+  find(key) {
+    for (const t of (this.data.tracks||[]))
+      for (const c of t.clips) if (c.key === key) return c;
+    return null;
+  },
+  toggle(key) { this.open[key] = !this.open[key]; App.refresh(); },
+  toggleTrack(id) { this.fold[id] = !this.fold[id]; App.refresh(); },
+  setTarget(t) { localStorage.setItem("an.hotarget", t); App.refresh(); },
+
+  copyClip(btn, key) {
+    const c = this.find(key);
+    this.copy(btn, c ? (c.copy||"") : "");
+  },
+  async copy(btn, text) {
+    if (!text) { logErr("这一格没有可复制的内容"); return; }
+    const old = btn.textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      // 非 https / 无权限时 clipboard API 不可用。**不能就此作罢** ——
+      // 这一页的全部价值就是复制
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } finally { ta.remove(); }
+    }
+    btn.textContent = "已复制 ✓";
+    setTimeout(()=>{ btn.textContent = old; }, 1200);
+  },
+};
+
 const Tasks = {
   async render(v) {
     const [sum, list] = await Promise.all([
@@ -3073,7 +3313,8 @@ const App = {
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,
                fidelity:FidelityPage,
-               script:Script, prose:Prose, audio:Audio, tasks:Tasks}[p.id];
+               script:Script, prose:Prose, audio:Audio, handoff:Handoff,
+               tasks:Tasks}[p.id];
     try { await R.render(v); }
     catch (e) {
       v.innerHTML = `<div class="card"><h2 style="color:var(--danger)">加载失败</h2>
