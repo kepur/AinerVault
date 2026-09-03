@@ -61,6 +61,31 @@ def verify_signature(secret: str, raw_body: bytes, header_value: str | None) -> 
     return hmac.compare_digest(sign_payload(secret, raw_body), header_value.strip())
 
 
+
+#: 各能力的**超时下限**（秒）。端点上那个 timeout_sec 是按文本调用配的
+#: （默认 60），套在图像与视频上必然不够：出一张图 60–90 秒是常态，
+#: 出一段视频要几分钟。于是每一次调用都读超时、重试、再超时 ——
+#: 而日志里看到的是「超时」，很容易当成网络问题去查，
+#: 实际是一个给聊天配的数字被用在了完全不同量级的任务上。
+#:
+#: 这里只抬下限、不压上限：端点配得比这更宽就听端点的。
+_CAP_MIN_TIMEOUT: dict[str, float] = {
+    "image": 240.0,
+    "audio": 180.0,
+    "video": 1200.0,
+}
+
+
+def timeout_for(capability: Capability, timeout_ms: int, endpoint_sec: float) -> float:
+    """这次调用给多少秒。
+
+    上限始终是调用方给的预算（options.timeout_ms）——
+    抬下限不该突破调用方明确设定的天花板。
+    """
+    budget = timeout_ms / 1000
+    floor = _CAP_MIN_TIMEOUT.get(capability.value.split(".", 1)[0], 0.0)
+    return min(budget, max(endpoint_sec, floor))
+
 class CapabilityClient:
     """一个端点一个客户端实例。同步实现 —— pipeline 是普通函数，不需要 async 传染。"""
 
@@ -261,21 +286,21 @@ class CapabilityClient:
             return dashscope_invoke(
                 self.client, self.base_url, self._headers(),
                 capability=cap, payload=req.input, model=model,
-                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                timeout=timeout_for(cap, req.options.timeout_ms, self.timeout_sec),
                 task_id=req.idempotency_key,
             )
         if self.dialect == DIALECT_CLOUDFLARE:
             return cloudflare_invoke(
                 self.client, self.base_url, self._headers(),
                 capability=cap, payload=req.input, model=model,
-                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                timeout=timeout_for(cap, req.options.timeout_ms, self.timeout_sec),
                 task_id=req.idempotency_key,
             )
         if self.dialect == DIALECT_OPENAI:
             return openai_invoke(
                 self.client, self.base_url, self._headers(),
                 capability=cap, payload=req.input, model=model,
-                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                timeout=timeout_for(cap, req.options.timeout_ms, self.timeout_sec),
                 task_id=req.idempotency_key,
             )
         data = self._request(

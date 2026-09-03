@@ -290,3 +290,78 @@ class TestErrorMapping:
             cat = dashscope_catalog(c, "https://x", {}, 1)
         entry = cat.get(Capability.image_t2i)
         assert entry.default_model().id == "qwen-image-2.0-pro-2026-06-22"
+
+
+class TestTimeoutFloors:
+    """端点上那个 timeout_sec 是按文本调用配的（默认 60）。
+
+    套在图像上必然不够 —— 出一张图 60–90 秒是常态。于是每次调用都读超时、
+    重试、再超时，而日志里看到的是「超时」，很容易当成网络问题去查，
+    实际是一个给聊天配的数字被用在了完全不同量级的任务上。
+    """
+
+    def test_image_and_video_get_more_than_text(self):
+        from app.capability.client import timeout_for
+        from app.capability.schemas import Capability
+
+        text = timeout_for(Capability.text_chat, 300_000, 60)
+        image = timeout_for(Capability.image_t2i, 300_000, 60)
+        video = timeout_for(Capability.video_i2v, 300_000, 60)
+        assert text == 60
+        assert image > text
+        assert video > image
+
+    def test_generous_endpoint_config_wins(self):
+        """只抬下限，不压上限 —— 端点配得比这更宽就听端点的。"""
+        from app.capability.client import timeout_for
+        from app.capability.schemas import Capability
+
+        assert timeout_for(Capability.image_t2i, 3_000_000, 900) == 900
+
+    def test_caller_budget_is_the_ceiling(self):
+        """抬下限不该突破调用方明确设定的天花板 ——
+        谁写了 30 秒预算，就是不想等更久。"""
+        from app.capability.client import timeout_for
+        from app.capability.schemas import Capability
+
+        assert timeout_for(Capability.image_t2i, 30_000, 60) == 30.0
+
+
+class TestSyncRetry:
+    def test_media_calls_go_through_backoff(self):
+        """退避原来只接在文本调用上。图像／语音／视频这条路一次都没经过它 ——
+        错误码里明明标了 retryable，却没有任何地方读它。
+        结果是整批出图撞上一次瞬时限流就整批失败，
+        而批量恰恰是最容易撞限流、失败代价也最高的场景。"""
+        import inspect
+
+        from app.capability import dialects
+
+        src = inspect.getsource(dialects._ds_post)
+        assert "retrying(" in src
+
+    def test_retry_honours_provider_retry_after(self):
+        import inspect
+
+        from app.capability import dialects
+
+        src = inspect.getsource(dialects.retrying)
+        assert 'getattr(exc, "retry_after", None)' in src
+        assert "RETRY_BACKOFF_SEC" in src
+
+    def test_non_retryable_is_not_retried(self):
+        """额度耗尽重试三次只是把同一个错撞三遍，还白等两轮退避。"""
+        from app.capability.dialects import retrying
+        from app.capability.errors import CapabilityError, CapErrorCode
+
+        calls = []
+
+        def boom():
+            calls.append(1)
+            raise CapabilityError(CapErrorCode.UPSTREAM_ERROR, "quota", retryable=False)
+
+        try:
+            retrying(boom, what="test")
+        except CapabilityError:
+            pass
+        assert len(calls) == 1

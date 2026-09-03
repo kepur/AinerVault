@@ -1058,26 +1058,68 @@ def _ds_video_body(transport: httpx.Client, payload: dict[str, Any], model: str,
     return {"model": model, "input": body_in, "parameters": params}
 
 
+
+def retrying(fn: Any, *, what: str) -> Any:
+    """把一次可重试的调用包成带退避的调用。
+
+    **退避原来只接在文本调用上。** `_Caller.run` 里那套（读 provider 的
+    Retry-After、按 2/8/30 退避）是给 chat 用的，图像／语音／视频这条路
+    一次都没经过它 —— 错误码里明明标了 retryable，却没有任何地方读它。
+
+    结果是：整批出图撞上一次瞬时限流就整批失败。而批量场景恰恰是最容易
+    撞限流的地方（29 张图连着发），也是失败代价最高的地方
+    （前面已经生成的都还没落库）。
+
+    what 只用于日志 —— 出错时要看得出是哪一类调用在退避，
+    「调用失败可重试」这一行如果不说是什么调用，等于没说。
+    """
+    last: CapabilityError | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            return fn()
+        except CapabilityError as exc:
+            if not exc.retryable or attempt == MAX_ATTEMPTS - 1:
+                raise
+            last = exc
+            told = getattr(exc, "retry_after", None)
+            delay = (
+                min(float(told) + 0.5, _MAX_RETRY_WAIT) if told
+                else RETRY_BACKOFF_SEC[min(attempt, len(RETRY_BACKOFF_SEC) - 1)]
+            )
+            log.warning("%s 失败可重试（%s），%d 秒后第 %d 次：%s",
+                        what, exc.code, delay, attempt + 2, str(exc)[:120])
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
 def _ds_post(transport: httpx.Client, base_url: str, headers: dict[str, str],
              path: str, body: dict[str, Any], *, timeout: float,
              extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
     hdrs = {**headers, "Content-Type": "application/json", **(extra_headers or {})}
-    try:
-        resp = transport.post(f"{base_url.rstrip('/')}{path}", json=body,
-                              headers=hdrs, timeout=timeout)
-    except httpx.TimeoutException as exc:
-        raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
-                              f"DashScope 超时：{exc}", retryable=True) from exc
-    except httpx.HTTPError as exc:
-        raise CapabilityError(CapErrorCode.TRANSPORT_ERROR,
-                              f"DashScope 连接失败：{exc}", retryable=True) from exc
-    if resp.status_code >= 400:
-        raise _ds_error(resp)
-    try:
-        return resp.json()
-    except Exception as exc:  # noqa: BLE001
-        raise CapabilityError(CapErrorCode.BAD_RESPONSE,
-                              "DashScope 返回非 JSON") from exc
+
+    def once() -> dict[str, Any]:
+        try:
+            resp = transport.post(f"{base_url.rstrip('/')}{path}", json=body,
+                                  headers=hdrs, timeout=timeout)
+        except httpx.TimeoutException as exc:
+            raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
+                                  f"DashScope 超时：{exc}", retryable=True) from exc
+        except httpx.HTTPError as exc:
+            raise CapabilityError(CapErrorCode.TRANSPORT_ERROR,
+                                  f"DashScope 连接失败：{exc}", retryable=True) from exc
+        if resp.status_code >= 400:
+            err = _ds_error(resp)
+            after = _retry_after_seconds(resp)
+            if after is not None:
+                err.retry_after = after
+            raise err
+        try:
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            raise CapabilityError(CapErrorCode.BAD_RESPONSE,
+                                  "DashScope 返回非 JSON") from exc
+
+    return retrying(once, what=f"DashScope {path.rsplit('/', 1)[-1]}")
 
 
 def _ds_await_video(transport: httpx.Client, base_url: str, headers: dict[str, str],
