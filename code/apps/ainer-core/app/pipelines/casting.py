@@ -804,12 +804,23 @@ def bind_engine_voices(
     if not rows:
         return {"bound": 0, "skipped": 0, "collisions": [], "no_voice_for": []}
 
+    # **免费额度的排在前面，其余按字母。**
+    #
+    # 原来是整池 sort()，把清单里「免费档在前」的顺序抹平了 ——
+    # 于是英伦线六个角色里五个落到了付费那一族。
+    # 一本长篇几千句对白，默认落在付费上是一笔不该花的钱，
+    # 而这笔钱是**静默**花掉的：数据上完全正常，音频也正常出。
+    #
+    # 判据用音色自带的 tags，不在这里硬编模型名 ——
+    # 哪些免费是供应商的事，会变。
+    def _free(v: Any) -> bool:
+        return "free-tier" in (getattr(v, "tags", None) or [])
+
     pool: dict[str, list[str]] = {}
-    for v in voices:
+    for v in sorted(voices, key=lambda x: (not _free(x),
+                                           getattr(x, "voice_id", "") or "")):
         pool.setdefault((getattr(v, "gender", None) or "any").lower(), []).append(
             getattr(v, "voice_id", None) or str(v))
-    for lst in pool.values():
-        lst.sort()
 
     # 一个角色的多个时期共用同一把嗓子 —— 时期变的是年龄感与状态，
     # 不是声部。按 cast_key 分配一次，所有时期沿用
@@ -822,6 +833,9 @@ def bind_engine_voices(
         taken = {r.voice_ref for r in rows
                  if r.voice_ref and r.voice_engine == engine}
 
+    free_ids = {getattr(v, "voice_id", None) for v in voices
+                if "free-tier" in (getattr(v, "tags", None) or [])}
+    paid_fallback: list[dict[str, Any]] = []
     bound = skipped = 0
     collisions: list[str] = []
     missing: list[str] = []
@@ -841,15 +855,44 @@ def bind_engine_voices(
         if not candidates:
             missing.append(f"{key}（需要 {gender} 音色，清单里没有）")
             continue
-        start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(candidates)
+        # **分段找：先在免费池里找，找不到才去付费池。**
+        #
+        # 原来把两族拼成一个列表、按 cast_key 的哈希取起点再顺延。
+        # 排序里「免费在前」于是完全失效 —— 起点是哈希决定的，
+        # 直接落在付费段就从付费段开始拿。实跑六个角色全落付费，
+        # 而免费的 sambert-brian 一次都没被用到。
+        #
+        # 排序只在「从头开始扫」时才有意义。要优先就得分段。
+        free_pool = [c for c in candidates if c in free_ids]
+        paid_pool = [c for c in candidates if c not in free_ids]
         pick = None
-        for offset in range(len(candidates)):
-            cand = candidates[(start + offset) % len(candidates)]
-            if cand not in taken:
-                pick = cand
+        for tier in (free_pool, paid_pool):
+            if not tier:
+                continue
+            start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(tier)
+            for offset in range(len(tier)):
+                cand = tier[(start + offset) % len(tier)]
+                if cand not in taken:
+                    pick = cand
+                    break
+            if pick is not None:
                 break
+        # **免费档不够用时会静默顺延到付费档。**
+        #
+        # 英语的免费男声只有 sambert-brian-v1 一个，而一章可能有五个男角色 ——
+        # 顺延之后五个人里四个落在付费池上，数据完全正常、音频也正常出，
+        # 只有月底账单会说话。这是真实的资源约束不是 bug，
+        # 但它必须被看见：报出来，让人决定「复用同一把嗓子」还是「付费」。
+        if pick is not None and pick not in free_ids and any(
+                c in free_ids for c in candidates):
+            paid_fallback.append({
+                "cast_key": key, "picked": pick, "gender": gender,
+                "why": f"{gender} 的免费音色已被占满"
+                       f"（共 {sum(1 for c in candidates if c in free_ids)} 个），"
+                       f"这一位落到了付费档",
+            })
         if pick is None:
-            pick = candidates[start]
+            pick = candidates[0]
             collisions.append(f"{key} → {pick}（{gender} 音色不够，与他人重复）")
         taken.add(pick)
         assigned[key] = pick
@@ -864,6 +907,8 @@ def bind_engine_voices(
         "assigned": assigned,
         "collisions": collisions,
         "no_voice_for": missing,
+        "paid_fallback": paid_fallback,
+        "free_voices": len(free_ids),
         # 报清楚哪一部分没查 —— 只报「0 处冲突」会让人以为全查过了
         "not_checked": [
             "音色的性别是按厂商命名推断的，没有实听；"

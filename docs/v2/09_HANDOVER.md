@@ -483,16 +483,48 @@ i2v 无从插值 —— 那一镜在成片里就是一张静止画面停几秒�
 还有一条：写不出可见动作，说明**这一镜本来就不该单独成镜**。
 宁可少一个镜头，也不要一个首尾帧相同的镜头。
 
-### 4.38 免费 TTS 那一批 REST 打不通
+### 4.38 「试了几个路径都失败」不是证据 —— 免费 TTS 其实能用
 
-sambert-*（各 3 万额度）、cosyvoice-v1（1 万）、qwen-audio-3.0-tts-*（各 1 万）
-在 DashScope 上都是 **WebSocket 专用**：
-`text2speech/speech-synthesis`、`multimodal-generation/generation`、
-`compatible-mode/v1/audio/speech` 三个 REST 路径全部 404 或 url error。
+我试了三个 REST 路径都回 `url error`，就写下「sambert / cosyvoice
+WebSocket 专用、用不了」。**那是猜，不是观察** —— §4.22 记的正是这条，
+而我隔了几小时又犯了一次。
 
-REST 能打通的只有 `qwen3-tts-flash` / `qwen3-tts-instruct-flash`，
-而它们不在免费额度清单里。要用免费 TTS 必须先接 WebSocket 通道 ——
-那是方言层的一次扩展（现有的 `_ds_post` 只做 HTTP）。
+装上官方 SDK（`pip install dashscope`）一次就通了：
+
+    SpeechSynthesizer.call(model="sambert-zhide-v1", text=...)  →  26844 字节
+
+结论方向没错（它们确实走 `ApiProtocol.WEBSOCKET`），但**结论对不等于推理对**。
+真正的证据是那个对照：**同一个 REST 路径 qwen3-tts 通、sambert 不通** ——
+那说明问题在模型不在路径。试几个路径都失败，什么也说明不了。
+
+方言层加了一条 SDK 通道（`_sambert_invoke`），`sambert-*` / `cosyvoice-*`
+自动走它。SDK 只在方言层内用，不外溢。
+
+两处与 qwen3-tts 相反的地方：
+
+- **音色就是模型名**（`sambert-beth-v1` 就是 Beth 那把嗓子），
+  不是「一个模型 + voice 参数」。路由上写死模型 = 写死一把嗓子。
+- **没有表演指示通道**。配音表算出的「低沉沙哑、语速偏慢」用不上，
+  带 warning 说出来 —— 默默丢掉的话所有角色听起来一个样。
+
+### 4.39 免费音色不够用时会静默落到付费档
+
+绑定音色时有两个坑，都会让钱悄悄花掉：
+
+**没按语种过滤。** 英文剧本配上 `sambert-zhida`（中文音色）——
+它念英语能出声，只是口音重到听不出在说什么，而数据上完全正常：
+有 voice_ref、有 engine、有音频。现在按圈层档案的 `language.code` 过滤，
+该语种没有专属音色时回落到全部**并说明**。
+
+**排序对分配无效。** 我把免费档排在音色清单前面，然后按 `cast_key`
+的哈希取起点顺延 —— 起点直接落在付费段就从付费段开始拿。
+六个角色全落付费，而唯一的免费英语男声一次都没被用到。
+**排序只在「从头开始扫」时才有意义，要优先就得分段**：
+先在免费池里找，找不到才去付费池。
+
+分完还要报 `paid_fallback`：英语的免费男声只有一个，而一章有五个男角色 ——
+那是真实的资源约束不是 bug，但必须被看见，
+让人决定「复用同一把嗓子」还是「付费」。
 
 ### 4.32 有锚时文字还在描述脸，场景被人物挤掉
 

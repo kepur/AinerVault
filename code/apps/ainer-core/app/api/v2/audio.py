@@ -218,7 +218,13 @@ def bind_engine_voices(novel_id: str, body: BindVoicesIn,
     from app.capability.client import CapabilityClient
     from app.capability.service import resolve_one
     from app.capability.schemas import Capability
-    from app.models import CapabilityEndpoint
+    from app.models import CapabilityEndpoint, WorldProfile
+
+    # 目标语言决定该用哪一族音色。取自圈层档案 —— 那是这本书
+    # 「要译成什么语言」的唯一权威，比让调用方再传一遍可靠
+    profile = db.get(WorldProfile, body.profile_id)
+    lang = str(((profile.language_json or {}) if profile else {}).get("code") or "")
+    fallback_note = ""
 
     if body.endpoint_id:
         ep = db.get(CapabilityEndpoint, body.endpoint_id)
@@ -229,7 +235,16 @@ def bind_engine_voices(novel_id: str, body: BindVoicesIn,
     with CapabilityClient(ep.base_url, auth=ep.auth_json or {},
                           dialect=ep.dialect or "capability") as c:
         try:
-            voices = c.voices()
+            # **按目标语言过滤。** 不过滤的话英文剧本会配上中文音色 ——
+            # sambert-zhida 念英语能出声，只是口音重到听不出在说什么，
+            # 而数据上完全正常：有 voice_ref、有 engine、有音频。
+            voices = c.voices(language=lang)
+            if not voices:
+                # 该语言没有专属音色时回落到全部，但说清楚 ——
+                # 静默回落会让人以为「这个语言就是这个味道」
+                voices = c.voices()
+                fallback_note = (f"{ep.name} 没有 {lang} 的专属音色，"
+                                 f"回落到全部音色；口音可能不对")
         except CapabilityError as exc:
             raise HTTPException(status_code=502,
                                 detail=f"取音色清单失败：{exc}") from exc
@@ -237,9 +252,14 @@ def bind_engine_voices(novel_id: str, body: BindVoicesIn,
         raise HTTPException(
             status_code=422,
             detail=f"端点 {ep.name} 没有可用音色清单，无法落地")
-    return casting.bind_engine_voices(
+    out = casting.bind_engine_voices(
         db, novel_id=novel_id, profile_id=body.profile_id,
         engine=ep.dialect or ep.name, voices=voices, overwrite=body.overwrite)
+    out["language"] = lang
+    out["voice_pool"] = len(voices)
+    if fallback_note:
+        out.setdefault("not_checked", []).insert(0, fallback_note)
+    return out
 
 
 @router.get("/novels/{novel_id}/casting")

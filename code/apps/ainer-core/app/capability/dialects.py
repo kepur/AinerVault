@@ -1180,6 +1180,112 @@ def _ds_await_video(transport: httpx.Client, base_url: str, headers: dict[str, s
         time.sleep(min(_DS_POLL_SEC, max(0.5, deadline - time.monotonic())))
 
 
+
+# ── sambert / cosyvoice：走官方 SDK 的 WebSocket ──────────────────────────────
+#
+# 这一批（sambert-* 各 3 万额度、cosyvoice-v1 1 万）**是免费的**，
+# 而 REST 能打通的 qwen3-tts-* 不在免费额度里。差别是几万次和零次。
+#
+# 我一开始试了三个 REST 路径、都回 "url error"，就下结论说它们不可用 ——
+# **那是猜，不是观察**（§4.22 记的就是这条，而我自己又犯了一次）。
+# 装上官方 SDK 一次就通了。它们走 WebSocket（`ApiProtocol.WEBSOCKET`），
+# 判据是「同一个 REST 路径 qwen3-tts 通、sambert 不通」——
+# 那才是证据，试几个路径都失败不是。
+#
+# SDK 只在这里用，不外溢：方言层之外仍然只认能力契约。
+
+_SAMBERT_PREFIXES = ("sambert-", "cosyvoice-")
+
+
+def _is_sdk_tts(model: str) -> bool:
+    return model.startswith(_SAMBERT_PREFIXES)
+
+
+def _sambert_invoke(headers: dict[str, str], *, payload: dict[str, Any],
+                    model: str, task_id: str,
+                    warnings: list[str]) -> Task:
+    """sambert / cosyvoice 出音。
+
+    **音色就是模型名**（sambert-beth-v1 是 Beth 这把嗓子），
+    与 qwen3-tts 的「一个模型 + voice 参数」相反。
+    所以 voice_id 在这里指的是模型 —— 路由上写死一个模型等于写死一把嗓子，
+    配音表要为每个角色各指一个 model。
+    """
+    from app.capability.mediastore import store_bytes
+
+    try:
+        import dashscope
+        from dashscope.audio.tts import SpeechSynthesizer
+    except ImportError as exc:      # pragma: no cover - 依赖缺失时的说明
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            "sambert / cosyvoice 走 WebSocket，需要 dashscope SDK："
+            "pip install dashscope") from exc
+
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "TTS 缺少 text")
+
+    token = ""
+    auth = headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        token = auth[7:]
+    if not token:
+        raise CapabilityError(CapErrorCode.UNAUTHORIZED,
+                              "sambert 需要 API key，端点上没有配 bearer token")
+    dashscope.api_key = token
+
+    # voice_id 在这一族里就是模型名。给了别的（比如 qwen3-tts 的 Ethan）
+    # 说明配音表还没为这条路由落地，说出来而不是默默用错嗓子
+    voice = str(payload.get("voice_id") or "").strip()
+    use_model = model
+    if voice:
+        if voice.startswith(_SAMBERT_PREFIXES):
+            use_model = voice
+        else:
+            warnings.append(
+                f"音色「{voice}」不是 sambert 模型名，本次用 {model}；"
+                f"这一族的音色就是模型名（如 sambert-beth-v1）")
+
+    extra = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if extra.get("style_prompt"):
+        # sambert 没有表演指示通道。**不能默默丢掉** ——
+        # 配音表算出来的「低沉沙哑、语速偏慢」是有依据的，
+        # 丢了之后所有角色听起来一个样，而没有任何地方说过为什么
+        warnings.append(
+            f"{use_model} 不接受表演指示（sambert 没有 instruct 通道），"
+            f"「{str(extra['style_prompt'])[:24]}」未生效；"
+            f"要用表演指示得换 qwen3-tts-instruct-flash（非免费额度）")
+
+    kw: dict[str, Any] = {"sample_rate": 16000, "format": "wav"}
+    for src_key, dst in (("rate", "rate"), ("pitch", "pitch")):
+        v = extra.get(src_key)
+        if isinstance(v, (int, float)):
+            kw[dst] = max(0.5, min(2.0, float(v)))
+
+    try:
+        result = SpeechSynthesizer.call(model=use_model, text=text, **kw)
+        raw = result.get_audio_data()
+    except Exception as exc:  # noqa: BLE001 - SDK 的异常类型不稳定
+        raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                              f"sambert 合成失败：{exc}", retryable=True) from exc
+    if not raw:
+        raise CapabilityError(
+            CapErrorCode.UPSTREAM_ERROR,
+            f"sambert 没有返回音频：{str(result.get_response())[:200]}")
+
+    media = store_bytes(bytes(raw), mime="audio/wav")
+    dur = _wav_duration_ms(media)
+    if dur is not None:
+        media.setdefault("meta", {})["duration_ms"] = dur
+    else:
+        warnings.append("未能从音频读出时长，交付清单的时间码会缺这一段")
+    return Task(task_id=task_id, status=TaskState.succeeded,
+                capability=Capability.audio_tts.value, model=use_model,
+                provider="dashscope", output={"audio": media},
+                usage=Usage(cost=0.0, units={"characters": float(len(text))}),
+                warnings=warnings or None)
+
 def dashscope_invoke(
     transport: httpx.Client, base_url: str, headers: dict[str, str], *,
     capability: Capability, payload: dict[str, Any], model: str | None,
@@ -1214,6 +1320,10 @@ def dashscope_invoke(
                     warnings=warnings or None)
 
     if capability == Capability.audio_tts:
+        # sambert / cosyvoice 走 WebSocket，与其余能力不同一条路
+        if _is_sdk_tts(model) or _is_sdk_tts(str(payload.get("voice_id") or "")):
+            return _sambert_invoke(headers, payload=payload, model=model,
+                                   task_id=task_id, warnings=warnings)
         body = _ds_tts_body(payload, model, warnings)
         data = _ds_post(transport, base_url, headers, _DS_MM, body, timeout=timeout)
         audio = ((data.get("output") or {}).get("audio") or {})
@@ -1379,14 +1489,62 @@ _DS_VOICES: tuple[tuple[str, str], ...] = (
 )
 
 
+#: sambert 的音色**就是模型名**，与 qwen3-tts 的「一个模型 + voice 参数」相反。
+#: 这一族有免费额度（各 3 万），是批量配音真正用得起的那一批。
+#: 性别与语种按厂商命名与实测归类；中文音色名多为「智X」，英文是英文名。
+_SAMBERT_VOICES: tuple[tuple[str, str, str], ...] = (
+    # 中文 · 男
+    ("sambert-zhide-v1", "male", "zh"), ("sambert-zhida-v1", "male", "zh"),
+    ("sambert-zhichu-v1", "male", "zh"), ("sambert-zhijia-v1", "male", "zh"),
+    ("sambert-zhiming-v1", "male", "zh"), ("sambert-zhilun-v1", "male", "zh"),
+    ("sambert-zhiyuan-v1", "male", "zh"), ("sambert-zhishuo-v1", "male", "zh"),
+    ("sambert-zhihao-v1", "male", "zh"), ("sambert-zhifei-v1", "male", "zh"),
+    ("sambert-zhiwei-v1", "male", "zh"), ("sambert-zhixiang-v1", "male", "zh"),
+    # 中文 · 女
+    ("sambert-zhiyue-v1", "female", "zh"), ("sambert-zhiying-v1", "female", "zh"),
+    ("sambert-zhiya-v1", "female", "zh"), ("sambert-zhiqi-v1", "female", "zh"),
+    ("sambert-zhiru-v1", "female", "zh"), ("sambert-zhiting-v1", "female", "zh"),
+    ("sambert-zhijing-v1", "female", "zh"), ("sambert-zhiqian-v1", "female", "zh"),
+    ("sambert-zhimiao-emo-v1", "female", "zh"), ("sambert-zhimao-v1", "female", "zh"),
+    ("sambert-zhistella-v1", "female", "zh"), ("sambert-zhina-v1", "female", "zh"),
+    ("sambert-zhishu-v1", "female", "zh"), ("sambert-zhixiao-v1", "female", "zh"),
+    ("sambert-zhimo-v1", "female", "zh"), ("sambert-zhigui-v1", "female", "zh"),
+    ("sambert-zhinan-v1", "female", "zh"), ("sambert-zhiye-v1", "female", "zh"),
+    # 英文
+    ("sambert-brian-v1", "male", "en"),
+    ("sambert-beth-v1", "female", "en"), ("sambert-betty-v1", "female", "en"),
+    ("sambert-donna-v1", "female", "en"), ("sambert-clara-v1", "female", "en"),
+    ("sambert-cindy-v1", "female", "en"), ("sambert-cally-v1", "female", "en"),
+    ("sambert-eva-v1", "female", "en"),
+    # 其他语种
+    ("sambert-camila-v1", "female", "es"), ("sambert-perla-v1", "female", "it"),
+    ("sambert-indah-v1", "female", "id"), ("sambert-waan-v1", "female", "th"),
+    ("sambert-hanna-v1", "female", "he"),
+)
+
+
 def dashscope_voices(*, language: str | None = None,
                      gender: str | None = None) -> list[Voice]:
-    """音色清单。百炼没有列举接口，这份表是手写的。"""
+    """音色清单。百炼没有列举接口，这份表是手写的。
+
+    两族并列：sambert（免费额度，音色即模型名）与 qwen3-tts（要付费，
+    一个模型多把嗓子且支持表演指示）。**免费的排在前面** ——
+    配音表按顺序取默认值，一本长篇几千句对白，
+    默认落在付费那一族上是一笔不该花的钱。
+    """
     want = (gender or "").lower()
-    return [
+    lang = (language or "").split("-")[0].lower()
+    out = [
+        Voice(voice_id=vid, display_name=vid, gender=g, languages=[lg],
+              tags=["dashscope", "sambert", "free-tier"])
+        for vid, g, lg in _SAMBERT_VOICES
+        if (not want or want == g) and (not lang or lang == lg)
+    ]
+    out += [
         Voice(voice_id=vid, display_name=vid, gender=g,
               languages=["zh", "en", "ja", "ko", "fr", "de", "es", "it", "ru", "pt"],
               tags=["dashscope", "qwen3-tts"])
         for vid, g in _DS_VOICES
         if not want or want == g
     ]
+    return out

@@ -28,7 +28,14 @@ from app.models.script import BlockType
 from app.worldview import resolve
 from app.pipelines.base import PipelineError, as_text, chat_json, fingerprint
 
+from app.pipelines import screenplay as sp
+
 log = logging.getLogger(__name__)
+
+#: 变化说明不可用时的替代。**刻意含糊**：
+#: 编一个具体动作（「他站起来」）会凭空造出原文没有的情节，
+#: 而一个轻微的姿态与光线变化至少让 i2v 有东西可插，且不撒谎。
+_NEUTRAL_DERIVE = "主体姿态与重心有轻微移动，光线随之变化"
 
 #: 景别代码 → 给图像模型的说法
 SHOT_SIZE_PROMPT: dict[str, str] = {
@@ -121,6 +128,10 @@ class ShotPlanResult:
     size_distribution: dict[str, int] = field(default_factory=dict)
     move_distribution: dict[str, int] = field(default_factory=dict)
     uncovered_blocks: list[str] = field(default_factory=list)
+    #: 变化说明看不见、已被换成中性说法的镜头。**要报出来** ——
+    #: 这个数字等于「有几镜的首尾帧不会有实质差别」，
+    #: 而那正是成片看起来像幻灯片的直接原因
+    static_derives: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +141,7 @@ class ShotPlanResult:
             "size_distribution": self.size_distribution,
             "move_distribution": self.move_distribution,
             "uncovered_blocks": self.uncovered_blocks,
+            "static_derives": self.static_derives,
         }
 
 
@@ -350,13 +362,30 @@ def build_shot_plan(
                 params_json={**shared, "content": first_content},
                 derive_from_first=False, status=SpecStatus.pending,
             ))
+            # **变化说明必须是看得见的动作。**
+            #
+            # 提示词里已经写死了（含反例），但模型仍会写出「眉头微皱」
+            # 「呼吸略显急促」这类 —— 五秒的镜头里那些看不出来，
+            # 首尾帧于是几乎相同，i2v 无从插值，成片里就是一张静止画面。
+            #
+            # 判出来之后**不丢弃也不硬编**：原话留在 static_derives 里给人看，
+            # 位置上换成一句中性的、至少能让画面动起来的说法。
+            # 硬编一个具体动作（「他站起来」）会凭空造出原文没有的情节。
+            derive = as_text(item.get("derive_instruction")) or None
+            vis_ok, vis_why = sp.is_visible_change(derive)
+            if not vis_ok:
+                result.static_derives.append({
+                    "shot": shot.order_no, "instruction": derive, "why": vis_why,
+                })
+                derive = _NEUTRAL_DERIVE
+
             db.add(FrameSpec(
                 id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
                 prompt=last_content or None,
                 entity_ids_json=entity_ids,
                 params_json={**shared, "content": last_content},
                 derive_from_first=True,
-                derive_instruction=str(item.get("derive_instruction") or "") or None,
+                derive_instruction=derive,
                 status=SpecStatus.pending,
             ))
 

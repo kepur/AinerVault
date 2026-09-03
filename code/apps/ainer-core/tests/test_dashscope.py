@@ -451,3 +451,64 @@ class TestVideoDurationBounds:
                     "duration_ms": 60000}, "wan2.7-i2v", 5)
         assert short["parameters"]["duration"] == _DS_VIDEO_MIN_S
         assert long["parameters"]["duration"] == _DS_VIDEO_MAX_S
+
+
+class TestFreeTierVoices:
+    """sambert 那一批有免费额度（各 3 万），qwen3-tts 没有。
+    一本长篇几千句对白，默认落在付费档上是一笔不该花的钱 ——
+    而这笔钱是**静默**花掉的：数据正常、音频也正常出，只有账单会说话。
+    """
+
+    def test_sambert_is_tagged_free(self):
+        from app.capability.dialects import dashscope_voices
+
+        free = [v for v in dashscope_voices() if "free-tier" in (v.tags or [])]
+        assert free and all(v.voice_id.startswith("sambert-") for v in free)
+
+    def test_language_filter_excludes_wrong_accent(self):
+        """不过滤的话英文剧本会配上中文音色 —— sambert-zhida 念英语能出声，
+        只是口音重到听不出在说什么，而数据上完全正常。"""
+        from app.capability.dialects import dashscope_voices
+
+        en = {v.voice_id for v in dashscope_voices(language="en-GB")}
+        assert "sambert-beth-v1" in en
+        assert "sambert-zhida-v1" not in en
+
+    def test_free_tier_is_tried_first(self):
+        """排序只在「从头开始扫」时才有意义。原来把两族拼成一个列表、
+        按哈希取起点再顺延 —— 起点直接落在付费段就从付费段开始拿，
+        实跑六个角色全落付费，而唯一的免费男声一次都没被用到。"""
+        import inspect
+
+        from app.pipelines import casting
+
+        src = inspect.getsource(casting.bind_engine_voices)
+        assert "free_pool" in src and "paid_pool" in src
+        assert "for tier in (free_pool, paid_pool)" in src
+
+    def test_paid_fallback_is_reported(self):
+        """免费档不够用是真实的资源约束，不是 bug ——
+        但它必须被看见，让人决定「复用同一把嗓子」还是「付费」。"""
+        import inspect
+
+        from app.pipelines import casting
+
+        assert "paid_fallback" in inspect.getsource(casting.bind_engine_voices)
+
+    def test_sambert_voice_is_the_model_name(self):
+        """与 qwen3-tts 的「一个模型 + voice 参数」相反 ——
+        路由上写死一个模型等于写死一把嗓子。"""
+        import inspect
+
+        from app.capability import dialects
+
+        assert "音色就是模型名" in inspect.getsource(dialects._sambert_invoke)
+
+    def test_style_prompt_loss_is_warned(self):
+        """sambert 没有表演指示通道。默默丢掉的话所有角色听起来一个样，
+        而没有任何地方说过为什么。"""
+        import inspect
+
+        from app.capability import dialects
+
+        assert "不接受表演指示" in inspect.getsource(dialects._sambert_invoke)
