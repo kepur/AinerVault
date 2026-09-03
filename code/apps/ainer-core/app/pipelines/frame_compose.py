@@ -576,6 +576,17 @@ def bind_and_compose(
                     "shot": shot.order_no, "role": frame.role.value,
                     "segments": cjk,
                 })
+            # **负面词同样要查。** 从前只查正向，于是文化包的 visual_dont
+            # （「美式元素」「工业流水线」这类中文条目）一路直达模型 ——
+            # 图像模型不认中文，这些条目既起不到排除作用，
+            # 还可能被当成要画的内容。而正向那边的报表全绿，
+            # 看的人有充分理由相信这一镜没有中文残留。
+            cjk_neg = cjk_segments(neg)
+            if cjk_neg:
+                result.untranslated.append({
+                    "shot": shot.order_no, "role": frame.role.value,
+                    "side": "negative", "segments": cjk_neg,
+                })
 
             for eid in frame.entity_ids_json or []:
                 entity = db.get(WorldEntity, eid)
@@ -686,14 +697,37 @@ def generate_first_frames(
             "width": width, "height": height,
             "params": {"seed": params.get("seed")},
         }
-        refs = params.get("reference_images") or []
+        refs = list(params.get("reference_images") or [])
+        cap = Capability.image_t2i
+        anchor, refs = _split_identity_anchor(refs)
+        if anchor is not None:
+            # **带身份锚就走编辑能力，锚本身当底图。**
+            #
+            # 从前这里一律发 image.text_to_image，参考图只是随payload挂着 ——
+            # 而纯文生图模型没有读参考图的通道，于是锚生成了、绑上了、
+            # 交付清单里也列着，出来的脸却每张都不一样，
+            # 且没有任何一处说过为什么。「存了但没注入」的又一例。
+            #
+            # 编辑模型的语义恰好就是这件事：给你这个人，把他放进这个场景。
+            # 底图取主要人物的锚，其余人物的锚作为附加参考一并传下去。
+            payload = {
+                "image": anchor,
+                "prompt": frame.prompt,
+                "negative_prompt": frame.negative_prompt or "",
+                "strength": IDENTITY_EDIT_STRENGTH,
+                # 画幅必须显式带上：编辑模型不传就跟随底图，
+                # 而锚是方形头肩像，出来的整批镜头会是 1:1
+                "width": width, "height": height,
+                "params": {"seed": params.get("seed")},
+            }
+            cap = Capability.image_i2i
         if refs:
             payload["reference_images"] = refs
 
         task = submit_task(
-            db, Capability.image_t2i, payload, purpose="first_frame",
+            db, cap, payload, purpose="first_frame",
             ref_kind="frame_spec", ref_id=frame.id,
-            novel_id=novel_id, chapter_id=chapter_id,
+            novel_id=novel_id, chapter_id=chapter_id, force=regenerate,
         )
         frame.gen_task_id = task.id
         frame.status = SpecStatus.generating
@@ -768,7 +802,7 @@ def generate_last_frames(
         task = submit_task(
             db, Capability.image_i2i, payload, purpose="last_frame",
             ref_kind="frame_spec", ref_id=frame.id,
-            novel_id=novel_id, chapter_id=chapter_id,
+            novel_id=novel_id, chapter_id=chapter_id, force=regenerate,
         )
         frame.gen_task_id = task.id
         frame.status = SpecStatus.generating
@@ -805,6 +839,32 @@ def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
             updated += 1
     db.flush()
     return {"frames_updated": updated, "checked": len(rows)}
+
+
+#: 用锚做底图时的改动幅度。身份锚是**正面素颜头肩像**，
+#: 要变成一个带服装、环境、光线的完整画面，改动必然大 ——
+#: 尾帧那种 0.35 会把人留在灰背景棚里。
+#: 但也不能给到 1：那等于重画，脸就丢了。
+IDENTITY_EDIT_STRENGTH = 0.75
+
+
+def _split_identity_anchor(
+    refs: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """挑出当底图的人物锚，返回（底图引用, 其余参考）。
+
+    只认 character 角色 —— 风格图与构图图不能当底图，
+    拿风格参考去当底图，出来的是「那张风格图被改了几笔」，不是这一镜。
+
+    多人同框时取第一张：编辑模型按出现顺序理解主次，
+    主要人物做底图、其余作附加参考，比平铺一堆图更稳。
+    """
+    base = next((r for r in refs
+                 if isinstance(r, dict) and str(r.get("role")) == "character"
+                 and isinstance(r.get("ref"), dict)), None)
+    if base is None:
+        return None, refs
+    return base["ref"], [r for r in refs if r is not base]
 
 
 def _size_for(aspect: str) -> tuple[int, int]:

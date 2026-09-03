@@ -159,13 +159,19 @@ def test_endpoint(endpoint_id: str, db: Session = Depends(get_db)) -> dict:
     ) as c:
         try:
             h = c.health()
-            result = {"ok": h.ok, "version": h.version, "upstreams": h.upstreams,
-                      "checked_at": utcnow().isoformat()}
+            result = {"ok": h.ok, "version": h.version,
+                      "contract_version": h.contract_version,
+                      "upstreams": h.upstreams, "checked_at": utcnow().isoformat()}
         except CapabilityError as exc:
             result = {"ok": False, "error": exc.to_json(), "checked_at": utcnow().isoformat()}
     ep.health_json = result
-    if result.get("version"):
-        ep.contract_version = result["version"]
+    # **写的是契约版本，不是自报版本串。** 两者曾经混用，
+    # 而 "cloudflare-dialect/2.0.0" 有 24 个字符、列宽只有 16 ——
+    # 于是每次点「测试」都 500，直连端点的健康状态永远是空的。
+    # 症状指向数据库，起因却在这一行。
+    ver = result.get("contract_version") or ""
+    if ver:
+        ep.contract_version = ver[:16]
     db.flush()
     return result
 

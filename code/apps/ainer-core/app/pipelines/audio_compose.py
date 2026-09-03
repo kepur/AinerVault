@@ -389,6 +389,7 @@ def generate_audio(
             ref_kind="audio_spec", ref_id=spec.id,
             novel_id=chapter.novel_id if chapter else None,
             chapter_id=chapter.id if chapter else None,
+            force=regenerate,
         )
         spec.gen_task_id = task.id
         spec.status = SpecStatus.generating

@@ -270,7 +270,11 @@ class HealthResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     ok: bool = False
+    #: 服务自报的版本串，形如 "dashscope-dialect/2.0.0"。给人看的，长度不受约束。
     version: str | None = None
+    #: **契约版本**，形如 "2.0.0"。用来判断能不能对话，会落库到 varchar(16)。
+    #: 和 version 分开是因为两者长度与用途都不同 —— 混用会撑爆列宽。
+    contract_version: str | None = None
     upstreams: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -329,6 +333,10 @@ class I2IInput(BaseModel):
     prompt: str
     negative_prompt: str | None = None
     strength: float = 0.35
+    #: 输出画幅。不给就跟随底图 —— 当底图是身份锚（方形头肩像）时，
+    #: 这会让整批镜头变成 1:1，要到剪辑台上才发现，所以派生用途务必显式给。
+    width: int | None = None
+    height: int | None = None
     reference_images: list[ReferenceImage] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
 

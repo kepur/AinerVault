@@ -14,8 +14,9 @@ from typing import Any
 import httpx
 
 from app.capability.dialects import (
-    DIALECT_CLOUDFLARE, DIALECT_OPENAI, SYNC_ONLY_DIALECTS, cloudflare_health,
-    cloudflare_invoke, openai_catalog, openai_health, openai_invoke,
+    DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE, DIALECT_OPENAI, SYNC_ONLY_DIALECTS,
+    cloudflare_health, cloudflare_invoke, dashscope_catalog, dashscope_health,
+    dashscope_invoke, dashscope_voices, openai_catalog, openai_health, openai_invoke,
 )
 from app.capability.errors import CapabilityError, CapErrorCode
 from app.capability.router import ResolvedRoute
@@ -162,6 +163,9 @@ class CapabilityClient:
         if self.dialect == DIALECT_CLOUDFLARE:
             return cloudflare_health(
                 self.client, self.base_url, self._headers(), self.timeout_sec)
+        if self.dialect == DIALECT_DASHSCOPE:
+            return dashscope_health(
+                self.client, self.base_url, self._headers(), self.timeout_sec)
         if self.dialect == DIALECT_OPENAI:
             return openai_health(self.client, self.base_url, self._headers(), 10)
         return HealthResult.model_validate(self._request("GET", "/health", timeout=10))
@@ -169,9 +173,13 @@ class CapabilityClient:
     def capabilities(self) -> CapabilityCatalog:
         if self.dialect == DIALECT_OPENAI:
             return openai_catalog(self.client, self.base_url, self._headers(), 20)
+        if self.dialect == DIALECT_DASHSCOPE:
+            return dashscope_catalog(self.client, self.base_url, self._headers(), 20)
         return CapabilityCatalog.model_validate(self._request("GET", "/capabilities", timeout=20))
 
     def voices(self, *, language: str | None = None, gender: str | None = None) -> list[Voice]:
+        if self.dialect == DIALECT_DASHSCOPE:
+            return dashscope_voices(language=language, gender=gender)
         params = {k: v for k, v in {"language": language, "gender": gender}.items() if v}
         data = self._request("GET", "/voices", params=params, timeout=20)
         return [Voice.model_validate(v) for v in data.get("voices", [])]
@@ -249,6 +257,13 @@ class CapabilityClient:
         req = self._build_request(
             cap, payload, model=model, options=options, idempotency_key=idempotency_key
         )
+        if self.dialect == DIALECT_DASHSCOPE:
+            return dashscope_invoke(
+                self.client, self.base_url, self._headers(),
+                capability=cap, payload=req.input, model=model,
+                timeout=min(req.options.timeout_ms / 1000, self.timeout_sec),
+                task_id=req.idempotency_key,
+            )
         if self.dialect == DIALECT_CLOUDFLARE:
             return cloudflare_invoke(
                 self.client, self.base_url, self._headers(),

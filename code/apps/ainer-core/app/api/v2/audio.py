@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.capability.errors import CapabilityError
 from app.db import get_db
 from app.models import (
     AudioKind, AudioSpec, ReviewStatus, Scene, Shot, ShotPlan, VoiceCasting,
@@ -196,6 +197,47 @@ def derive_epoch_voices(novel_id: str, profile_id: str = Query(...),
         return casting.cast_epoch_voices(db, novel_id, profile)
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class BindVoicesIn(BaseModel):
+    profile_id: str
+    endpoint_id: str | None = None
+    overwrite: bool = False
+
+
+@router.post("/novels/{novel_id}/casting:bind-engine-voices")
+def bind_engine_voices(novel_id: str, body: BindVoicesIn,
+                       db: Session = Depends(get_db)) -> dict:
+    """把配音表落到某家 TTS 引擎的具体音色上。
+
+    权威依然是配音表里的声学描述 —— 这一步只是「在这家引擎上用哪把嗓子」，
+    换引擎重跑一次即可，不需要重配全书。
+    """
+    from app.capability.client import CapabilityClient
+    from app.capability.service import resolve_one
+    from app.capability.schemas import Capability
+    from app.models import CapabilityEndpoint
+
+    if body.endpoint_id:
+        ep = db.get(CapabilityEndpoint, body.endpoint_id)
+        if ep is None:
+            raise HTTPException(status_code=404, detail="endpoint not found")
+    else:
+        ep = resolve_one(db, Capability.audio_tts, "dialogue").endpoint
+    with CapabilityClient(ep.base_url, auth=ep.auth_json or {},
+                          dialect=ep.dialect or "capability") as c:
+        try:
+            voices = c.voices()
+        except CapabilityError as exc:
+            raise HTTPException(status_code=502,
+                                detail=f"取音色清单失败：{exc}") from exc
+    if not voices:
+        raise HTTPException(
+            status_code=422,
+            detail=f"端点 {ep.name} 没有可用音色清单，无法落地")
+    return casting.bind_engine_voices(
+        db, novel_id=novel_id, profile_id=body.profile_id,
+        engine=ep.dialect or ep.name, voices=voices, overwrite=body.overwrite)
 
 
 @router.get("/novels/{novel_id}/casting")

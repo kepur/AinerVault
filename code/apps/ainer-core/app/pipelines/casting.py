@@ -29,10 +29,12 @@
 """
 from __future__ import annotations
 
+import hashlib
+
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -750,6 +752,121 @@ def casting_params(row: VoiceCasting | None) -> dict[str, Any]:
     spec = VoiceSpec.from_json(row.timbre_json)
     params = to_tts_params(spec, voice_ref=row.voice_ref)
     params["voice_casting_id"] = row.id
+    # 引擎上的落地。没有就不填 —— 让方言层的兜底逻辑去警告，
+    # 而不是在这里悄悄编一个 voice id 出来
+    if row.voice_ref:
+        params["voice_id"] = row.voice_ref
+        params["voice_engine"] = row.voice_engine
     if row.speech_habits:
         params["speech_habits"] = row.speech_habits
     return params
+
+
+# ── 落到具体引擎 ──────────────────────────────────────────────────────────────
+#
+# 配音表的权威是 timbre_json 那份声学描述，不是某家引擎的 voice id ——
+# 存 voice id 当权威会锁死在一家引擎上，换 TTS 就等于换一套演员。
+# 但描述本身不能直接调用，中间必须有一次落地：把「中年男声中位圆润」
+# 对到这家引擎某个具体音色上。这就是 voice_ref / voice_engine 两列的用途。
+
+#: 落地时最要紧的一条：**同一个角色永远拿同一把嗓子**。
+#: 用 cast_key 的哈希取模来选，而不是按遍历顺序 ——
+#: 顺序会随「今天有几个角色开口」变化，换一章重跑就换了声音。
+
+
+def bind_engine_voices(
+    db: Session, *, novel_id: str, profile_id: str, engine: str,
+    voices: Sequence[Any], overwrite: bool = False,
+) -> dict[str, Any]:
+    """把配音表的中性描述落到某家引擎的具体音色上。
+
+    voices 是该引擎的音色清单（capability 契约的 Voice）。
+    性别是唯一硬约束 —— 把男角色配成女声，听一句就知道错了，
+    而音区、音质这些维度靠引擎的表演指示去逼近，不靠挑音色。
+
+    同性别的角色之间尽量不撞：先按哈希定位，占用了就顺延。
+    撞不开时（角色比音色多）允许重复，但报出来 —— 让人知道
+    「这两个人声音一样」是资源不足，不是配错了。
+    """
+    from app.models import VoiceCasting, WorldEntity
+
+    # 配音表只按圈层建，没有 novel_id 这一列 —— 同一个目标圈层可以服务多部小说。
+    # 所以按小说收窄要走实体：本书的角色，加上旁白（旁白没有实体）。
+    mine = {e.id for e in db.execute(
+        select(WorldEntity).where(WorldEntity.novel_id == novel_id)).scalars()}
+    rows = [
+        r for r in db.execute(
+            select(VoiceCasting).where(VoiceCasting.world_profile_id == profile_id)
+            .order_by(VoiceCasting.cast_key, VoiceCasting.epoch_key)
+        ).scalars()
+        if r.entity_id is None or r.entity_id in mine
+    ]
+    if not rows:
+        return {"bound": 0, "skipped": 0, "collisions": [], "no_voice_for": []}
+
+    pool: dict[str, list[str]] = {}
+    for v in voices:
+        pool.setdefault((getattr(v, "gender", None) or "any").lower(), []).append(
+            getattr(v, "voice_id", None) or str(v))
+    for lst in pool.values():
+        lst.sort()
+
+    # 一个角色的多个时期共用同一把嗓子 —— 时期变的是年龄感与状态，
+    # 不是声部。按 cast_key 分配一次，所有时期沿用
+    by_key: dict[str, list[VoiceCasting]] = {}
+    for row in rows:
+        by_key.setdefault(row.cast_key, []).append(row)
+
+    taken: set[str] = set()
+    if not overwrite:
+        taken = {r.voice_ref for r in rows
+                 if r.voice_ref and r.voice_engine == engine}
+
+    bound = skipped = 0
+    collisions: list[str] = []
+    missing: list[str] = []
+    assigned: dict[str, str] = {}
+
+    for key in sorted(by_key):
+        group = by_key[key]
+        current = next((r.voice_ref for r in group
+                        if r.voice_ref and r.voice_engine == engine), None)
+        if current and not overwrite:
+            assigned[key] = current
+            skipped += len(group)
+            continue
+        spec = VoiceSpec.from_json(group[0].timbre_json)
+        gender = to_tts_params(spec).get("gender") or "any"
+        candidates = pool.get(gender) or pool.get("any") or []
+        if not candidates:
+            missing.append(f"{key}（需要 {gender} 音色，清单里没有）")
+            continue
+        start = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(candidates)
+        pick = None
+        for offset in range(len(candidates)):
+            cand = candidates[(start + offset) % len(candidates)]
+            if cand not in taken:
+                pick = cand
+                break
+        if pick is None:
+            pick = candidates[start]
+            collisions.append(f"{key} → {pick}（{gender} 音色不够，与他人重复）")
+        taken.add(pick)
+        assigned[key] = pick
+        for row in group:
+            row.voice_ref = pick
+            row.voice_engine = engine
+            bound += 1
+
+    db.flush()
+    return {
+        "bound": bound, "skipped": skipped, "engine": engine,
+        "assigned": assigned,
+        "collisions": collisions,
+        "no_voice_for": missing,
+        # 报清楚哪一部分没查 —— 只报「0 处冲突」会让人以为全查过了
+        "not_checked": [
+            "音色的性别是按厂商命名推断的，没有实听；"
+            "配错了要人听过之后在配音表里改",
+        ],
+    }

@@ -30,7 +30,7 @@ from app.capability.errors import (
 )
 from app.capability.schemas import (
     CONTRACT_VERSION, Capability, CapabilityCatalog, CapabilityEntry,
-    HealthResult, ModelDescriptor, Task, TaskState, Usage,
+    HealthResult, ModelDescriptor, Task, TaskState, Usage, Voice,
 )
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,9 @@ log = logging.getLogger(__name__)
 DIALECT_CAPABILITY = "capability"
 DIALECT_OPENAI = "openai"
 DIALECT_CLOUDFLARE = "cloudflare"
-DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE)
+DIALECT_DASHSCOPE = "dashscope"
+DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE,
+            DIALECT_DASHSCOPE)
 
 #: openai 方言能承接的能力。图像/音频不在此列 —— 走这条方言的服务只有文本。
 OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
@@ -597,7 +599,7 @@ def openai_catalog(transport: httpx.Client, base_url: str, headers: dict[str, st
 #   契约下游（参考图、i2i、交付清单）认的只有 URL。
 
 #: 同步方言：没有任务队列，submit 也得当场跑完
-SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE)
+SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE)
 
 #: **每个模型只吃自己 schema 里的字段，多传一个就整个请求 400。**
 #: flux-1-schnell 只认 prompt 与 steps —— 传 width/height/seed/negative_prompt
@@ -783,3 +785,526 @@ def cloudflare_health(transport: httpx.Client, base_url: str,
         ok = False
     return HealthResult(ok=ok, version=f"cloudflare-dialect/{CONTRACT_VERSION}",
                         contract_version=CONTRACT_VERSION)
+
+
+# ══ dashscope 方言 ══════════════════════════════════════════════════════════
+#
+# 阿里云百炼。它和前面两种方言最大的差别不在参数形状，而在**产物形态**：
+#
+#   Cloudflare  直接回字节 —— 存下来就完了
+#   DashScope   回一个带 Expires 签名的 OSS 临时 URL —— **必须当场下载**
+#
+# 那个 URL 十几分钟就失效。把它当成 asset.url 存进库，是「当时点开能看、
+# 第二天全成死链」这类问题里最难查的一种：库里有行、有 URL、状态是 ready，
+# 只有图不见了。所以本方言的每条产出路径末尾都必须落盘，没有例外。
+#
+# 第二个差别是能力覆盖面：这是目前唯一一个图像、语音、视频都能打的直连方言。
+# 图像与语音同步，视频异步（提交拿 task_id 再轮询）——
+# 但对上游而言三者都走 invoke()，视频的异步是本模块内部的事。
+
+#: 同步端点。图像（含参考图编辑）与语音都在这里，靠 model 区分。
+_DS_MM = "/api/v1/services/aigc/multimodal-generation/generation"
+#: 视频合成是独立的异步端点
+_DS_VIDEO = "/api/v1/services/aigc/video-generation/video-synthesis"
+_DS_TASKS = "/api/v1/tasks"
+
+#: 视频轮询节奏。首轮等久一点没意义 —— 排队时间远大于这个粒度
+_DS_POLL_SEC = 5.0
+
+#: 画幅只接受 "宽*高"（星号，不是小写 x）
+_DS_SIZE_SEP = "*"
+
+#: 语音：契约给的是 voice_id，这里原样透传。
+#: 没给就用一个中性音色兜底 —— 但会带 warning，
+#: 因为「配音表明明配了音色，出来的却全是同一个人」查起来很费劲。
+_DS_FALLBACK_VOICE = "Cherry"
+
+
+def _ds_is_tts(model: str) -> bool:
+    return "-tts" in model
+
+
+def _ds_is_video(model: str) -> bool:
+    return "-i2v" in model or "-t2v" in model or "video" in model
+
+
+def _ds_error(resp: httpx.Response) -> CapabilityError:
+    """百炼的错误裹在 {code, message, request_id} 里，HTTP 码常常是 400 一把抓。"""
+    code, retryable = CapErrorCode.UPSTREAM_ERROR, resp.status_code >= 500
+    detail = resp.text[:400]
+    ds_code = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            ds_code = str(body.get("code") or "")
+            detail = str(body.get("message") or detail)
+    except Exception:  # noqa: BLE001
+        pass
+    if resp.status_code in (401, 403) or ds_code in ("InvalidApiKey", "Unauthorized"):
+        code = CapErrorCode.UNAUTHORIZED
+    elif resp.status_code == 429 or "Throttling" in ds_code:
+        code, retryable = CapErrorCode.RATE_LIMITED, True
+    elif ds_code in ("Arrearage", "InsufficientQuota", "FreeQuotaExhausted"):
+        # 免费额度用完是**不可重试**的：重试只会把同一个错再撞一遍。
+        # 单独认出来，是因为它的处置方式和别的 400 完全不同（去充值，不是改参数）
+        code = CapErrorCode.UPSTREAM_ERROR
+        detail += "（该模型的免费额度已用尽，需开通付费或换模型）"
+    elif 400 <= resp.status_code < 500:
+        code = CapErrorCode.INVALID_REQUEST
+    return CapabilityError(
+        code, f"DashScope {resp.status_code} {ds_code}: {detail}".strip(),
+        retryable=retryable)
+
+
+def _ds_fetch(transport: httpx.Client, url: str, *, mime: str,
+              timeout: float) -> dict[str, object]:
+    """把签名 URL 的内容取回来落盘。**方言里最不能省的一步。**"""
+    from app.capability.mediastore import store_bytes
+
+    try:
+        resp = transport.get(url, timeout=timeout)
+    except httpx.HTTPError as exc:
+        raise CapabilityError(
+            CapErrorCode.TRANSPORT_ERROR,
+            f"DashScope 产物下载失败（签名 URL 有效期很短，失败即不可恢复）：{exc}",
+            retryable=True) from exc
+    if resp.status_code >= 400:
+        raise CapabilityError(
+            CapErrorCode.UPSTREAM_ERROR,
+            f"DashScope 产物 URL 返回 {resp.status_code} —— 多半是签名已过期")
+    return store_bytes(resp.content, mime=mime)
+
+
+def _ds_data_url(transport: httpx.Client, ref: Any, timeout: float) -> str | None:
+    """AssetRefIn → data URL。
+
+    百炼的编辑模型**接受 base64 data URL**，不要求参考图有公网地址 ——
+    这一条是身份锚能不能跨期保持同一张脸的关键：
+    本地生成的锚图不必先传到某个对象存储上去。
+    """
+    import base64
+    from pathlib import Path
+
+    from app.capability.mediastore import media_root
+
+    if not isinstance(ref, dict):
+        return None
+    b64 = ref.get("b64")
+    mime = str(ref.get("mime") or "image/png")
+    if b64:
+        return f"data:{mime};base64,{b64}"
+    url = str(ref.get("url") or "")
+    if not url:
+        return None
+    # 本地产物直接读文件，不绕一圈 HTTP —— 容器里 public_base_url 未必自指
+    if "/media/" in url:
+        path = Path(media_root()) / url.rsplit("/media/", 1)[-1].split("?")[0]
+        if path.exists():
+            raw = path.read_bytes()
+            from app.capability.mediastore import sniff
+            return f"data:{sniff(raw, mime)};base64,{base64.b64encode(raw).decode()}"
+    if url.startswith(("http://", "https://")):
+        try:
+            resp = transport.get(url, timeout=timeout)
+            if resp.status_code < 400:
+                from app.capability.mediastore import sniff
+                got = sniff(resp.content, mime)
+                return f"data:{got};base64,{base64.b64encode(resp.content).decode()}"
+        except httpx.HTTPError:
+            return None
+    return None
+
+
+def _ds_image_body(transport: httpx.Client, payload: dict[str, Any], model: str,
+                   *, capability: Capability, timeout: float,
+                   warnings: list[str]) -> dict[str, Any]:
+    """契约的图像入参 → 百炼的 multimodal 形状。"""
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "图像生成缺少 prompt")
+
+    content: list[dict[str, Any]] = []
+    # 底图（i2i 的原图）排在参考图之前 —— 编辑模型按出现顺序理解「改哪张」
+    if capability in (Capability.image_i2i, Capability.image_edit):
+        base = _ds_data_url(transport, payload.get("image"), timeout)
+        if not base:
+            raise CapabilityError(
+                CapErrorCode.INVALID_REQUEST,
+                f"{capability.value} 需要底图，但 image 取不到内容")
+        content.append({"image": base})
+
+    from app.pipelines.base import as_items
+
+    used = 0
+    for item in as_items(payload, "reference_images"):
+        data_url = _ds_data_url(transport, item.get("ref"), timeout)
+        if data_url is None:
+            warnings.append(f"参考图 {item.get('tag') or item.get('role')} 取不到内容，已跳过")
+            continue
+        content.append({"image": data_url})
+        used += 1
+    if used and "-edit" not in model:
+        # 非编辑模型收下参考图也不会读。说清楚比默默丢掉重要 ——
+        # 「脸参考图明明挂上了，出来的脸每张都不一样」是最难查的一类
+        warnings.append(
+            f"{model} 不是编辑模型，{used} 张参考图不会被读取；"
+            f"跨期同一性请改用 qwen-image-edit-max / qwen-image-edit-plus")
+        content = [c for c in content if "image" not in c] or []
+        if capability in (Capability.image_i2i, Capability.image_edit):
+            raise CapabilityError(
+                CapErrorCode.INVALID_REQUEST,
+                f"{capability.value} 需要编辑模型，{model} 不接受底图")
+
+    content.append({"text": prompt})
+
+    params: dict[str, Any] = {"n": int(payload.get("n") or 1), "watermark": False}
+    neg = str(payload.get("negative_prompt") or "").strip()
+    if neg:
+        params["negative_prompt"] = neg
+    w, h = payload.get("width"), payload.get("height")
+    # **编辑模型也要传画幅。** 不传的话输出跟随底图尺寸，
+    # 而身份锚是方形头肩像 —— 于是 16:9 的交付里混进一批 1:1 的镜头，
+    # 要到剪辑台上才发现。
+    if w and h:
+        params["size"] = f"{int(w)}{_DS_SIZE_SEP}{int(h)}"
+    extra = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    for key in ("seed", "prompt_extend"):
+        if extra.get(key) is not None:
+            params[key] = extra[key]
+    return {"model": model,
+            "input": {"messages": [{"role": "user", "content": content}]},
+            "parameters": params}
+
+
+def _ds_tts_body(payload: dict[str, Any], model: str,
+                 warnings: list[str]) -> dict[str, Any]:
+    """契约的 TTS 入参 → 百炼形状。
+
+    **instruct 是这条方言最有价值的一处。** 配音表算出来的是
+    音质／语速／力度／状态这些维度，此前要为每个引擎写一层数值映射；
+    instruct 版直接吃一句自然语言，维度可以原样说出来。
+    """
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "TTS 缺少 text")
+    voice = payload.get("voice_id")
+    if not voice:
+        voice = _DS_FALLBACK_VOICE
+        warnings.append(
+            f"未指定音色，回落到 {_DS_FALLBACK_VOICE} —— "
+            f"整章都用同一个兜底音色时，听起来像「配音没生效」而不像「缺配置」")
+    body_in: dict[str, Any] = {"text": text, "voice": str(voice)}
+
+    extra = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    # 配音表算出来的中性描述存在 style_prompt 里（voice.to_tts_params）。
+    # 认这个键，是为了让「配音表 → 引擎」这一段不需要额外映射层：
+    # 音质／语速／力度／状态本来就是一句话能说清的事。
+    instruct = str(extra.get("instruct") or extra.get("style_prompt") or "").strip()
+    if instruct:
+        if "instruct" in model:
+            body_in["instruct"] = instruct
+        else:
+            warnings.append(
+                f"{model} 不接受表演指示，「{instruct[:24]}」未生效；"
+                f"换 qwen3-tts-instruct-flash 可用")
+    params: dict[str, Any] = {}
+    lang = str(payload.get("language") or "")
+    if lang:
+        params["language_type"] = _DS_LANG.get(lang.split("-")[0].lower(), "Auto")
+    return {"model": model, "input": body_in, "parameters": params}
+
+
+#: 百炼要的是语种名不是 BCP-47
+_DS_LANG = {"zh": "Chinese", "en": "English", "ja": "Japanese", "ko": "Korean",
+            "fr": "French", "de": "German", "es": "Spanish", "it": "Italian",
+            "ru": "Russian", "pt": "Portuguese", "ar": "Arabic", "id": "Indonesian"}
+
+
+def _ds_video_body(transport: httpx.Client, payload: dict[str, Any], model: str,
+                   timeout: float) -> dict[str, Any]:
+    first = _ds_data_url(transport, payload.get("first_frame"), timeout)
+    if not first:
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            "图生视频需要首帧，但 first_frame 取不到内容")
+    body_in: dict[str, Any] = {"media": [first]}
+    last = _ds_data_url(transport, payload.get("last_frame"), timeout)
+    if last:
+        body_in["media"].append(last)
+    prompt = str(payload.get("prompt") or "").strip()
+    if prompt:
+        body_in["prompt"] = prompt
+    params: dict[str, Any] = {}
+    dur = payload.get("duration_ms")
+    if dur:
+        params["duration"] = max(1, round(int(dur) / 1000))
+    return {"model": model, "input": body_in, "parameters": params}
+
+
+def _ds_post(transport: httpx.Client, base_url: str, headers: dict[str, str],
+             path: str, body: dict[str, Any], *, timeout: float,
+             extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
+    hdrs = {**headers, "Content-Type": "application/json", **(extra_headers or {})}
+    try:
+        resp = transport.post(f"{base_url.rstrip('/')}{path}", json=body,
+                              headers=hdrs, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
+                              f"DashScope 超时：{exc}", retryable=True) from exc
+    except httpx.HTTPError as exc:
+        raise CapabilityError(CapErrorCode.TRANSPORT_ERROR,
+                              f"DashScope 连接失败：{exc}", retryable=True) from exc
+    if resp.status_code >= 400:
+        raise _ds_error(resp)
+    try:
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise CapabilityError(CapErrorCode.BAD_RESPONSE,
+                              "DashScope 返回非 JSON") from exc
+
+
+def _ds_await_video(transport: httpx.Client, base_url: str, headers: dict[str, str],
+                    task_ref: str, *, timeout: float) -> str:
+    """轮询到出片，返回视频 URL。
+
+    上游看到的是一次同步调用 —— 百炼的 task_id 不是我们的 task_id，
+    也没有回调通道，暴露出去只会多一套对不上的状态机。
+    代价是超时后那次生成就找不回来了，所以超时信息里必须带上
+    供应商的 task_id：那是人工去控制台捞回来的唯一线索。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            resp = transport.get(f"{base_url.rstrip('/')}{_DS_TASKS}/{task_ref}",
+                                 headers=headers, timeout=30)
+        except httpx.HTTPError as exc:
+            raise CapabilityError(CapErrorCode.TRANSPORT_ERROR,
+                                  f"DashScope 轮询失败：{exc}", retryable=True) from exc
+        if resp.status_code >= 400:
+            raise _ds_error(resp)
+        out = (resp.json() or {}).get("output") or {}
+        state = str(out.get("task_status") or "").upper()
+        if state == "SUCCEEDED":
+            url = out.get("video_url") or ((out.get("results") or [{}])[0] or {}).get("url")
+            if not url:
+                raise CapabilityError(CapErrorCode.BAD_RESPONSE,
+                                      f"DashScope 视频任务成功但没有 URL：{str(out)[:200]}")
+            return str(url)
+        if state in ("FAILED", "CANCELED", "UNKNOWN"):
+            raise CapabilityError(
+                CapErrorCode.UPSTREAM_ERROR,
+                f"DashScope 视频任务 {state}：{out.get('message') or out.get('code') or ''}")
+        if time.monotonic() >= deadline:
+            raise CapabilityError(
+                CapErrorCode.UPSTREAM_TIMEOUT,
+                f"DashScope 视频任务在 {timeout:.0f}s 内没出片，"
+                f"供应商 task_id={task_ref}（生成仍在继续，可到控制台取回）",
+                retryable=False)
+        time.sleep(min(_DS_POLL_SEC, max(0.5, deadline - time.monotonic())))
+
+
+def dashscope_invoke(
+    transport: httpx.Client, base_url: str, headers: dict[str, str], *,
+    capability: Capability, payload: dict[str, Any], model: str | None,
+    timeout: float, task_id: str,
+) -> Task:
+    """跑一次百炼，产物落盘后按契约的 Task 形态返回。"""
+    if not model:
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            "dashscope 方言必须在路由上指定模型，例如 qwen-image-3.0")
+    warnings: list[str] = []
+
+    if capability in (Capability.image_t2i, Capability.image_i2i,
+                      Capability.image_edit):
+        body = _ds_image_body(transport, payload, model, capability=capability,
+                              timeout=timeout, warnings=warnings)
+        data = _ds_post(transport, base_url, headers, _DS_MM, body, timeout=timeout)
+        urls = _ds_images(data)
+        if not urls:
+            raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                                  f"DashScope 响应里没有图片：{str(data)[:200]}")
+        images = [_ds_fetch(transport, u, mime="image/png", timeout=timeout)
+                  for u in urls]
+        usage = data.get("usage") or {}
+        for img in images:
+            img["meta"] = {k: usage[k] for k in ("output_width", "output_height")
+                           if k in usage}
+        return Task(task_id=task_id, status=TaskState.succeeded,
+                    capability=capability.value, model=model, provider="dashscope",
+                    output={"images": images},
+                    usage=Usage(cost=0.0, units={"images": float(len(images))}),
+                    warnings=warnings or None)
+
+    if capability == Capability.audio_tts:
+        body = _ds_tts_body(payload, model, warnings)
+        data = _ds_post(transport, base_url, headers, _DS_MM, body, timeout=timeout)
+        audio = ((data.get("output") or {}).get("audio") or {})
+        url = audio.get("url")
+        if not url:
+            raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                                  f"DashScope 响应里没有音频：{str(data)[:200]}")
+        media = _ds_fetch(transport, str(url), mime="audio/wav", timeout=timeout)
+        # **时长权威是 TTS 的真实时长**（交付清单靠它对齐字幕与镜头长度）。
+        # 百炼不回时长，只能从 wav 头算 —— 算不出就不填，绝不估。
+        dur = _wav_duration_ms(media)
+        if dur is not None:
+            # **写进 meta，不是顶层。** 产物落库时只有 item["meta"] 会进
+            # Asset.meta_json，而回挂音频时长读的正是那一处 ——
+            # 写在顶层的话，音频生成得好好的、asset 也挂上了，
+            # 唯独 duration_ms 永远是 None，镜头长度回填全程静默跳过。
+            media.setdefault("meta", {})["duration_ms"] = dur
+        else:
+            warnings.append("未能从音频读出时长，交付清单的时间码会缺这一段")
+        chars = float((data.get("usage") or {}).get("characters") or 0)
+        return Task(task_id=task_id, status=TaskState.succeeded,
+                    capability=capability.value, model=model, provider="dashscope",
+                    output={"audio": media},
+                    usage=Usage(cost=0.0, units={"characters": chars}),
+                    warnings=warnings or None)
+
+    if capability == Capability.video_i2v:
+        body = _ds_video_body(transport, payload, model, timeout)
+        data = _ds_post(transport, base_url, headers, _DS_VIDEO, body,
+                        timeout=min(timeout, 60),
+                        extra_headers={"X-DashScope-Async": "enable"})
+        ref = ((data.get("output") or {}).get("task_id"))
+        if not ref:
+            raise CapabilityError(CapErrorCode.BAD_RESPONSE,
+                                  f"DashScope 未回 task_id：{str(data)[:200]}")
+        url = _ds_await_video(transport, base_url, headers, str(ref), timeout=timeout)
+        media = _ds_fetch(transport, url, mime="video/mp4", timeout=max(timeout, 120))
+        return Task(task_id=task_id, status=TaskState.succeeded,
+                    capability=capability.value, model=model, provider="dashscope",
+                    output={"video": media},
+                    usage=Usage(cost=0.0, units={"videos": 1.0}),
+                    warnings=warnings or None)
+
+    raise CapabilityError(
+        CapErrorCode.INVALID_REQUEST,
+        f"dashscope 方言不接 {capability.value}，请走中间层端点。")
+
+
+def _ds_images(data: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for choice in ((data.get("output") or {}).get("choices") or []):
+        for part in ((choice.get("message") or {}).get("content") or []):
+            if isinstance(part, dict) and part.get("image"):
+                out.append(str(part["image"]))
+    return out
+
+
+def _wav_duration_ms(media: dict[str, object]) -> int | None:
+    """从落盘的 wav 头读真实时长。读不出返回 None —— 宁可缺也不要估。"""
+    import struct
+    from pathlib import Path
+
+    from app.capability.mediastore import media_root
+
+    url = str(media.get("url") or "")
+    if "/media/" not in url:
+        return None
+    path = Path(media_root()) / url.rsplit("/media/", 1)[-1]
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    if raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return None
+    pos, rate, bits, ch, frames = 12, 0, 0, 0, 0
+    while pos + 8 <= len(raw):
+        cid, size = raw[pos:pos + 4], struct.unpack("<I", raw[pos + 4:pos + 8])[0]
+        if cid == b"fmt " and pos + 8 + 16 <= len(raw):
+            ch, rate = struct.unpack("<HI", raw[pos + 10:pos + 16])
+            bits = struct.unpack("<H", raw[pos + 22:pos + 24])[0]
+        elif cid == b"data":
+            frames = size
+            break
+        pos += 8 + size + (size & 1)
+    if not (rate and bits and ch and frames):
+        return None
+    return int(frames / (rate * ch * bits / 8) * 1000)
+
+
+def dashscope_health(transport: httpx.Client, base_url: str,
+                     headers: dict[str, str], timeout: float) -> HealthResult:
+    """百炼没有健康检查端点，用兼容模式的模型列表代替。"""
+    try:
+        resp = transport.get(f"{base_url.rstrip('/')}/compatible-mode/v1/models",
+                             headers=headers, timeout=timeout)
+        ok = resp.status_code < 400
+    except httpx.HTTPError:
+        ok = False
+    return HealthResult(ok=ok, version=f"dashscope-dialect/{CONTRACT_VERSION}",
+                        contract_version=CONTRACT_VERSION)
+
+
+#: 能力 → 该走哪些模型。**手写而不是从 /models 拉**：
+#: 百炼的模型列表两百多个，绝大多数是文本模型，混在图像下拉框里没法选；
+#: 而且列表里看不出「哪个能吃参考图」—— 那恰恰是选型时唯一要紧的信息。
+_DS_CATALOG: tuple[tuple[Capability, tuple[tuple[str, str], ...]], ...] = (
+    (Capability.image_t2i, (
+        ("qwen-image-3.0", "通义万相 3.0 · 文生图"),
+        ("qwen-image-3.0-pro", "通义万相 3.0 Pro · 文生图"),
+        ("qwen-image-2.0-pro-2026-06-22", "通义万相 2.0 Pro"),
+        ("wan2.7-image", "万相 2.7 · 文生图"),
+    )),
+    (Capability.image_i2i, (
+        ("qwen-image-edit-max", "通义图像编辑 Max · 吃参考图，跨期保脸靠它"),
+        ("qwen-image-edit-plus", "通义图像编辑 Plus"),
+    )),
+    (Capability.image_edit, (
+        ("qwen-image-edit-max", "通义图像编辑 Max"),
+        ("qwen-image-edit-plus", "通义图像编辑 Plus"),
+    )),
+    (Capability.audio_tts, (
+        ("qwen3-tts-instruct-flash", "Qwen3 TTS Instruct · 可用自然语言下表演指示"),
+        ("qwen3-tts-flash", "Qwen3 TTS Flash · 命名音色"),
+    )),
+    (Capability.video_i2v, (
+        ("wan2.7-i2v", "万相 2.7 · 图生视频"),
+    )),
+)
+
+
+def dashscope_catalog(transport: httpx.Client, base_url: str,
+                      headers: dict[str, str], timeout: float) -> CapabilityCatalog:
+    """百炼没有能力发现端点，目录是手写的。"""
+    entries = []
+    for cap, models in _DS_CATALOG:
+        entries.append(CapabilityEntry(
+            capability=cap,
+            models=[ModelDescriptor(id=mid, display_name=name, default=(i == 0),
+                                    estimated_ms=12000 if cap != Capability.video_i2v
+                                    else 120000)
+                    for i, (mid, name) in enumerate(models)],
+        ))
+    return CapabilityCatalog(capability_version=CONTRACT_VERSION,
+                             capabilities=entries)
+
+
+#: 可用音色。**性别是按厂商命名推断的提示，不是实测结果** ——
+#: 名字看起来像女名的标 female，如此而已。真要确认得听。
+#: 所以配音表里这一栏必须可人工改：机器给初值，人听过之后覆写。
+#: 年龄不列 —— 编一个「中年」出来，会让人以为系统真的知道。
+_DS_VOICES: tuple[tuple[str, str], ...] = (
+    ("Cherry", "female"), ("Jennifer", "female"), ("Katerina", "female"),
+    ("Jada", "female"), ("Sunny", "female"), ("Kiki", "female"),
+    ("Serena", "female"), ("Chelsie", "female"),
+    ("Ethan", "male"), ("Ryan", "male"), ("Elias", "male"), ("Dylan", "male"),
+    ("Marcus", "male"), ("Roy", "male"), ("Peter", "male"), ("Rocky", "male"),
+    ("Eric", "male"), ("Aiden", "male"), ("Nofish", "male"), ("Li", "male"),
+)
+
+
+def dashscope_voices(*, language: str | None = None,
+                     gender: str | None = None) -> list[Voice]:
+    """音色清单。百炼没有列举接口，这份表是手写的。"""
+    want = (gender or "").lower()
+    return [
+        Voice(voice_id=vid, display_name=vid, gender=g,
+              languages=["zh", "en", "ja", "ko", "fr", "de", "es", "it", "ru", "pt"],
+              tags=["dashscope", "qwen3-tts"])
+        for vid, g in _DS_VOICES
+        if not want or want == g
+    ]

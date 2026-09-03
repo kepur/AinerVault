@@ -75,10 +75,17 @@ def submit_task(
     route: ResolvedRoute | None = None,
     tier: str | None = None,
     max_cost: float | None = None,
+    force: bool = False,
 ) -> GenTask:
     """提交一次能力调用并落 gen_tasks。
 
     同 idempotency_key 命中已有记录时直接返回，不重复提交、不重复计费。
+
+    force=True 绕开这层复用 —— **这是「重新生成」唯一能真正生效的方式。**
+    在此之前，各管线的 regenerate 只做到「不跳过已有产物的规格」，
+    到了这里又被幂等命中挡回去：任务不重跑、产物不变、界面上却报「已提交 30 条」。
+    人会以为改了参数没效果，实际上根本没调过模型。
+    force 只应由人明确点「重新生成」时传入 —— 它绕开的正是防重复计费那一层。
     """
     cap = Capability(capability) if isinstance(capability, str) else capability
     route = route or resolve_one(db, cap, purpose, tier)
@@ -87,6 +94,11 @@ def submit_task(
     idem = canonical_idempotency_key(
         cap.value, merged, endpoint_id=route.endpoint.id, model=route.model
     )
+    if force:
+        # 键里掺一个随机段，让这次必然错开历史任务。
+        # 不改 request_json —— 送给模型的内容必须和不 force 时完全一致，
+        # 否则「重出一张」会变成「换个参数出一张」，两者不可比。
+        idem = f"{idem}:force:{new_id('f')}"
 
     existing = db.execute(
         select(GenTask).where(GenTask.idempotency_key == idem)
@@ -307,14 +319,14 @@ def _attach_to_ref(
             from app.models import FrameSpec, SpecStatus
 
             frame = db.get(FrameSpec, ref_id)
-            if frame is not None and not frame.asset_id:
+            if frame is not None and _supersedes(db, frame, task):
                 frame.asset_id = assets[0].id
                 frame.status = SpecStatus.ready
         elif ref_kind == "audio_spec":
             from app.models import AudioSpec, SpecStatus
 
             spec = db.get(AudioSpec, ref_id)
-            if spec is not None and not spec.asset_id:
+            if spec is not None and _supersedes(db, spec, task):
                 spec.asset_id = assets[0].id
                 spec.status = SpecStatus.ready
                 meta = assets[0].meta_json or {}
@@ -325,6 +337,32 @@ def _attach_to_ref(
                     spec.timestamps_json = ts
     except Exception:  # noqa: BLE001 - 回挂失败不应让回调整体失败
         log.exception("产物回挂失败 task=%s ref=%s/%s", task.id, ref_kind, ref_id)
+
+
+
+def _supersedes(db: Session, spec: Any, task: GenTask) -> bool:
+    """这个任务的产物是否应该覆盖规格上现有的那一份。
+
+    原判据是「规格还没有产物」，于是重出（regenerate）永远无效：
+    任务跑了、钱花了、新产物也落库了，规格却还指着旧的那一张 ——
+    界面上看不出任何异常，只是重出没有生效。
+
+    也不能改判「gen_task_id 等于本任务」：同步方言在 submit_task **内部**
+    就完成回挂，而管线是在它返回**之后**才写 gen_task_id，那时比较必然不成立。
+
+    所以按产物新旧判：新任务的产出覆盖旧的，迟到的旧回调不覆盖新的。
+    这条规则对同步与异步两种方言都成立，不依赖调用顺序。
+    """
+    aid = getattr(spec, "asset_id", None)
+    if not aid:
+        return True
+    current = db.get(Asset, aid)
+    if current is None or not current.gen_task_id or current.gen_task_id == task.id:
+        return True
+    prev = db.get(GenTask, current.gen_task_id)
+    if prev is None or prev.created_at is None or task.created_at is None:
+        return True
+    return prev.created_at <= task.created_at
 
 
 def poll_task(db: Session, task: GenTask) -> GenTask:

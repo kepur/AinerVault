@@ -347,7 +347,7 @@ def generate_refs(
             db, Capability.image_t2i, payload,
             purpose="asset_ref",
             ref_kind="asset_variant", ref_id=variant.id,
-            novel_id=transform.novel_id,
+            novel_id=transform.novel_id, force=regenerate,
         )
         variant.gen_note = None if not hasattr(variant, "gen_note") else None
         result.submitted += 1

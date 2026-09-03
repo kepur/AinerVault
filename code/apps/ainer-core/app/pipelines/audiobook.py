@@ -239,7 +239,7 @@ def generate_audiobook(
             payload["reference_audio"] = {"url": url}
 
         task = submit_task(
-            db, Capability.audio_tts, payload, purpose=spec.kind.value,
+            db, Capability.audio_tts, payload, purpose=spec.kind.value, force=regenerate,
             ref_kind="audio_spec", ref_id=spec.id,
             novel_id=chapter.novel_id, chapter_id=chapter.id,
         )
