@@ -204,10 +204,31 @@ def coverage_report(db: Session, transform: WorldTransform,
             .group_by(EntityWorldName.status)
         ).all()
     )
-    entity_total = db.execute(
-        select(func.count()).select_from(WorldEntity)
-        .where(WorldEntity.novel_id == transform.novel_id)
-    ).scalar_one()
+    # **分母只数「该有人名的」实体。**
+    #
+    # 原来数的是全部实体，于是「总镖头」「镖局」「漕帮」「三簧锁」「镖旗」
+    # 这些**故意不生成人名、走名物词表**的东西被算成了未映射 ——
+    # names:suggest 已经把它们正确地路由走了，preflight 却把同一件事
+    # 报成阻塞项，翻译永远开不了工。修不掉的阻塞比没有阻塞更糟：
+    # 人会去 force，然后连真正的阻塞一起绕过去。
+    #
+    # 判据用 naming.role_term_hit —— 那正是 names:suggest 用来决定
+    # 「这个实体走人名还是走词表」的同一个函数。两处必须是同一个判断。
+    from app.pipelines.naming import role_term_hit
+
+    lex_terms = {
+        t for (t,) in db.execute(
+            select(WorldLexicon.source_term).where(
+                WorldLexicon.transform_id == transform.id)).all() if t
+    }
+    entity_total = 0
+    for ent in db.execute(
+        select(WorldEntity).where(WorldEntity.novel_id == transform.novel_id)
+    ).scalars():
+        names = {ent.display_name, *(ent.aliases_json or [])}
+        if role_term_hit(names, ent.family_key, lex_terms, ent.name_type):
+            continue
+        entity_total += 1
 
     def _c(d: dict, k: ReviewStatus) -> int:
         return int(d.get(k, 0))

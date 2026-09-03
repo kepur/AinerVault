@@ -239,10 +239,57 @@ class TestFallbackPool:
         from app.worldview.naming import _FALLBACK_POOLS
 
         pattern = "given_patronymic_family" if lang.startswith("ru") else None
-        pool = _FALLBACK_POOLS[lang[:2].lower()]
-        for name, _reading in pool:
-            ok, why = validate_localized_name(name, lang, pattern)
-            assert ok, f"{lang} 的兜底名「{name}」不合格：{why}"
+        pools = _FALLBACK_POOLS[lang[:2].lower()]
+        for bucket, entries in pools.items():
+            for name, _reading in entries:
+                ok, why = validate_localized_name(name, lang, pattern)
+                assert ok, f"{lang}/{bucket} 的兜底名「{name}」不合格：{why}"
+
+    @pytest.mark.parametrize("lang", [
+        "en-GB", "ru-RU", "ja-JP", "es-ES", "fr-FR", "pt-PT",
+        "ar-SA", "hi-IN", "bn-IN", "ko-KR", "zh-CN",
+    ])
+    def test_pools_are_split_by_sex(self, lang):
+        """池子必须按性别分档。
+
+        原来是一个混着男女名的平表，取名只按哈希取模 —— 沈砚（男）
+        拿到 Анна Петровна Волкова，老周（男）拿到 Мария Львовна Зайцева。
+        数据上完全合法、校验也全过，只有读到正文的人会发现男主角叫了个女人名。
+        """
+        from app.worldview.naming import _FALLBACK_POOLS
+
+        pools = _FALLBACK_POOLS[lang[:2].lower()]
+        assert set(pools) <= {"male", "female", "any"}
+        assert pools.get("male") and pools.get("female"), f"{lang} 缺男或女的档"
+
+    def test_sex_picks_from_the_right_pool(self):
+        from app.worldview.naming import _FALLBACK_POOLS, deterministic_fallback_name
+
+        male = {n for n, _ in _FALLBACK_POOLS["ru"]["male"]}
+        female = {n for n, _ in _FALLBACK_POOLS["ru"]["female"]}
+        for i in range(12):
+            assert deterministic_fallback_name(
+                f"we_{i}", "tf_1", "ru-RU", "male")[0] in male
+            assert deterministic_fallback_name(
+                f"we_{i}", "tf_1", "ru-RU", "female")[0] in female
+
+    def test_avoid_skips_taken_names(self):
+        """兜底也会撞名，而撞名的两个角色在正文里是同一个人 ——
+        比拿错性别更难发现。"""
+        from app.worldview.naming import deterministic_fallback_name
+
+        first = deterministic_fallback_name("we_1", "tf_1", "ru-RU", "male")[0]
+        second = deterministic_fallback_name(
+            "we_1", "tf_1", "ru-RU", "male", avoid={first})[0]
+        assert second != first
+
+    def test_unknown_sex_still_returns_a_name(self):
+        """性别取不到时不该罢工 —— 有名字总比没名字好，顺序仍然确定。"""
+        from app.worldview.naming import deterministic_fallback_name
+
+        a = deterministic_fallback_name("we_9", "tf_1", "ru-RU")
+        b = deterministic_fallback_name("we_9", "tf_1", "ru-RU")
+        assert a == b and a[0]
 
     def test_deterministic(self):
         """同一实体在任何进程、任何时刻结果恒定 —— v1 用 hash() 每次重启换名字。"""
@@ -447,3 +494,77 @@ class TestGrammarCut:
     def test_pronoun_phrase_yields_nothing(self):
         """「他试着按…」切到只剩一个代词，宁可没有说话人。"""
         assert trim_speaker("他试着按功法册子上写的") is None
+
+
+class TestNamingGender:
+    """目标语言的人名多带性别形态 —— 配错一眼就能看出来。
+
+    实跑里 沈砚（男）拿到 Анна Петровна Волкова、老周（男）拿到
+    Мария Львовна Зайцева。数据上完全合法、校验也全过，
+    只有读到正文的人会发现男主角叫了个女人名。
+    """
+
+    def test_prompt_takes_sex_as_fact_not_guess(self):
+        """提示词原来写的是「判断原名透出的……性别」，
+        于是「三娘」被判成男、「沈砚」被判成女 ——
+        一个中文母语者一眼的事，模型在跨语言命名里做不稳。
+        而系统里其实是知道的：配音表按声部记着。"""
+        import inspect
+
+        from app.pipelines import naming
+
+        assert "性别以 sex 字段为准" in inspect.getsource(naming)
+        assert "known_sex" in inspect.getsource(naming.suggest_names)
+
+    def test_unknown_sex_is_reported_not_guessed(self):
+        """取不到性别时不要静静地替他挑一个。
+        「灰衣汉子」抽到 Анна Петровна Волкова，数据上完全合法。"""
+        from app.pipelines.naming import NamingResult
+
+        r = NamingResult()
+        r.unknown_sex = ["灰衣汉子"]
+        assert r.as_dict()["unknown_sex"] == ["灰衣汉子"]
+
+
+class TestNamingVerdict:
+    """一条条列拒绝看着像正常质检；说出「几乎全被拒、同一个理由」，
+    才看得出是这一步整体没生效。"""
+
+    def _res(self, total: int, reasons: list[str]):
+        from app.pipelines.naming import NamingResult
+
+        r = NamingResult()
+        r.updated = total
+        r.rejected = [{"reason": x} for x in reasons]
+        return r
+
+    def test_flags_systemic_rejection(self):
+        r = self._res(7, ["应为「名 + 父称 + 姓」的完整本地姓名"] * 5)
+        v = r.verdict()
+        assert v and "整批落进兜底池" in v
+
+    def test_quiet_when_rejections_are_scattered(self):
+        """理由各不相同就是正常质检，不该报警 ——
+        多一条似是而非的告警，会让人开始忽略这一栏。"""
+        assert self._res(7, ["甲", "乙", "丙", "丁", "戊"]).verdict() is None
+
+    def test_quiet_when_few_rejections(self):
+        assert self._res(7, ["同一个理由"] * 2).verdict() is None
+
+    def test_quiet_when_nothing_ran(self):
+        assert self._res(0, []).verdict() is None
+
+
+class TestAppellationRerun:
+    def test_transform_bound_row_wins_over_unbound(self):
+        """同一个称呼可能同时存在「本映射的」和「未绑定的」两行。
+        按 source_surface 建索引时留到未绑定那一行的话，
+        下面会再插一条完全相同的行，撞唯一键 ——
+        第一次跑不会有事（那时只有未绑定的），**第二次跑必然 500**。
+        """
+        import inspect
+
+        from app.pipelines import naming
+
+        src = inspect.getsource(naming._apply_appellations)
+        assert "prev.transform_id is None and r.transform_id" in src

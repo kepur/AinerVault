@@ -94,7 +94,9 @@ NAME_SYSTEM = """你是跨文化影视本地化的命名顾问，专长是【文
    要找的是「在目标文化里，一个同等身份、同等气质的人会叫什么」。
 2. 【家族共姓】同一 family_key 的成员必须共用同一个姓（surname 字段），
    只有名不同。父女、兄妹的姓必须一致。
-3. 【身份匹配】判断原名透出的社会阶层、年代、性别、气质，在目标文化中找对应。
+3. 【身份匹配】判断原名透出的社会阶层、年代、气质，在目标文化中找对应。
+   **性别以 sex 字段为准**，没给 sex 才从上下文推断 —— 目标语言的人名
+   多带性别形态（父称与姓氏尾缀），配错一眼就能看出来。
    书香门第与市井混混的名字风格必须不同。
 4. 【时代匹配】名字要属于目标世界观的年代。昭和日本不能用平成才流行的名字，
    中世纪欧洲不能用现代教名。
@@ -176,7 +178,35 @@ class NamingResult:
     #: 按职务/身份处理、不生成人名的实体
     as_role_term: list[dict] = field(default_factory=list)
     rejected: list[dict] = field(default_factory=list)
+    #: 性别取不到的角色。**不要静静地替他挑一个** ——
+    #: 「灰衣汉子」抽到 Анна Петровна Волкова，数据上完全合法，
+    #: 只有读正文的人会发现那是个女名
+    unknown_sex: list[str] = field(default_factory=list)
     families: dict[str, str] = field(default_factory=dict)
+
+    def verdict(self) -> str | None:
+        """整体判断。
+
+        **一条条列拒绝，看着像正常质检；说出「几乎全被拒、同一个理由」，
+        才看得出是这一步整体没生效。** 模型每次都提音译而这个圈层要
+        文化等效名，全书角色就会一个不落地落进兜底池 ——
+        而兜底池只有四个男名，长篇会直接抽干，
+        于是十几个角色共用四个名字，且沿途不报任何错。
+        """
+        total = self.created + self.updated
+        # 阈值取 0.6 而不是 0.8：分母里混着地点与组织（它们很少被拒），
+        # 按全体算会把「全部角色都被拒」稀释成看着正常的比例。
+        # 宁可偶尔多报一次 —— 漏报的代价是整本书共用四个兜底名。
+        if not total or len(self.rejected) < max(3, total * 0.6):
+            return None
+        reasons = [str(r.get("reason") or "") for r in self.rejected]
+        top = max(set(reasons), key=reasons.count) if reasons else ""
+        if reasons.count(top) < len(reasons) * 0.6:
+            return None
+        return (f"{len(self.rejected)}/{total} 条被拒且理由集中"
+                f"（{top[:40]}）—— 这不是个别失手，"
+                f"是提示词或圈层的 name_pattern 配置对不上，"
+                f"角色会整批落进兜底池")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -185,8 +215,45 @@ class NamingResult:
             "appellations": self.appellations,
             "as_role_term": self.as_role_term,
             "rejected": self.rejected, "families": self.families,
+            "unknown_sex": self.unknown_sex,
+            "verdict": self.verdict(),
         }
 
+
+
+#: 性别 → 给命名提示词的说法。**目标语言的人名多数带性别形态**
+#: （俄语的父称与姓氏尾缀、西语的词尾），配错一眼就能看出来。
+_SEX_CN = {"male": "男", "female": "女"}
+
+
+def known_sex(db: Session, entity: WorldEntity) -> str | None:
+    """这个角色的性别，取得到就取，取不到返回 None。
+
+    **不要让模型从汉字去猜。** 提示词原来写的是「判断原名透出的……性别」，
+    于是「三娘」被判成男、「沈砚」被判成女 —— 一个中文母语者一眼的事，
+    模型在跨语言命名的语境里做不稳。而系统里其实是知道的：
+    配音表按声部记着（三娘是女声），视觉侧的不变项也记着。
+
+    两个来源都查，视觉侧优先 —— 它是画面的依据，与看到的脸必须一致。
+    """
+    from app.models import EntityWorldVisual, VoiceCasting
+    from app.worldview.voice import VoiceSpec, to_tts_params
+
+    vis = db.execute(
+        select(EntityWorldVisual).where(EntityWorldVisual.entity_id == entity.id)
+    ).scalars().first()
+    sex = str(((vis.invariant_json or {}) if vis else {}).get("sex") or "").lower()
+    if sex in _SEX_CN:
+        return sex
+
+    cast = db.execute(
+        select(VoiceCasting).where(VoiceCasting.entity_id == entity.id)
+    ).scalars().first()
+    if cast is not None and cast.timbre_json:
+        got = str(to_tts_params(VoiceSpec.from_json(cast.timbre_json)).get("gender") or "")
+        if got in _SEX_CN:
+            return got
+    return None
 
 def suggest_names(
     db: Session, transform: WorldTransform, *,
@@ -271,6 +338,9 @@ def suggest_names(
                     "kind": e.kind.value,
                     "aliases": e.aliases_json or [],
                     "summary": e.summary or "",
+                    # 性别作为**事实**传下去，不让模型从汉字猜。
+                    # 取不到时不填 —— 填一个「未知」会被当成一种性别用
+                    **({"sex": _SEX_CN[sx]} if (sx := known_sex(db, e)) else {}),
                     **({"appellations": aps[e.id]} if aps.get(e.id) else {}),
                 }
                 for e in members
@@ -301,10 +371,15 @@ def suggest_names(
     if cur:
         batches.append(cur)
 
+    # 已占用的译名，**跨批次共享**。分批时不同批的模型看不到彼此的产出，
+    # 撞名正是这么来的；库里已有的也要算进去，否则新命名会撞上老命名。
+    taken: dict[str, str] = {
+        n.target_name: n.entity_id for n in existing.values() if n.target_name
+    }
     for batch in batches:
         _name_one_batch(
             db, transform, src, tgt, lang_cfg, axes, batch,
-            by_id, existing, pattern, result,
+            by_id, existing, pattern, result, taken,
         )
     db.flush()
     return result
@@ -355,7 +430,7 @@ def _name_one_batch(
     db: Session, transform: WorldTransform, src: WorldProfile, tgt: WorldProfile,
     lang_cfg: dict, axes: dict, payload: list[dict],
     by_id: dict[str, WorldEntity], existing: dict[str, EntityWorldName],
-    pattern: str, result: NamingResult,
+    pattern: str, result: NamingResult, taken: dict[str, str],
 ) -> None:
     data, _task = chat_json(
         db,
@@ -429,7 +504,8 @@ def _name_one_batch(
                 if picked is None:
                     try:
                         fb_name, fb_reading = nm.deterministic_fallback_name(
-                            entity.id, transform.id, transform.target_language_code
+                            entity.id, transform.id, transform.target_language_code,
+                            known_sex(db, entity), avoid=set(taken),
                         )
                     except nm.NoFallbackPool as exc:
                         # 该语言没有兜底池。跳过这个实体而不是硬塞一个
@@ -460,6 +536,40 @@ def _name_one_batch(
                 target_name, reading = picked
             else:
                 reading = str(member.get("target_reading") or "")
+
+            # ── 撞名 ──
+            # **两个角色不能同名。** 实跑里「三娘」与「裴无咎」拿到了
+            # 同一个 Павел Сергеевич Морозов —— 数据上两行都合法、
+            # 校验也都通过，只有读到正文的人会发现两个人叫一个名字。
+            # 分批生成时尤其容易：不同批次之间模型看不到彼此的产出。
+            if target_name and target_name in taken and taken[target_name] != eid:
+                try:
+                    fb_name, fb_reading = nm.deterministic_fallback_name(
+                        entity.id, transform.id, transform.target_language_code,
+                        known_sex(db, entity), avoid=set(taken),
+                    )
+                    result.rejected.append({
+                        "entity": entity.display_name,
+                        "proposed": target_name,
+                        "reason": f"与「{by_id[taken[target_name]].display_name}」重名",
+                        "fallback": fb_name,
+                    })
+                    target_name, reading = fb_name, fb_reading
+                except nm.NoFallbackPool:
+                    result.rejected.append({
+                        "entity": entity.display_name,
+                        "proposed": target_name,
+                        "reason": "重名且该语言没有兜底池",
+                        "fallback": None,
+                        "action": "需人工指定译名",
+                    })
+                    continue
+            if target_name:
+                taken[target_name] = eid
+            if (entity.kind is EntityKind.character
+                    and known_sex(db, entity) is None
+                    and entity.display_name not in result.unknown_sex):
+                result.unknown_sex.append(entity.display_name)
 
             row = existing.get(eid)
             candidates = [
@@ -516,18 +626,24 @@ def _apply_appellations(
 
     if not items:
         return 0
-    rows = {
-        r.source_surface: r
-        for r in db.execute(
-            select(EntityAppellation).where(
-                EntityAppellation.entity_id == entity.id,
-                or_(
-                    EntityAppellation.transform_id == transform.id,
-                    EntityAppellation.transform_id.is_(None),
-                ),
-            )
-        ).scalars()
-    }
+    # 同一个称呼可能同时存在两行：**本映射的**和**未绑定的**（跨映射的源）。
+    # 按 source_surface 建索引时必须让本映射那一行胜出 ——
+    # 留到未绑定那一行的话，下面会走「另存一条」的分支，
+    # 再插一条 (entity, transform, surface) 完全相同的行，撞唯一键。
+    # 第一次跑不会有事（那时只有未绑定的），**第二次跑必然 500**。
+    rows: dict[str, EntityAppellation] = {}
+    for r in db.execute(
+        select(EntityAppellation).where(
+            EntityAppellation.entity_id == entity.id,
+            or_(
+                EntityAppellation.transform_id == transform.id,
+                EntityAppellation.transform_id.is_(None),
+            ),
+        )
+    ).scalars():
+        prev = rows.get(r.source_surface)
+        if prev is None or (prev.transform_id is None and r.transform_id):
+            rows[r.source_surface] = r
     roots = {t.lower() for t in re.findall(r"[A-Za-z]{3,}", base_name)}
     free = {Register.kinship, Register.pronoun_like, Register.epithet}
     n = 0

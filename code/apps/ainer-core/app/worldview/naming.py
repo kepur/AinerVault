@@ -287,82 +287,116 @@ def _has_kana(s: str) -> bool:
 class NoFallbackPool(RuntimeError):
     """该目标语言没有兜底姓名池。宁可报错，也不给一个别的语言的名字。"""
 
-_FALLBACK_POOLS: dict[str, list[tuple[str, str]]] = {
-    "ja": [
-        ("佐藤 健一", "さとう けんいち"), ("田中 静子", "たなか しずこ"),
-        ("鈴木 隆", "すずき たかし"), ("高橋 美代", "たかはし みよ"),
-        ("渡辺 誠", "わたなべ まこと"), ("伊藤 房子", "いとう ふさこ"),
-        ("山本 修", "やまもと おさむ"), ("中村 千代", "なかむら ちよ"),
-    ],
-    "en": [
-        ("Edmund Ashcroft", ""), ("Alice Thornbury", ""), ("Roland Whitfield", ""),
-        ("Margery Colton", ""), ("Hugh Marlowe", ""), ("Constance Reed", ""),
-        ("Walter Grimsby", ""), ("Eleanor Vance", ""),
-    ],
-    "ko": [
-        ("김민준", ""), ("이서연", ""), ("박지훈", ""), ("최수빈", ""),
-    ],
+#: 兜底姓名池，**按性别分**。
+#:
+#: 原来是一个混着男女名的平表，取名只按哈希取模 —— 于是
+#: 沈砚（男）拿到 Анна Петровна Волкова、老周（男）拿到 Мария Львовна Зайцева。
+#: 数据上完全合法、校验也全过，只有读到正文的人会发现男主角叫了个女人名。
+#: 目标语言的人名多带性别形态（俄语的父称与姓氏尾缀、西语葡语的词尾、
+#: 阿拉伯语的 بن／بنت），配错一眼就能看出来。
+#:
+#: "any" 是给本身不显性别的名字留的（古典中文的「陆知微」「顾停云」这类），
+#: 性别未知时也从它取。
+_FALLBACK_POOLS: dict[str, dict[str, list[tuple[str, str]]]] = {
+    "ja": {
+        "male": [("佐藤 健一", "さとう けんいち"), ("鈴木 隆", "すずき たかし"),
+                 ("渡辺 誠", "わたなべ まこと"), ("山本 修", "やまもと おさむ")],
+        "female": [("田中 静子", "たなか しずこ"), ("高橋 美代", "たかはし みよ"),
+                   ("伊藤 房子", "いとう ふさこ"), ("中村 千代", "なかむら ちよ")],
+    },
+    "en": {
+        "male": [("Edmund Ashcroft", ""), ("Roland Whitfield", ""),
+                 ("Hugh Marlowe", ""), ("Walter Grimsby", "")],
+        "female": [("Alice Thornbury", ""), ("Margery Colton", ""),
+                   ("Constance Reed", ""), ("Eleanor Vance", "")],
+    },
+    "ko": {
+        "male": [("김민준", ""), ("박지훈", "")],
+        "female": [("이서연", ""), ("최수빈", "")],
+    },
     # 中文作为**目标**语言的场景是真实存在的：日韩小说译成中文，
     # 或古典中文世界观之间互转。之前只把 zh 当源语言，漏了这一档 ——
     # 表现是命名回落时抛 NoFallbackPool，整批实体没有译名。
-    "zh": [
-        ("沈砚舟", ""), ("柳明栖", ""), ("裴无咎", ""), ("周砚清", ""),
-        ("陆知微", ""), ("苏怀瑾", ""), ("顾停云", ""), ("卫长陵", ""),
-    ],
-    "ru": [
-        ("Фёдор Ильич Соколов", ""), ("Анна Петровна Волкова", ""),
-        ("Николай Андреевич Лебедев", ""), ("Мария Львовна Зайцева", ""),
-        ("Павел Сергеевич Морозов", ""), ("Дарья Ивановна Орлова", ""),
-    ],
-    "es": [
-        ("Alonso Quijada", ""), ("Isabel Montoya", ""), ("Rodrigo Vela", ""),
-        ("Beatriz Cárdenas", ""), ("Gaspar Mendoza", ""), ("Elena Ferrer", ""),
-    ],
-    "fr": [
-        ("Étienne Duval", ""), ("Camille Rousseau", ""), ("Henri Baudin", ""),
-        ("Sylvie Marchand", ""), ("Armand Delacroix", ""), ("Louise Bernard", ""),
-    ],
-    "pt": [
-        ("Duarte Nogueira", ""), ("Inês Ribeiro", ""), ("Gonçalo Braga", ""),
-        ("Beatriz Soares", ""), ("Afonso Meireles", ""), ("Clara Antunes", ""),
-    ],
-    "ar": [
-        ("يوسف بن إبراهيم", ""), ("زينب بنت حسن", ""), ("عمر بن خالد", ""),
-        ("فاطمة بنت سليمان", ""),
-    ],
-    "hi": [
-        ("अजय शर्मा", ""), ("मीरा वर्मा", ""), ("रघुनाथ सिंह", ""),
-        ("कमला देवी", ""),
-    ],
-    "bn": [
-        ("অরুণ ঘোষ", ""), ("শ্যামা দত্ত", ""), ("বিমল সরকার", ""),
-        ("রেণুকা বসু", ""),
-    ],
+    "zh": {
+        "male": [("沈砚舟", ""), ("裴无咎", ""), ("卫长陵", ""), ("周砚清", "")],
+        "female": [("柳明栖", ""), ("苏怀瑾", "")],
+        # 古典中文的名字多半不显性别，单列一档比硬塞进男女两边诚实
+        "any": [("陆知微", ""), ("顾停云", "")],
+    },
+    "ru": {
+        "male": [("Фёдор Ильич Соколов", ""), ("Николай Андреевич Лебедев", ""),
+                 ("Павел Сергеевич Морозов", ""), ("Аркадий Львович Гущин", "")],
+        "female": [("Анна Петровна Волкова", ""), ("Мария Львовна Зайцева", ""),
+                   ("Дарья Ивановна Орлова", ""), ("Софья Кузьминична Белова", "")],
+    },
+    "es": {
+        "male": [("Alonso Quijada", ""), ("Rodrigo Vela", ""), ("Gaspar Mendoza", "")],
+        "female": [("Isabel Montoya", ""), ("Beatriz Cárdenas", ""), ("Elena Ferrer", "")],
+    },
+    "fr": {
+        "male": [("Étienne Duval", ""), ("Henri Baudin", ""), ("Armand Delacroix", "")],
+        "female": [("Camille Rousseau", ""), ("Sylvie Marchand", ""), ("Louise Bernard", "")],
+    },
+    "pt": {
+        "male": [("Duarte Nogueira", ""), ("Gonçalo Braga", ""), ("Afonso Meireles", "")],
+        "female": [("Inês Ribeiro", ""), ("Beatriz Soares", ""), ("Clara Antunes", "")],
+    },
+    "ar": {
+        # بن = 之子，بنت = 之女 —— 阿拉伯语的父名结构本身就写着性别
+        "male": [("يوسف بن إبراهيم", ""), ("عمر بن خالد", "")],
+        "female": [("زينب بنت حسن", ""), ("فاطمة بنت سليمان", "")],
+    },
+    "hi": {
+        "male": [("अजय शर्मा", ""), ("रघुनाथ सिंह", "")],
+        "female": [("मीरा वर्मा", ""), ("कमला देवी", "")],
+    },
+    "bn": {
+        "male": [("অরুণ ঘোষ", ""), ("বিমল সরকার", "")],
+        "female": [("শ্যামা দত্ত", ""), ("রেণুকা বসু", "")],
+    },
 }
 
-
 def deterministic_fallback_name(
-    entity_id: str, transform_id: str, target_language: str
+    entity_id: str, transform_id: str, target_language: str,
+    sex: str | None = None, *, avoid: set[str] | None = None,
 ) -> tuple[str, str]:
     """确定性兜底命名。
 
     v1 用 `hash()`，Python 字符串 hash 每进程随机 —— 同一实体重启后换个名字。
     改用 sha256：同一 (entity, transform, lang) 在任何进程、任何时刻结果恒定。
+
+    **sex 决定从哪个池里取。** 不给的话从全部里取 ——
+    那正是「沈砚拿到 Анна Петровна Волкова」的由来。
+
+    avoid 里的名字跳过：兜底也会撞名，而撞名的两个角色在正文里
+    是同一个人，比拿错性别更难发现。
     """
     lang = target_language[:2].lower()
-    pool = _FALLBACK_POOLS.get(lang)
-    if pool is None:
+    pools = _FALLBACK_POOLS.get(lang)
+    if pools is None:
         # 不给别的语言的名字。回落到英语池会让俄语角色叫 Roland Whitfield，
         # 下游全链路都会用它，且没有任何一处会报错 —— 比没有名字糟得多。
         raise NoFallbackPool(
             f"目标语言 {lang} 没有兜底姓名池。请人工指定译名，"
             f"或在 _FALLBACK_POOLS 里补一组该语言的名字。"
         )
+    pool = list(pools.get(sex or "", ()))
+    pool += list(pools.get("any", ()))
+    if not pool:
+        # 性别给了但那一档是空的（或性别未知）：退回全部，
+        # 有名字总比没名字好，但顺序仍然确定
+        pool = [n for key in sorted(pools) for n in pools[key]]
     digest = hashlib.sha256(
         f"{entity_id}|{transform_id}|{target_language}".encode()
     ).digest()
-    idx = int.from_bytes(digest[:8], "big") % len(pool)
-    return pool[idx]
+    start = int.from_bytes(digest[:8], "big") % len(pool)
+    taken = avoid or set()
+    for off in range(len(pool)):
+        cand = pool[(start + off) % len(pool)]
+        if cand[0] not in taken:
+            return cand
+    # 池子被占满了：仍返回哈希位那个，让上层的撞名检查去报
+    return pool[start]
 
 
 # ── 家族姓氏一致性 ─────────────────────────────────────────────────────────────
