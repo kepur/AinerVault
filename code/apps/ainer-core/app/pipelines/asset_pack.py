@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -23,7 +25,7 @@ from app.models import (
     ReviewStatus, ScriptBlock, ScriptDoc, WorldEntity, WorldProfile, WorldTransform,
 )
 from app.pipelines.base import PipelineError, chat_json, as_text, as_items
-from app.worldview.asset_requirements import check_completeness, requirements_for
+from app.worldview.asset_requirements import check_completeness, diagnose, requirements_for
 
 log = logging.getLogger(__name__)
 
@@ -274,12 +276,23 @@ def _variant_system(profile: WorldProfile, kinds: Sequence[str]) -> str:
     axes = profile.axes_json or {}
     do = "、".join(visual.get("visual_do") or [])
     dont = "、".join(visual.get("visual_dont") or [])
+    # **给字面的 JSON 骨架，不要写成「类别: 字段一、字段二」。**
+    #
+    # 原来那种写法（`ambience: time_of_day（时段）、weather（天气）…`）
+    # 读起来就是「键: 值」，模型照着产出了
+    #   {"ambience": "night, heavy_snowfall, gas_lamp_glow, serene_eerie"}
+    # —— 四个答案一个不少，全挤在一个以**类别名**为键的字符串里。
+    # 完整度检查于是报「缺 time_of_day/weather/light_quality」，
+    # 而人照着这条去找，会以为模型没答，实际上答案就在眼前。
+    # 骨架是逐字可照抄的，歧义没有落脚处。
     req_lines = []
     for kind in sorted(set(kinds)):
         fields = requirements_for(kind, profile)
-        if fields:
-            desc = "、".join(f"{k}（{v}）" for k, v in fields.items())
-            req_lines.append(f"  {kind}: {desc}")
+        if not fields:
+            continue
+        skeleton = json.dumps({k: f"<{v}>" for k, v in fields.items()},
+                              ensure_ascii=False)
+        req_lines.append(f"  kind = {kind} 时：structured = {skeleton}")
     reqs = "\n".join(req_lines)
 
     return f"""你是影视美术指导，负责把素材落地到指定的目标世界观。
@@ -297,7 +310,9 @@ def _variant_system(profile: WorldProfile, kinds: Sequence[str]) -> str:
    而不是硬造一个时代外的物件。中世纪欧洲没有茶，就不要出现茶具。
 2. 【时代必须对】年代之外的元素一律不要。昭和日本不出现江户的髷与佩刀，
    中世纪盛期不出现板甲与火器。
-3. 【结构化填写】structured 必须逐项填满下列字段，每项一个短语，不要写整句：
+3. 【结构化填写】structured 的**键必须与下面的骨架逐字一致**：
+   不要用类别名当键，不要嵌套，不要把几项并成一个字符串，
+   不要把字段名当成值填进去。每项一个短语，不要写整句。
 {reqs}
 4. visual_prompt 用英文写，是给图像模型的正向描述，
    包含材质、颜色、廓形、光线，30–60 词。
@@ -368,7 +383,23 @@ def ensure_variants(
         return result
 
     by_key = {s.canonical_key: s for s in pending}
-    for chunk in _chunks(pending, batch):
+    # **按类别分批。**
+    #
+    # 一批里混着服装、场景、道具、环境声时，提示词的「必填字段」那一段
+    # 会同时列出好几套（服装要 silhouette/fabric/color…，场景要
+    # architecture/materials/lighting…），而模型只认真填了其中一套 ——
+    # 实跑 29 件漏了 15 件，且**漏的方式整齐得可疑**：
+    # 四个场景全缺同样五项、四件服装全缺同样五项、四条环境声全缺同样四项。
+    # 那不是模型不行，是这一批的要求本身就是多义的。
+    #
+    # 一类一批之后，要求块里只剩一套字段，批内每一件要填的东西完全相同。
+    # 代价是请求数变多（类别数 × 批次），换来的是不用回头补 structured。
+    by_kind: dict[str, list[AssetSpec]] = {}
+    for s in pending:
+        by_kind.setdefault(s.kind.value, []).append(s)
+    chunks = [c for kind in sorted(by_kind)
+              for c in _chunks(by_kind[kind], batch)]
+    for chunk in chunks:
         payload = [
             {
                 "canonical_key": s.canonical_key,
@@ -401,10 +432,12 @@ def ensure_variants(
             structured = item.get("structured") or {}
             missing = check_completeness(spec.kind.value, structured, profile)
             if missing:
-                result.incomplete.append({
-                    "canonical_key": key, "display_name": spec.display_name,
-                    "missing": missing,
-                })
+                row_out = {"canonical_key": key,
+                           "display_name": spec.display_name, "missing": missing}
+                why = diagnose(spec.kind.value, structured, profile)
+                if why:
+                    row_out["why"] = why
+                result.incomplete.append(row_out)
 
             row = existing.get(spec.id)
             values = dict(

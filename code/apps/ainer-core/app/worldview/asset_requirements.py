@@ -116,3 +116,29 @@ def check_completeness(
         key for key in required
         if not str(data.get(key) or "").strip()
     ]
+
+
+def diagnose(kind: str, structured: dict[str, Any] | None,
+             world_profile: Any | None = None) -> str | None:
+    """缺项时说清楚是**哪一种**缺，而不只是列出字段名。
+
+    有一种「缺」特别耽误人：答案全在，只是被塞进了一个以类别名为键的
+    字符串里 ——
+
+        {"ambience": "night, heavy_snowfall, gas_lamp_glow, serene_eerie"}
+
+    四项一个不少，而报表说「缺 time_of_day / weather / light_quality」。
+    照着这条去查，会以为模型没答、去调提示词的措辞、去换模型 ——
+    实际上要改的只是键名。**报「缺」而不说是哪一种缺，会把人引向错的方向。**
+    """
+    missing = check_completeness(kind, structured, world_profile)
+    if not missing:
+        return None
+    data = structured or {}
+    if str(data.get(kind) or "").strip():
+        return (f"答案挤在 structured[\"{kind}\"] 这一个键里了，"
+                f"应拆成 {'/'.join(missing)} 各一个键")
+    echoed = [k for k in missing if str(data.get(k) or "").strip() == k]
+    if echoed:
+        return f"{'/'.join(echoed)} 把字段名当成了值"
+    return None
