@@ -225,3 +225,68 @@ class TestVideoPayload:
         src = inspect.getsource(dialects._ds_await_video)
         assert "task_id={task_ref}" in src
         assert "CapErrorCode.INVALID_REQUEST" in src
+
+
+class TestErrorMapping:
+    """供应商的错误码只能观察，不能猜。
+
+    我在方言里预判过「免费额度用尽」这个失败形态，还专门写了分支 ——
+    但码名是猜的（Arrearage / InsufficientQuota / FreeQuotaExhausted），
+    真实的是 AllocationQuota.FreeTierOnly。于是 403 那一支先命中，
+    报成 UNAUTHORIZED，把人送去查 API key，而 key 是好的。
+    """
+
+    def _err(self, status: int, code: str, msg: str = "x"):
+        import json
+
+        import httpx
+
+        from app.capability.dialects import _ds_error
+
+        resp = httpx.Response(
+            status, content=json.dumps({"code": code, "message": msg}).encode(),
+            headers={"content-type": "application/json"})
+        return _ds_error(resp)
+
+    def test_quota_is_not_unauthorized(self):
+        from app.capability.errors import CapErrorCode
+
+        e = self._err(403, "AllocationQuota.FreeTierOnly", "Free quota exhausted")
+        assert e.code == CapErrorCode.UPSTREAM_ERROR
+        assert "额度" in str(e)
+
+    def test_quota_is_not_retryable(self):
+        """重试只会把同一个错再撞一遍，而每次重试都要等一轮退避。"""
+        e = self._err(403, "AllocationQuota.FreeTierOnly")
+        assert not e.retryable
+
+    def test_arrearage_also_matches(self):
+        from app.capability.errors import CapErrorCode
+
+        assert self._err(403, "Arrearage").code == CapErrorCode.UPSTREAM_ERROR
+
+    def test_real_auth_failure_still_maps_to_unauthorized(self):
+        """额度那一支不能吃掉真正的鉴权错 —— 那时确实该去查 key。"""
+        from app.capability.errors import CapErrorCode
+
+        assert self._err(401, "InvalidApiKey").code == CapErrorCode.UNAUTHORIZED
+        assert self._err(403, "Forbidden").code == CapErrorCode.UNAUTHORIZED
+
+    def test_rate_limit_stays_retryable(self):
+        from app.capability.errors import CapErrorCode
+
+        e = self._err(429, "Throttling.RateQuota")
+        assert e.code == CapErrorCode.RATE_LIMITED and e.retryable
+
+    def test_default_t2i_model_has_room(self):
+        """默认文生图不能是免费额度只有 10 张的那个 ——
+        出一整本的素材参考图动辄几十张，会在半路撞额度。"""
+        import httpx
+
+        from app.capability.dialects import dashscope_catalog
+        from app.capability.schemas import Capability
+
+        with httpx.Client() as c:
+            cat = dashscope_catalog(c, "https://x", {}, 1)
+        entry = cat.get(Capability.image_t2i)
+        assert entry.default_model().id == "qwen-image-2.0-pro-2026-06-22"

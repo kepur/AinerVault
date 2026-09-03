@@ -840,15 +840,25 @@ def _ds_error(resp: httpx.Response) -> CapabilityError:
             detail = str(body.get("message") or detail)
     except Exception:  # noqa: BLE001
         pass
-    if resp.status_code in (401, 403) or ds_code in ("InvalidApiKey", "Unauthorized"):
-        code = CapErrorCode.UNAUTHORIZED
-    elif resp.status_code == 429 or "Throttling" in ds_code:
+    # **额度判断必须排在 401/403 之前。** 额度用尽回的也是 403，
+    # 而「UNAUTHORIZED」会把人送去查 API key —— key 是好的，
+    # 白查一圈才发现是额度。实跑撞到的真实码是
+    # `AllocationQuota.FreeTierOnly`，不是我原先猜的
+    # Arrearage / InsufficientQuota / FreeQuotaExhausted：
+    # **供应商的错误码只能观察，不能猜。**
+    # **限流要排在额度之前判。** 限流码里也带 Quota
+    #（`Throttling.RateQuota`），按子串先撞额度那一支的话，
+    # 一次本该退避重试的限流会被判成不可重试的额度耗尽 ——
+    # 整批生成会在一次瞬时限流上永久停住。
+    if resp.status_code == 429 or "Throttling" in ds_code:
         code, retryable = CapErrorCode.RATE_LIMITED, True
-    elif ds_code in ("Arrearage", "InsufficientQuota", "FreeQuotaExhausted"):
-        # 免费额度用完是**不可重试**的：重试只会把同一个错再撞一遍。
-        # 单独认出来，是因为它的处置方式和别的 400 完全不同（去充值，不是改参数）
+    elif "Quota" in ds_code or "Arrearage" in ds_code:
+        # 不可重试：重试只会把同一个错再撞一遍。
+        # 处置方式和别的错完全不同 —— 去充值或换模型，不是改参数
         code = CapErrorCode.UPSTREAM_ERROR
-        detail += "（该模型的免费额度已用尽，需开通付费或换模型）"
+        detail += "（该模型的额度已用尽，需开通付费或把这条路由换到别的模型）"
+    elif resp.status_code in (401, 403) or ds_code in ("InvalidApiKey", "Unauthorized"):
+        code = CapErrorCode.UNAUTHORIZED
     elif 400 <= resp.status_code < 500:
         code = CapErrorCode.INVALID_REQUEST
     return CapabilityError(
@@ -1257,10 +1267,15 @@ def dashscope_health(transport: httpx.Client, base_url: str,
 #: 而且列表里看不出「哪个能吃参考图」—— 那恰恰是选型时唯一要紧的信息。
 _DS_CATALOG: tuple[tuple[Capability, tuple[tuple[str, str], ...]], ...] = (
     (Capability.image_t2i, (
-        ("qwen-image-3.0", "通义万相 3.0 · 文生图"),
-        ("qwen-image-3.0-pro", "通义万相 3.0 Pro · 文生图"),
-        ("qwen-image-2.0-pro-2026-06-22", "通义万相 2.0 Pro"),
-        ("wan2.7-image", "万相 2.7 · 文生图"),
+        # 默认放 2.0 Pro 而不是 3.0：**免费额度差一个数量级**
+        #（3.0 是 10 张，2.0 Pro 是 100 张），而出一整本的素材参考图
+        # 动辄几十张，用 3.0 会在半路撞 AllocationQuota.FreeTierOnly。
+        # 质量更高的留在下面，要用的人自己选。
+        ("qwen-image-2.0-pro-2026-06-22", "通义万相 2.0 Pro · 文生图（额度充裕）"),
+        ("qwen-image-max", "通义万相 Max · 文生图"),
+        ("qwen-image-3.0", "通义万相 3.0 · 文生图（免费额度很少）"),
+        ("qwen-image-3.0-pro", "通义万相 3.0 Pro · 文生图（免费额度很少）"),
+        ("z-image-turbo", "Z-Image Turbo · 快速出图"),
     )),
     (Capability.image_i2i, (
         ("qwen-image-edit-max", "通义图像编辑 Max · 吃参考图，跨期保脸靠它"),
