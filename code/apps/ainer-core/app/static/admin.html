@@ -235,8 +235,12 @@ tbody tr:hover{background:var(--panel-2)}
   .navgrp>.gh{display:none}
   .navgrp .items{grid-template-rows:1fr!important}
   .navgrp .items>div{display:flex;gap:2px}
-  .nav .lbl{display:none}
-  .nav button.item{padding:8px 11px}
+  /* **不要把标签藏掉。** 十七个页面塌成一排 emoji 之后，
+     图标之间的差别全靠猜 —— 第一次打开的人只能挨个点过去。
+     宁可让这一排横向滚动，也要让每一项说出自己叫什么。 */
+  .nav .lbl{display:inline;font-size:11px}
+  .nav .lbl .sub{display:none}
+  .nav button.item{padding:8px 10px;white-space:nowrap}
   .nav button.item.on::before{display:none}
   .sidetoggle,.side-foot{display:none}
   .para{grid-template-columns:1fr}
@@ -295,7 +299,7 @@ async function api(method, path, body) {
 }
 
 const State = {
-  page: localStorage.getItem("an.page") || "settings",
+  page: localStorage.getItem("an.page") || "console",
   novelId: localStorage.getItem("an.novel") || "",
   chapterId: localStorage.getItem("an.chapter") || "",
   lang: localStorage.getItem("an.lang") || "en-GB",
@@ -324,6 +328,9 @@ const DIALECT_CN = {
 // 用户是顺着流程走的，把「世界观」和「译本」分在两个抽屉里
 // 只会让人每次都要开两个抽屉。
 const GROUPS = [
+  {id:"g-home", name:"", pages:[
+    {id:"console", ico:"🏠", name:"控制台", sub:"小说 → 章节 → 工作台"},
+  ]},
   {id:"g-src", name:"素材", pages:[
     {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
   ]},
@@ -353,6 +360,15 @@ const GROUPS = [
   ]},
 ];
 const PAGES = GROUPS.flatMap(g => g.pages);
+
+// 下钻页：有标题、能被 State.page 指到，但**不进侧栏**。
+// 它们是从控制台点进去的，不是并列的目的地 ——
+// 放进侧栏会让「小说工作台」看起来像可以脱离某本小说单独打开。
+const DRILL = [
+  {id:"novel",   ico:"📖", name:"小说工作台", sub:"整本共享的素材 · 章节列表"},
+  {id:"chapter", ico:"📄", name:"章节工作台", sub:"这一章的十步 · 现在该做哪一步"},
+];
+const ALL_PAGES = [...PAGES, ...DRILL];
 
 let logBuf = [];
 function log(msg, cls="") {
@@ -2169,6 +2185,9 @@ const Staging = {
 const KIND_CN = {
   character:"人物", costume:"服装", prop:"道具", location:"场景",
   style:"风格", voice:"音色", sfx:"音效", bgm:"配乐", room_tone:"环境声",
+  // 世界模型里的实体类比素材多几种，控制台要用
+  organization:"组织", concept:"概念", vehicle:"载具", creature:"生物",
+  event:"事件", faction:"势力",
 };
 
 const Prompts = {
@@ -3219,6 +3238,211 @@ const Handoff = {
   },
 };
 
+
+// ── 控制台 ────────────────────────────────────────────────────────────────
+// 后台原来是**能力的平铺**：十七个页面并列，每个都要你先在别处选好小说
+// 和章节，进去只说一句「先在书架选一个章节」。知道流程的人用得动，
+// 第一次打开的人看到的是一排图标。
+//
+// 这里换成**对象的下钻**：控制台 → 小说 → 章节。
+// 能力不再是并列的目的地，而是某个对象在某个阶段该做的那件事。
+//
+// 界面上只有一条硬规则：**被挡住的不能长得像可以点。**
+// 「尾帧 0/30」本身不是问题，它前面还有「首帧 0/30」——
+// 两条并列摆着，人会去点尾帧然后发现点不动，然后以为是坏了。
+const ST = {
+  done:    {ico:"✓", cls:"t-ok",   cn:"已完成"},
+  partial: {ico:"◐", cls:"t-warn", cn:"进行中"},
+  todo:    {ico:"○", cls:"t-info", cn:"待开始"},
+  blocked: {ico:"—", cls:"t-mute", cn:"前置未完成"},
+  // 出口不是一件要做完的事，别给它一个永远差着的完成度
+  open:    {ico:"→", cls:"t-info", cn:"随时可开"},
+};
+
+function stageChip(st, {onclick, wide} = {}) {
+  const m = ST[st.state] || ST.todo;
+  const num = st.total ? `${st.done}/${st.total}` : "";
+  const dim = st.state === "blocked";
+  return `<button class="btn" title="${h(st.blocked_by || st.hint || "")}"
+    ${dim || !onclick ? "disabled" : `onclick="${onclick}"`}
+    style="padding:4px 9px;font-size:12px;opacity:${dim ? .45 : 1};
+           ${wide ? "" : "margin:0 4px 4px 0"}">
+    <span class="${m.cls}" style="margin-right:4px">${m.ico}</span>${h(st.name)}
+    ${num && st.countable !== false ? `<span class="mono" style="color:var(--muted);margin-left:5px">${num}</span>` : ""}
+  </button>`;
+}
+
+// 走到某个能力页去做事。**必须同时把上下文设好** ——
+// 那十七个页面全靠 State.novelId / chapterId 才知道自己在处理谁
+function goto(page, novelId, chapterId) {
+  if (novelId) State.novelId = novelId;
+  if (chapterId) State.chapterId = chapterId;
+  State.page = page; State.save(); App.refresh();
+}
+
+const Console = {
+  async render(v) {
+    const d = await api("GET", "/console");
+    if (!d.novels.length) {
+      v.innerHTML = `<div class="card"><h2>控制台</h2>
+        <p class="hint">还没有小说。整本 txt 拖进书架，或粘贴正文，
+          也可以走 <code>POST /api/v2/novels/{id}/chapters:import</code>。</p>
+        <button class="btn pri" onclick="goto('library')">去书架导入</button></div>`;
+      return;
+    }
+    v.innerHTML = `
+      <div class="card">
+        <h2>控制台 <span class="sub mono" style="color:var(--muted)">${d.count} 部</span></h2>
+        <p class="hint">一部小说走完全程要备两类东西：<b>整本共享的</b>（人物长什么样、
+          名物怎么译、谁是什么嗓子）和<b>逐章推进的</b>（剧本 → 译本 → 分镜 → 帧 → 声音）。<br>
+          前者放在章节里做会出事：每章各定一套，第二十章的人就不是第一章那个人了。
+          所以下面先列整本的六步，进到章里才是那十步。</p>
+        <div class="row"><button class="btn" onclick="goto('library')">书架 · 导入与删除</button>
+          <button class="btn" onclick="goto('settings')">端点与路由</button></div>
+      </div>
+      ${d.novels.map(n => this.card(n)).join("")}`;
+  },
+
+  card(n) {
+    const nx = n.next;
+    return `<div class="card">
+      <h2 style="cursor:pointer" onclick="goto('novel','${n.id}')">
+        ${h(n.title)}
+        <span class="sub mono" style="color:var(--muted)">${n.chapters} 章 ·
+          整本素材 ${n.ready}/${n.total_stages}</span>
+      </h2>
+      <div style="margin:8px 0 4px">${n.stages.map(st =>
+        stageChip(st, {onclick: `goto('${st.page}','${n.id}')`})).join("")}</div>
+      <div class="row" style="margin-top:8px;align-items:center">
+        ${nx ? `<span style="font-size:13px">下一步：<b style="color:var(--ink)">${h(nx.name)}</b>
+            <span class="mono" style="color:var(--muted)">${nx.done}/${nx.total}</span></span>
+          <button class="btn pri" onclick="goto('${nx.page}','${n.id}')">去做</button>`
+        : `<span class="tag t-ok">整本素材已备齐</span>`}
+        <button class="btn" onclick="goto('novel','${n.id}')">打开工作台 →</button>
+      </div>
+    </div>`;
+  },
+};
+
+const NovelDesk = {
+  offset: 0,
+
+  async render(v) {
+    if (!State.novelId) { State.page = "console"; State.save(); return App.refresh(); }
+    const d = await api("GET",
+      `/novels/${State.novelId}/desk?offset=${this.offset}&limit=30`);
+    const ch = d.chapters;
+    const kinds = Object.entries(d.entities_by_kind || {});
+    v.innerHTML = `
+      <div class="card">
+        <h2><a href="#" onclick="goto('console');return false"
+            style="color:var(--muted);font-weight:400">控制台</a>
+          <span style="color:var(--muted)"> › </span>${h(d.novel.title)}
+          <span class="sub mono" style="color:var(--muted)">${ch.total} 章</span></h2>
+        <p class="hint">这一层是<b>整本共享</b>的东西。改这里会影响所有章节 ——
+          这正是它放在这一层的原因。</p>
+        <div style="margin:8px 0">${d.stages.map(st =>
+          stageChip(st, {onclick: `goto('${st.page}','${d.novel.id}')`})).join("")}</div>
+        <div class="row" style="font-size:12px;color:var(--muted);flex-wrap:wrap">
+          ${kinds.map(([k, n]) => `<span class="tag t-mute">${h(KIND_CN[k] || k)} ${n}</span>`).join("")}
+          <span class="tag t-mute">素材规格 ${d.asset_specs}</span>
+          ${(d.transforms || []).map(t =>
+            `<span class="tag t-info">译本 ${h(t.target_language_code || "?")}</span>`).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>章节 <span class="sub mono" style="color:var(--muted)">
+          ${ch.offset + 1}–${Math.min(ch.offset + ch.limit, ch.total)} / ${ch.total}</span></h2>
+        <p class="hint">每章的进度是<b>独立</b>的 —— 一本书可以第三章已经出图，
+          第一二章还没转剧本。点进去看这一章的十步。</p>
+        <table class="tbl"><thead><tr>
+          <th style="width:52px">章</th><th>标题</th>
+          <th style="width:96px">阶段</th><th>下一步</th><th style="width:78px"></th>
+        </tr></thead><tbody>
+        ${ch.items.map(c => `<tr>
+          <td class="mono">${c.order_no}</td>
+          <td><b style="color:var(--ink)">${h(c.title || "（无标题）")}</b>
+            <div style="margin-top:3px">${c.stages.map(st => `<span
+              title="${h(st.name)} ${st.done}/${st.total}${st.blocked_by ? " · " + h(st.blocked_by) : ""}"
+              style="display:inline-block;width:12px;height:5px;border-radius:2px;margin-right:2px;
+              background:${st.state === "done" ? "var(--accent)"
+                : st.state === "partial" ? "var(--warn)"
+                : st.state === "blocked" ? "var(--line)" : "var(--line-soft)"}"></span>`).join("")}</div></td>
+          <td class="mono" style="color:var(--muted)">${c.done_stages}/${c.total_stages}</td>
+          <td style="font-size:12.5px">${c.next
+            ? `${h(c.next.name)} <span class="mono" style="color:var(--muted)">${
+                c.next.total ? c.next.done + "/" + c.next.total : ""}</span>`
+            : `<span class="tag t-ok">走完了</span>`}</td>
+          <td><button class="btn" style="padding:3px 9px;font-size:12px"
+            onclick="goto('chapter','${d.novel.id}','${c.id}')">进入</button></td>
+        </tr>`).join("")}
+        </tbody></table>
+        ${ch.total > ch.limit ? `<div class="row" style="margin-top:9px">
+          <button class="btn" ${ch.offset ? "" : "disabled"}
+            onclick="NovelDesk.page(-1)">上一页</button>
+          <button class="btn" ${ch.offset + ch.limit < ch.total ? "" : "disabled"}
+            onclick="NovelDesk.page(1)">下一页</button></div>` : ""}
+      </div>`;
+  },
+
+  page(dir) {
+    this.offset = Math.max(0, this.offset + dir * 30);
+    App.refresh();
+  },
+};
+
+const ChapterDesk = {
+  async render(v) {
+    if (!State.chapterId) { State.page = "console"; State.save(); return App.refresh(); }
+    const d = await api("GET", `/chapters/${State.chapterId}/desk`);
+    const nx = d.next;
+    v.innerHTML = `
+      <div class="card">
+        <h2><a href="#" onclick="goto('console');return false"
+            style="color:var(--muted);font-weight:400">控制台</a>
+          <span style="color:var(--muted)"> › </span>
+          <a href="#" onclick="goto('novel','${d.novel ? d.novel.id : ""}');return false"
+            style="color:var(--muted);font-weight:400">${h(d.novel ? d.novel.title : "")}</a>
+          <span style="color:var(--muted)"> › </span>${h(d.title || "第" + d.order_no + "章")}
+          <span class="sub mono" style="color:var(--muted)">${d.words || 0} 字 ·
+            ${d.done_stages}/${d.total_stages} 步</span></h2>
+        <p class="hint">十步按<b>真实的依赖</b>排：没有剧本就没有分镜，没有分镜就没有帧，
+          没有首帧就派生不出尾帧，没有真实配音就定不下镜头长度。<br>
+          <b>灰掉的不是没做，是还轮不到</b> —— 鼠标停上去会说是谁挡着。</p>
+        ${nx ? `<div class="row" style="align-items:center">
+          <span style="font-size:13px">现在该做：<b style="color:var(--ink)">${h(nx.name)}</b>
+            <span class="mono" style="color:var(--muted)">${
+              nx.total ? nx.done + "/" + nx.total : ""}</span></span>
+          <button class="btn pri" onclick="goto('${nx.page}','${
+            d.novel ? d.novel.id : ""}','${d.id}')">去做 →</button></div>`
+        : `<span class="tag t-ok">这一章十步都走完了</span>`}
+      </div>
+
+      <div class="card">
+        <h2>本章的十步</h2>
+        ${d.stages.map(st => {
+          const m = ST[st.state] || ST.todo;
+          const dim = st.state === "blocked";
+          return `<div class="gap" style="margin-bottom:7px;opacity:${dim ? .55 : 1}">
+            <div class="gh" style="align-items:center;gap:8px">
+              <span class="tag ${m.cls}">${m.ico} ${m.cn}</span>
+              <b style="color:var(--ink)">${h(st.name)}</b>
+              ${st.total && st.countable !== false ? `<span class="mono" style="color:var(--muted)">${st.done}/${st.total}</span>` : ""}
+              <span style="flex:1"></span>
+              <button class="btn ${st.key === (nx && nx.key) ? "pri" : ""}"
+                style="padding:3px 10px;font-size:12px" ${dim ? "disabled" : ""}
+                onclick="goto('${st.page}','${d.novel ? d.novel.id : ""}','${d.id}')"
+                >${dim ? "轮不到" : "打开"}</button>
+            </div>
+            <div class="eff">${h(st.hint)}${
+              st.blocked_by ? `　<span style="color:var(--warn)">← ${h(st.blocked_by)}</span>` : ""}</div>
+          </div>`;
+        }).join("")}
+      </div>`;
+  },
+};
+
 const Tasks = {
   async render(v) {
     const [sum, list] = await Promise.all([
@@ -3322,14 +3546,15 @@ const App = {
     State.save();
   },
   async refresh() {
-    const p = PAGES.find(x => x.id === State.page) || PAGES[0];
+    const p = ALL_PAGES.find(x => x.id === State.page) || PAGES[0];
     $("#page-title").textContent = p.name;
     $("#page-sub").textContent = p.sub;
     document.querySelectorAll("#nav button").forEach(b =>
       b.classList.toggle("on", b.dataset.p === p.id));
     const v = $("#view");
     v.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span> 加载中</div></div>`;
-    const R = {settings:Settings, library:Library, world:World, model:Model,
+    const R = {console:Console, novel:NovelDesk, chapter:ChapterDesk,
+               settings:Settings, library:Library, world:World, model:Model,
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,
                fidelity:FidelityPage,
