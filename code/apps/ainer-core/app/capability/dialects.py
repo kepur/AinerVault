@@ -1027,10 +1027,17 @@ def _ds_video_body(transport: httpx.Client, payload: dict[str, Any], model: str,
         raise CapabilityError(
             CapErrorCode.INVALID_REQUEST,
             "图生视频需要首帧，但 first_frame 取不到内容")
-    body_in: dict[str, Any] = {"media": [first]}
+    # media 的元素是**带角色的对象**：{"type": "first_frame"|"last_frame", "url": ...}。
+    # 这一处踩了两层：
+    #   传地址字符串 → "No such property: type for class: java.lang.String"
+    #   传 {"type":"image","image":...} → 提交时回 200 PENDING，
+    #     执行时才 FAILED，错误里才说出合法的 type 取值
+    # **提交成功不代表形状对** —— 这个端点是异步校验的，
+    # 所以接它的时候必须轮到终态再判断，不能看 200 就当通过。
+    body_in: dict[str, Any] = {"media": [{"type": "first_frame", "url": first}]}
     last = _ds_data_url(transport, payload.get("last_frame"), timeout)
     if last:
-        body_in["media"].append(last)
+        body_in["media"].append({"type": "last_frame", "url": last})
     prompt = str(payload.get("prompt") or "").strip()
     if prompt:
         body_in["prompt"] = prompt
@@ -1091,9 +1098,15 @@ def _ds_await_video(transport: httpx.Client, base_url: str, headers: dict[str, s
                                       f"DashScope 视频任务成功但没有 URL：{str(out)[:200]}")
             return str(url)
         if state in ("FAILED", "CANCELED", "UNKNOWN"):
+            # 入参形状错也走到这里 —— 提交那一步回的是 200 PENDING。
+            # 所以这条错误必须把供应商原话带全：它是唯一说出
+            # 「合法取值是什么」的地方，截断了就只剩「任务失败」。
+            detail = str(out.get("message") or out.get("code") or "")
+            code = (CapErrorCode.INVALID_REQUEST
+                    if str(out.get("code") or "").startswith("Invalid")
+                    else CapErrorCode.UPSTREAM_ERROR)
             raise CapabilityError(
-                CapErrorCode.UPSTREAM_ERROR,
-                f"DashScope 视频任务 {state}：{out.get('message') or out.get('code') or ''}")
+                code, f"DashScope 视频任务 {state}（task_id={task_ref}）：{detail}")
         if time.monotonic() >= deadline:
             raise CapabilityError(
                 CapErrorCode.UPSTREAM_TIMEOUT,

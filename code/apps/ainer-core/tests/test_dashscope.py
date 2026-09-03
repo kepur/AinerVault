@@ -167,3 +167,61 @@ class TestNegativePromptGuard:
         src = inspect.getsource(frame_compose)
         assert "cjk_segments(neg)" in src
         assert '"side": "negative"' in src
+
+
+class TestVideoPayload:
+    """图生视频的入参形状是探出来的，这里钉住。
+
+    踩了两层：传地址字符串被拒（错误指向 Java 的类型系统，
+    看不出缺的是 type 键）；传 {"type":"image","image":...} 提交时回
+    **200 PENDING**，执行时才 FAILED —— 那次的错误信息里才说出合法取值。
+    这个端点是异步校验的，200 不代表形状对。
+    """
+
+    def _body(self, **extra):
+        import httpx
+
+        from app.capability.dialects import _ds_video_body
+
+        payload = {"first_frame": {"b64": "AAAA", "mime": "image/png"},
+                   "prompt": "slow push in", "duration_ms": 5000, **extra}
+        with httpx.Client() as c:
+            return _ds_video_body(c, payload, "wan2.7-i2v", 5)
+
+    def test_media_items_carry_role_and_url(self):
+        body = self._body()
+        assert body["input"]["media"] == [
+            {"type": "first_frame", "url": "data:image/png;base64,AAAA"}]
+
+    def test_last_frame_gets_its_own_role(self):
+        """first/last 两张图靠 type 区分，不靠数组顺序 ——
+        顺序型接口在只有尾帧时会把它当首帧用。"""
+        body = self._body(last_frame={"b64": "BBBB", "mime": "image/png"})
+        roles = [m["type"] for m in body["input"]["media"]]
+        assert roles == ["first_frame", "last_frame"]
+
+    def test_duration_converts_to_whole_seconds(self):
+        assert self._body(duration_ms=5000)["parameters"]["duration"] == 5
+        assert self._body(duration_ms=4400)["parameters"]["duration"] == 4
+
+    def test_missing_first_frame_rejected_before_the_call(self):
+        """没有首帧就别提交 —— 提交了也是 200 PENDING 然后 FAILED，
+        白等一轮轮询。"""
+        import httpx
+
+        from app.capability.dialects import _ds_video_body
+        from app.capability.errors import CapabilityError
+
+        with httpx.Client() as c, pytest.raises(CapabilityError):
+            _ds_video_body(c, {"prompt": "x"}, "wan2.7-i2v", 5)
+
+    def test_failure_keeps_provider_wording_and_task_id(self):
+        """入参形状错只在轮询结果里说得清。截断供应商原话，
+        就只剩「任务失败」—— 而合法取值是什么，只有那句话里有。"""
+        import inspect
+
+        from app.capability import dialects
+
+        src = inspect.getsource(dialects._ds_await_video)
+        assert "task_id={task_ref}" in src
+        assert "CapErrorCode.INVALID_REQUEST" in src
