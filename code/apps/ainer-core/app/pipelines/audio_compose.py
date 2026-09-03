@@ -48,6 +48,9 @@ class AudioComposeResult:
     #: 拆错的后果是配音把「他把碗放在栏杆上」念出来，
     #: 而那听起来就是旁白，数据上却标着 dialogue，查无可查
     unsplit: list[dict] = field(default_factory=list)
+    #: 文本变了因而被作废的旧音频。**要报出来** ——
+    #: 它等于「这些句子需要重新配音」，不报的话人会以为编译完就能直接出片
+    stale_audio: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +58,7 @@ class AudioComposeResult:
             "scene_bgm": self.scene_bgm, "scene_tone": self.scene_tone,
             "missing_voice": self.missing_voice,
             "unsplit": self.unsplit,
+            "stale_audio": self.stale_audio,
         }
 
 
@@ -189,7 +193,8 @@ def compile_audio(
             # 旁白块整段保留，它本来就该整段念。
             split = None
             if is_dialogue:
-                split = sp.split_speech(text)
+                split = sp.split_speech(text, is_dialogue=True,
+                                        source=block.source_text)
                 if split.speech_text:
                     params_extra = {"action_text": split.action,
                                     "full_text": text}
@@ -255,6 +260,22 @@ def compile_audio(
                 })
 
             row = existing.get((shot.id, bid, kind))
+            # **文本变了就作废旧产物。**
+            #
+            # 编译只改 AudioSpec.text，不动 asset_id；而生成那一步
+            # 「有 asset_id 就跳过」。于是改了文本却听到旧声音 ——
+            # 数据上看每一条都「已生成」，播出来还是上一版。
+            # 实跑撞到的正是这个：台词拆干净了，视频里念的仍是整段
+            # （包括「老周把碗放在栏杆上」），而看规格文本完全正确。
+            if row is not None and (row.text or "") != text and row.asset_id:
+                row.asset_id = None
+                row.duration_ms = None
+                row.timestamps_json = None
+                row.status = SpecStatus.pending
+                result.stale_audio.append({
+                    "shot": shot.order_no, "kind": kind.value,
+                    "was": (row.text or "")[:60], "now": text[:60],
+                })
             if row is None:
                 row = AudioSpec(
                     id=new_id("au"), shot_id=shot.id, scene_id=shot.scene_id,

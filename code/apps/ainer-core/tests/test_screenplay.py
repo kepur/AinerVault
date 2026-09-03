@@ -120,3 +120,36 @@ class TestJunkGuard:
 
     def test_clean_text_passes(self):
         assert sp.translation_junk("Он поставил чашку на перила.") == []
+
+
+class TestQuoteLossInTranslation:
+    """中译英之后「不巧。」变成了裸的 Not so fortunate. —— 引号没了。
+
+    拆不出台词的后果是这条对白**一句配音都没有**，
+    比混进旁白更糟：观众只会觉得这个角色突然哑了。
+    """
+
+    def test_dialogue_without_quotes_becomes_speech(self):
+        s = sp.split_speech("Not so fortunate.", is_dialogue=True, source="「不巧。」")
+        assert s.speech == ["Not so fortunate."]
+        assert s.uncertain
+
+    def test_lost_quotes_are_named_as_a_translation_defect(self):
+        """原文有引号而译文没有 —— 那是译文的问题，不是「这段没人说话」。"""
+        s = sp.split_speech("Not so fortunate.", is_dialogue=True, source="「不巧。」")
+        assert "译文丢了引号" in s.uncertain
+
+    def test_source_without_quotes_reads_differently(self):
+        s = sp.split_speech("He said nothing.", is_dialogue=True,
+                            source="他什么也没说。")
+        assert s.speech and "译文丢了引号" not in s.uncertain
+
+    def test_narration_block_is_unaffected(self):
+        """非对白块没有引号就是真的没人说话，不该被当成台词。"""
+        s = sp.split_speech("沈砚没点灯。他把腰刀横在膝上。")
+        assert s.speech == [] and not s.uncertain
+
+    def test_has_quotes_helper(self):
+        assert sp.has_quotes("「不巧。」")
+        assert sp.has_quotes('"Not so fortunate."')
+        assert not sp.has_quotes("Not so fortunate.")

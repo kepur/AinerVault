@@ -82,11 +82,28 @@ class Split:
                 "uncertain": self.uncertain}
 
 
-def split_speech(text: str) -> Split:
+def has_quotes(text: str) -> bool:
+    """这段文字里有没有成对引号。"""
+    raw = text or ""
+    return any(lq in raw and rq in raw for lq, rq in _PAIRS)
+
+
+def split_speech(text: str, *, is_dialogue: bool = False,
+                 source: str | None = None) -> Split:
     """把一段话拆成台词与动作。
 
     优先找成对引号 —— 那是无歧义的。找不到才看破折号体，
-    而破折号体只在能定位到归属小句时才拆，否则整段算动作并报出来。
+    而破折号体只在能定位到归属小句时才拆。
+
+    is_dialogue 说明「这一段已经被判定为对白段」。
+    **这时没有引号不等于没人说话** —— 更可能是译文把引号丢了：
+    英译实跑里 `「不巧。」` 变成了裸的 `Not so fortunate.`。
+    此时把整段当台词，比一句不配音强得多（后者是整条台词消失，
+    而观众只会觉得这个角色突然哑了）；但要报出来，
+    因为整段里可能还夹着动作。
+
+    source 给了原文时，能分清两种「没引号」：
+    原文本来就没有（真的没人说话）／原文有而译文丢了（译文缺陷）。
     """
     raw = (text or "").strip()
     if not raw:
@@ -98,6 +115,15 @@ def split_speech(text: str) -> Split:
 
     if _DASH_LEAD.search(raw):
         return _by_dash(raw)
+
+    if is_dialogue:
+        lost = source is not None and has_quotes(source)
+        return Split(
+            speech=[raw], action="",
+            uncertain=("译文丢了引号（原文有），整段先当台词；"
+                       "若其中夹着动作描写，配音会把它念出来"
+                       if lost else
+                       "这一段判定为对白但没有引号，整段先当台词"))
 
     # 没有任何引号：整段是叙述/动作，没有台词。
     # **这不是「拆不动」** —— 它拆得很干净，答案就是「没人说话」
