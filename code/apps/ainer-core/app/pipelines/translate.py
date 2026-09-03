@@ -34,6 +34,7 @@ from app.pipelines.entities import (
     apply_placeholders, placeholder_map, restore_placeholders,
 )
 from app.pipelines.devices import build_device_brief
+from app.pipelines import screenplay as sp
 from app.pipelines import source_worlds as sw
 from app.worldview import injector, preflight as pf, validator
 
@@ -48,6 +49,10 @@ class TranslateResult:
     violations: int = 0
     missing_names: list[str] = field(default_factory=list)
     blocks: list[dict] = field(default_factory=list)
+    #: 译文里的结构垃圾（占位符残留、JSON 碎片）。
+    #: **不报的话它会一路走到配音被念出来**，而逐条看译文时
+    #: 眼睛会自动跳过句尾那串括号
+    junk: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +62,7 @@ class TranslateResult:
             "violations": self.violations,
             "missing_names": self.missing_names,
             "blocks": self.blocks,
+            "junk": self.junk,
         }
 
 
@@ -271,6 +277,21 @@ def translate_chapter(
             if not raw:
                 continue
             text = restore_placeholders(raw, p2t)
+
+            # ── 闸一点五：结构垃圾 ──
+            # 解析成功不等于内容干净。实跑里出现过
+            #   «…шагнул вперёд. }]}]}]}»           JSON 骨架碎片跟在正文后
+            #   «— Это я. ⟦E1⟧ сказал.»             模型自造的占位符
+            # 前者是 JSON 解出来了、字段也在，只是值里混进了骨架本身；
+            # 后者是它把我们的 {{CHAR:...}} 换成了自己的简写，
+            # restore_placeholders 只认 {{}}，还原不了。
+            # **两种都会一路走到配音，被念出来。**
+            junk = sp.translation_junk(text)
+            if junk:
+                result.junk.append({
+                    "block_id": b.id, "seq_no": b.seq_no,
+                    "found": junk, "text": text[:100],
+                })
 
             # ── 闸二：反向校验 ──
             block_hits = pf.hits_for_text(

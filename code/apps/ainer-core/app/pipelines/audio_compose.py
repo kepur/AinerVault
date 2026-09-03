@@ -28,6 +28,7 @@ from app.models import (
 from app.models.script import BlockType
 from app.worldview import resolve
 from app.pipelines import casting
+from app.pipelines import screenplay as sp
 from app.pipelines.base import PipelineError, checkpoint
 
 log = logging.getLogger(__name__)
@@ -43,12 +44,17 @@ class AudioComposeResult:
     scene_bgm: int = 0
     scene_tone: int = 0
     missing_voice: list[str] = field(default_factory=list)
+    #: 台词与动作拆不干净的段落。**要报出来** ——
+    #: 拆错的后果是配音把「他把碗放在栏杆上」念出来，
+    #: 而那听起来就是旁白，数据上却标着 dialogue，查无可查
+    unsplit: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "dialogue": self.dialogue, "narration": self.narration,
             "scene_bgm": self.scene_bgm, "scene_tone": self.scene_tone,
             "missing_voice": self.missing_voice,
+            "unsplit": self.unsplit,
         }
 
 
@@ -171,6 +177,35 @@ def compile_audio(
             is_dialogue = block.block_type == BlockType.dialogue
             kind = AudioKind.dialogue if is_dialogue else AudioKind.narration
 
+            # **对白只念引号里的话。**
+            #
+            # 块级分类只回答「这一段是不是对白段」，回答不了
+            # 「哪几个字是说出口的」。小说的一个自然段里两者是混着的：
+            #     「镖师不跑。」老周把碗放在栏杆上。「要跑，第一趟就跑了。」
+            # 不拆的话配音把整段都念了 —— 包括「老周把碗放在栏杆上」。
+            # 听起来就是有旁白，而数据上这一条明明标着 dialogue。
+            #
+            # 有声书里念整段是对的（那是一个人在读小说），所以只在对白块上拆；
+            # 旁白块整段保留，它本来就该整段念。
+            split = None
+            if is_dialogue:
+                split = sp.split_speech(text)
+                if split.speech_text:
+                    params_extra = {"action_text": split.action,
+                                    "full_text": text}
+                    text = split.speech_text
+                else:
+                    # 拆不出台词：**不要退回整段**，那正是问题本身。
+                    # 报出来，让人看一眼这一段到底有没有人在说话
+                    result.unsplit.append({
+                        "block_id": bid, "shot": shot.order_no,
+                        "why": split.uncertain or "这一段标着对白，但找不到引号里的话",
+                        "text": text[:80],
+                    })
+                    continue
+            else:
+                params_extra = {}
+
             entity = (
                 db.get(WorldEntity, block.speaker_entity_id)
                 if block.speaker_entity_id else None
@@ -211,6 +246,13 @@ def compile_audio(
                     voice_ref_ids = [cast_row.voice_asset_id]
             if voice_ref_ids:
                 params["voice_reference_asset_ids"] = voice_ref_ids
+            # 动作那一半不发声，但要留着 —— 它是首尾帧之间该变的东西
+            params.update(params_extra)
+            if split is not None and split.uncertain:
+                result.unsplit.append({
+                    "block_id": bid, "shot": shot.order_no,
+                    "why": split.uncertain, "text": text[:80],
+                })
 
             row = existing.get((shot.id, bid, kind))
             if row is None:

@@ -43,6 +43,8 @@ from app.models import (
     ScriptDoc, Shot, ShotMotion, ShotPlan, WorldEntity,
 )
 
+from app.pipelines import screenplay as sp
+
 log = logging.getLogger(__name__)
 
 
@@ -158,17 +160,44 @@ def build_timeline(
         # **镜头长度：有台词按台词，没台词按画面拍子。**
         # 不能沿用 shot.duration_ms —— 它是按「对白+旁白」回填的，
         # 拿掉旁白后一个只有旁白的镜头会剩下九秒空画面
+        motion = motions.get(shot.id)
+        action_beat = sp.is_action_beat(
+            shot.description, motion.subject_move if motion else None,
+            motion.camera_move if motion else None)
+
         if voiced_ms:
             dur = voiced_ms + _PAD_MS * 2
+            why = "按台词真实时长"
         else:
-            dur = _beat_ms(shot, motions.get(shot.id))
-            if abs(dur - shot.duration_ms) > 500:
-                retimed.append({
-                    "shot": shot.order_no,
-                    "from_ms": shot.duration_ms, "to_ms": dur,
-                    "why": ("这一镜只有旁白，影片投影里旁白不出现，"
-                            "按画面拍子重算" if specs else "这一镜没有音频，按画面拍子"),
-                })
+            dur = _beat_ms(shot, motion)
+            why = ("这一镜只有旁白，影片投影里旁白不出现，按画面拍子重算"
+                   if specs else "这一镜没有音频，按画面拍子")
+
+        # **首尾帧之间超过五秒就会审美疲劳。**
+        # 走路、海浪、粒子 —— 五秒之内是一个动作，五秒之后是同一个动作重复。
+        # 动态场景更短：一次出击、一次爆炸，三秒就该切。
+        # 这不是审美偏好，是 i2v 的能力边界：它在首尾帧之间插值，
+        # 时间越长插得越假，最后变成慢动作糊影。
+        #
+        # 台词比上限还长时**不砍台词** —— 砍了话就说不完。
+        # 那种镜头要拆成两镜，而拆镜是分镜那一步的事，这里只报出来。
+        capped, cap_why = sp.clamp_shot_ms(dur, action=action_beat)
+        if capped != dur and voiced_ms and capped < dur:
+            gaps.append({
+                "track": "video", "shot": shot.order_no,
+                "why": f"台词 {dur/1000:.1f}s 超过{'动态' if action_beat else '静态'}"
+                       f"场景上限，这一镜该拆成两镜",
+                "fix": "回「剧本转换」把这一段拆成两个镜头",
+            })
+        elif capped != dur:
+            dur, why = capped, cap_why or why
+
+        if abs(dur - shot.duration_ms) > 500:
+            retimed.append({
+                "shot": shot.order_no,
+                "from_ms": shot.duration_ms, "to_ms": dur,
+                "action_beat": action_beat, "why": why,
+            })
 
         pair = frames.get(shot.id, {})
         first = pair.get(FrameRole.first.value)
@@ -176,7 +205,6 @@ def build_timeline(
         first_url = _url(assets, first)
         last_url = _url(assets, last)
         video_url = _url_by_id(assets, shot.video_asset_id)
-        motion = motions.get(shot.id)
 
         if not (video_url or first_url):
             gaps.append({"track": "video", "shot": shot.order_no,
