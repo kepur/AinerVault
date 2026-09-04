@@ -205,6 +205,36 @@ class TestIdempotencyRace:
         assert "db.expunge(task)" in src
 
 
+class TestIdempotentReattach:
+    """幂等命中时无条件补挂一次，不要假设「引用没换就一定挂上了」。
+
+    头肩像就是这么丢的：任务提交成功、图也真出来了，而当初的回挂路径
+    不认识 character_ref_bust 这个 ref_kind，参考集那一格 asset_id 一直
+    是空。重出一次又被幂等挡回同一条记录，而补挂只在「引用换了」时才跑，
+    于是这张图永远挂不上去 —— 任务不会再跑第二次，回调也不会重来。
+    """
+
+    def test_reattach_does_not_require_a_changed_ref(self):
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        head = src[src.index("existing is not None"):]
+        assert "existing.ref_kind != ref_kind" not in head, (
+            "补挂不能以「引用换了」为前提 —— 从没挂过的那一类永远修不好")
+        assert "_attach_to_ref(db, existing, done" in head
+
+    def test_reattach_only_when_there_is_something_to_attach(self):
+        """没有产物就不必空跑一趟补挂。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "if done:" in src
+
+
 class TestMediaLibrary:
     """一本小说跑下来会攒下几百个文件，原来散在五个页面里 ——
     人物时期看锚、提示词台账看素材、分镜看帧、有声书看音频 ——

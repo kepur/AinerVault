@@ -104,17 +104,27 @@ def submit_task(
         select(GenTask).where(GenTask.idempotency_key == idem)
     ).scalars().first()
     if existing is not None and existing.status not in {TaskStatus.failed, TaskStatus.cancelled}:
-        # 幂等命中已完成的任务时，产物仍挂在当初那个引用对象上。
-        # 重新编译分镜会造出新的 FrameSpec，若不在这里补挂，
-        # 新帧永远等不到图 —— 任务不会再跑第二次，回调也不会重来。
-        if existing.status == TaskStatus.succeeded and ref_id and (
-            existing.ref_kind != ref_kind or existing.ref_id != ref_id
-        ):
+        # 幂等命中已完成的任务时，产物**不一定挂在**这次要挂的对象上。
+        #
+        # 两种情况都会走到这里：
+        #   引用换了  重新编译分镜造出新的 FrameSpec，图还挂在旧帧上
+        #   从没挂过  当初提交时回挂路径不认识这个 ref_kind
+        #             （头肩像就是这么丢的：任务成功、图也出来了，
+        #              而参考集那一格 asset_id 一直是空）
+        #
+        # 原来只在「引用换了」时补挂 —— 那等于假设「引用没换就一定挂上了」。
+        # 这个假设一旦不成立就永远修不好：任务不会再跑第二次，
+        # 回调也不会重来，重出一次又被幂等挡回同一条记录。
+        # 改成只要任务成功、产物在，就无条件补挂一次。
+        # _attach_to_ref 各分支都是幂等的（帧还多一道 _supersedes 防倒挂），
+        # 重复挂不花钱也不会覆盖更新的产物。
+        if existing.status == TaskStatus.succeeded and ref_id:
             done = list(db.execute(
                 select(Asset).where(Asset.gen_task_id == existing.id)
             ).scalars())
-            _attach_to_ref(db, existing, done, ref_kind=ref_kind, ref_id=ref_id)
-            db.flush()
+            if done:
+                _attach_to_ref(db, existing, done, ref_kind=ref_kind, ref_id=ref_id)
+                db.flush()
         return existing
 
     task = existing or GenTask(id=new_id("gt"), idempotency_key=idem)
