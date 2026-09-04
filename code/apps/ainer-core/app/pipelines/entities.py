@@ -825,6 +825,13 @@ def placeholder_map(
             # 交给翻译本身处理，它看得见上下文，知道该用 kid 还是 punk。
             if _is_common_address(surface) or surface in lex_terms:
                 continue
+            # **全名的权威是人名映射，不是称呼表。**
+            # 抽取会给本名也登记一条 formal_full 称呼，字面与 display_name
+            # 一模一样。两条都在时称呼表排在前面，于是改了译名不生效 ——
+            # entity_world_names 写着 Thomas Chen，译文里还是 Thomas Ashford，
+            # 而两张表各自看都没错。
+            if surface == e.display_name:
+                continue
             claimed.add(surface)
             if not ap.target_surface:
                 continue  # 未定形，留给下面按本名兜底

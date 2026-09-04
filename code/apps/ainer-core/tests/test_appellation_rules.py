@@ -215,3 +215,17 @@ class TestCommonAddress:
         src = inspect.getsource(entities.placeholder_map)
         assert "lex_terms" in src
         assert "WorldLexicon" in src
+
+    def test_full_name_comes_from_the_name_mapping_not_the_appellation(self):
+        """抽取会给本名也登记一条 formal_full 称呼，字面与 display_name 一样。
+
+        两条都在时称呼表排在前面，于是改了译名不生效 ——
+        entity_world_names 写着 Thomas Chen，译文里还是 Thomas Ashford，
+        而两张表各自看都没错。实跑撞到过一次，整章重译才发现。
+        """
+        import inspect
+
+        from app.pipelines import entities
+
+        src = inspect.getsource(entities.placeholder_map)
+        assert "surface == e.display_name" in src
