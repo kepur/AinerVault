@@ -438,3 +438,36 @@ class TestReferenceSheet:
         src = inspect.getsource(frame_compose.compose_frame_prompt)
         for term in ("character sheet", "split screen", "collage"):
             assert term in src
+
+
+class TestSkinToneIsAlsoUnmapped:
+    """肤色词比族裔词更隐蔽 —— 它不写族裔，出来的仍是一张东亚面孔。
+
+    坏蛋实测：用户指着父母说「很中国脸」。查不变项，族裔词一个没有，
+    是「natural yellowish skin tone」在起作用，而只找族裔词的检查
+    一个都抓不到。
+    """
+
+    @pytest.mark.parametrize("text", [
+        "middle-aged woman, natural yellowish skin tone, round face",
+        "square jaw, yellow skin, thick brows",
+    ])
+    def test_skin_tone_counts_as_unmapped(self, text):
+        from app.pipelines.identity import foreign_appearance_terms
+
+        assert foreign_appearance_terms(text, _Profile({"region": "US"}))
+
+    def test_ordinary_skin_words_are_not_flagged(self):
+        """「pale」「weathered tan」是普通的肤质描写，不该误伤。"""
+        from app.pipelines.identity import foreign_appearance_terms
+
+        for text in ("pale bloodless skin", "weathered tan skin, freckles"):
+            assert not foreign_appearance_terms(text, _Profile({"region": "US"}))
+
+    def test_the_mining_prompt_says_not_to_write_them(self):
+        """规则层能查出来，提示词也要让模型一次做对。"""
+        from app.pipelines.entity_epochs import _system
+
+        prompt = _system(cap_chapters=3, total=20)
+        assert "yellowish skin" in prompt
+        assert "不要写族裔词" in prompt

@@ -221,8 +221,18 @@ from_chapter_order / to_chapter_order 按章节序号，闭区间。
                        dark grey padded escort coat, black-sheathed sabre at the hip
 
 英文写成逗号分隔的短语，不要写句子，不要写「the man is...」。
-人物的族裔与年代按目标圈层写（帝俄晚期就是 late 19th century Russian），
-不要写成原文文化的样子。
+
+**人物是目标世界的人，不是原文世界的人。**
+这一层和货币场所一样要做映射：五元钱要变成 five-dollar bill，
+人也要变成目标世界的人。原文写的是中国少年，译到美国当代都市，
+写出来就该是一个美国少年 —— 脸型骨相可以沿用原文的描写（圆脸、
+高颧骨、下巴短），但**不要写族裔词，也不要写肤色**：
+  ✗ East Asian male, monolid eyes, yellowish skin
+  ✗ Asian woman with a round soft face
+  ✓ round soft face, gentle features, dark brown eyes, medium build
+族裔由目标圈层统一决定，在出图那一步补上；这里写了反而会打架。
+「yellowish skin」这类肤色词比族裔词更隐蔽 —— 它不写族裔，
+出来的仍是一张东亚面孔。
 
 ## 每一项写成一个短语，不超过 20 字
 

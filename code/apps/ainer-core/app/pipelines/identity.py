@@ -84,6 +84,9 @@ def _ordinal(n: int) -> str:
 _SOURCE_ETHNICITY = (
     "east asian", "asian", "chinese", "japanese", "korean",
     "monolid", "oriental", "han chinese",
+    # 肤色词比族裔词更隐蔽：「yellowish skin」不写族裔，
+    # 出来的仍是一张东亚面孔，而检查只找族裔词的话一个都抓不到
+    "yellowish skin", "yellow skin", "sallow yellow",
 )
 
 
