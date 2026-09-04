@@ -238,3 +238,37 @@ class TestPromptStyle:
 
         src = inspect.getsource(dialects._sd_body)
         assert 'prompt_style' in src and '"tags"' in src
+
+
+class TestSerialisedLocally:
+    """本地推理必须串行。
+
+    A1111 只有一个采样 worker，显存是硬上限。并发发进去不会排队 ——
+    它会同时开始、一起抢显存。实测：素材链正在跑的时候另开三个 img2img
+    探测，四个请求同时进一块 16G 卡，WebUI 直接崩了（端口都不再监听），
+    而客户端这边看到的只是三个 ReadTimeout，什么都查不出来。
+    """
+
+    def test_the_post_is_inside_a_lock(self):
+        import inspect
+
+        from app.capability import dialects
+
+        src = inspect.getsource(dialects.sd_invoke)
+        i, j = src.index("with _SD_LOCK"), src.index("transport.post")
+        assert i < j, "请求必须在锁里发"
+
+    def test_the_lock_is_module_level(self):
+        """每次调用新建一把锁等于没有锁。"""
+        from app.capability import dialects
+
+        assert isinstance(dialects._SD_LOCK, type(__import__("threading").Lock()))
+
+    def test_cloud_dialects_are_not_serialised(self):
+        """云端本来就是一个请求一台机器，串行只会白白拖慢整批。"""
+        import inspect
+
+        from app.capability import dialects
+
+        assert "_SD_LOCK" not in inspect.getsource(dialects.dashscope_invoke)
+        assert "_SD_LOCK" not in inspect.getsource(dialects.openai_invoke)

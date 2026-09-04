@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -1893,12 +1894,28 @@ def _sd_body(transport: httpx.Client, payload: dict[str, Any], model: str | None
     return "img2img", body
 
 
+#: 本地推理**必须串行**。
+#:
+#: A1111 只有一个采样 worker，而显存是硬上限。并发发进去不会排队 ——
+#: 它会同时开始，一起抢显存。实测：素材链正在跑的时候另开三个 img2img
+#: 探测，四个请求同时进一块 16G 卡，WebUI 直接崩了（端口都不再监听），
+#: 而客户端这边看到的只是三个 ReadTimeout。
+#:
+#: 云端方言不需要这个 —— 那边本来就是一个请求一台机器。
+#: 这把锁只锁本地这一条路。
+_SD_LOCK = threading.Lock()
+
+
 def sd_invoke(
     transport: httpx.Client, base_url: str, headers: dict[str, str], *,
     capability: Capability, payload: dict[str, Any], model: str | None,
     timeout: float, task_id: str,
 ) -> Task:
-    """跑一次本地 A1111，产物落盘后按契约的 Task 形态返回。"""
+    """跑一次本地 A1111，产物落盘后按契约的 Task 形态返回。
+
+    **一次只跑一张。** 见 _SD_LOCK 上的说明 —— 并发不是慢一点，是把
+    WebUI 打崩，而崩掉之后这一批后面的图全部失败。
+    """
     from app.capability.mediastore import store_b64
 
     if capability not in (Capability.image_t2i, Capability.image_i2i):
@@ -1913,7 +1930,9 @@ def sd_invoke(
     url = f"{base_url.rstrip('/')}/sdapi/v1/{route}"
     started = time.time()
     try:
-        resp = transport.post(url, json=body, headers=headers, timeout=timeout)
+        # 排队等上一张出完。等待不计进超时预算 —— 排队不是上游慢
+        with _SD_LOCK:
+            resp = transport.post(url, json=body, headers=headers, timeout=timeout)
     except httpx.TimeoutException as exc:
         raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
                               f"本地 SD 超时: {exc}") from exc
