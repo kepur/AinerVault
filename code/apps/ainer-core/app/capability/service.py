@@ -16,7 +16,9 @@ from app.capability.client import CapabilityClient, canonical_idempotency_key
 from app.capability.errors import (
     MAX_ATTEMPTS, RETRY_BACKOFF_SEC, CapabilityError, CapErrorCode,
 )
-from app.capability.router import ResolvedRoute, resolve_one, resolve_routes
+from app.capability.router import (
+    ResolvedRoute, next_free_route, resolve_one, resolve_routes,
+)
 from app.capability.schemas import (
     TERMINAL_STATES, Capability, Task, TaskOptions, TaskState,
 )
@@ -76,6 +78,7 @@ def submit_task(
     tier: str | None = None,
     max_cost: float | None = None,
     force: bool = False,
+    _tried: frozenset[str] = frozenset(),
 ) -> GenTask:
     """提交一次能力调用并落 gen_tasks。
 
@@ -88,7 +91,33 @@ def submit_task(
     force 只应由人明确点「重新生成」时传入 —— 它绕开的正是防重复计费那一层。
     """
     cap = Capability(capability) if isinstance(capability, str) else capability
+    pinned = route is not None      # 调用方点名的路由不做自动轮换
     route = route or resolve_one(db, cap, purpose, tier)
+
+    def _failover(exc_code: str, detail: str) -> GenTask | None:
+        """某个模型的免费额度用尽时，换下一条免费路由接着跑。
+
+        百炼一个账号下几十个模型各有各的免费额度：出图的
+        qwen-image-3.0 见底了，qwen-image-3.0-pro 还满着。
+        硬停在那里等人改配置，整章生产就断在半路 ——
+        而这类断点往往出现在跑到一半的批量里，前面花掉的额度全白费。
+
+        只换**明确标了免费**的。路由表里同时配着 deepseek / mistral /
+        openrouter，猜一下就是在悄悄花钱，那比停下来糟糕得多。
+        """
+        if pinned or exc_code != CapErrorCode.QUOTA_EXCEEDED.value:
+            return None
+        nxt = next_free_route(db, cap, purpose, tier, tried=_tried | {route.key})
+        if nxt is None:
+            return None
+        log.warning("额度用尽（%s %s），换免费路由 %s 继续",
+                    route.model, detail[:60], nxt.model)
+        return submit_task(
+            db, cap, payload, purpose=purpose, ref_kind=ref_kind, ref_id=ref_id,
+            novel_id=novel_id, chapter_id=chapter_id, sync=sync, route=nxt,
+            tier=tier, max_cost=max_cost, force=force,
+            _tried=_tried | {route.key},
+        )
 
     merged = {**route.default_params, **payload}
     idem = canonical_idempotency_key(
@@ -188,12 +217,21 @@ def submit_task(
                     cap, merged, model=route.model, options=options, idempotency_key=idem
                 )
                 apply_task_result(db, task, result)
+                if task.status is TaskStatus.failed:
+                    err = task.error_json or {}
+                    swapped = _failover(str(err.get("code") or ""),
+                                        str(err.get("message") or ""))
+                    if swapped is not None:
+                        return swapped
                 return task
 
             accepted = client.submit(
                 cap, merged, model=route.model, options=options, idempotency_key=idem
             )
         except CapabilityError as exc:
+            swapped = _failover(exc.code.value, str(exc))
+            if swapped is not None:
+                return swapped
             _mark_failed(task, exc)
             db.flush()
             return task

@@ -878,9 +878,12 @@ def _ds_error(resp: httpx.Response) -> CapabilityError:
         code, retryable = CapErrorCode.RATE_LIMITED, True
     elif "Quota" in ds_code or "Arrearage" in ds_code:
         # 不可重试：重试只会把同一个错再撞一遍。
-        # 处置方式和别的错完全不同 —— 去充值或换模型，不是改参数
-        code = CapErrorCode.UPSTREAM_ERROR
-        detail += "（该模型的额度已用尽，需开通付费或把这条路由换到别的模型）"
+        # 处置方式和别的错完全不同 —— 换一个还有额度的模型，不是改参数。
+        # **要用专门的码。** 混在 UPSTREAM_ERROR 里，上层就分不出
+        # 「这个模型没额度了」和「上游炸了」——前者该换模型继续跑，
+        # 后者该退避重试，两种处置完全相反。
+        code = CapErrorCode.QUOTA_EXCEEDED
+        detail += "（该模型的免费额度已用尽，换一条还有额度的免费路由）"
     elif resp.status_code in (401, 403) or ds_code in ("InvalidApiKey", "Unauthorized"):
         code = CapErrorCode.UNAUTHORIZED
     elif 400 <= resp.status_code < 500:

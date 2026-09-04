@@ -249,11 +249,23 @@ class TestErrorMapping:
         return _ds_error(resp)
 
     def test_quota_is_not_unauthorized(self):
+        """额度用尽回的也是 403。判成鉴权错会把人送去查 API key ——
+        key 是好的，白查一圈才发现是额度。"""
         from app.capability.errors import CapErrorCode
 
         e = self._err(403, "AllocationQuota.FreeTierOnly", "Free quota exhausted")
-        assert e.code == CapErrorCode.UPSTREAM_ERROR
+        assert e.code == CapErrorCode.QUOTA_EXCEEDED
+        assert e.code != CapErrorCode.UNAUTHORIZED
         assert "额度" in str(e)
+
+    def test_quota_has_its_own_code_not_generic_upstream(self):
+        """混在 UPSTREAM_ERROR 里，上层就分不出「这个模型没额度了」和
+        「上游炸了」—— 前者该换模型继续跑，后者该退避重试，
+        两种处置完全相反。额度轮换就是靠这个码起跳的。"""
+        from app.capability.errors import CapErrorCode
+
+        assert self._err(403, "AllocationQuota.FreeTierOnly").code \
+            != CapErrorCode.UPSTREAM_ERROR
 
     def test_quota_is_not_retryable(self):
         """重试只会把同一个错再撞一遍，而每次重试都要等一轮退避。"""
@@ -263,7 +275,7 @@ class TestErrorMapping:
     def test_arrearage_also_matches(self):
         from app.capability.errors import CapErrorCode
 
-        assert self._err(403, "Arrearage").code == CapErrorCode.UPSTREAM_ERROR
+        assert self._err(403, "Arrearage").code == CapErrorCode.QUOTA_EXCEEDED
 
     def test_real_auth_failure_still_maps_to_unauthorized(self):
         """额度那一支不能吃掉真正的鉴权错 —— 那时确实该去查 key。"""

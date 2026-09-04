@@ -371,3 +371,84 @@ class TestEnumMembersExist:
                         and node.attr not in names):
                     bad.append(f"{path.name}:{node.lineno} TaskState.{node.attr}")
         assert not bad, "不存在的任务状态：" + "、".join(bad)
+
+
+class TestFreeQuotaFailover:
+    """一个模型的免费额度用尽，就换下一条免费路由接着跑。
+
+    百炼一个账号下几十个模型各有各的免费额度：出图的 qwen-image-3.0
+    见底了，qwen-image-3.0-pro 还满着。硬停在那里等人改配置，
+    整章生产就断在半路 —— 而这类断点往往出现在跑到一半的批量里，
+    前面花掉的额度全白费。
+    """
+
+    def _route(self, billing, model="m", ep_id="ep1"):
+        from app.capability.router import ResolvedRoute
+        from app.capability.schemas import Capability
+
+        class Ep:
+            id = ep_id
+            enabled = True
+            caps_cache_json = None
+
+        return ResolvedRoute(
+            endpoint=Ep(), capability=Capability.text_chat, model=model,
+            default_params={"billing": billing} if billing else {},
+        )
+
+    def test_billing_defaults_to_unknown_not_free(self):
+        """路由表里同时躺着 deepseek / mistral / openrouter ——
+        猜一下就是在花别人的钱。宁可停下来报错。"""
+        assert self._route(None).billing == "unknown"
+        assert self._route("free").billing == "free"
+        assert self._route("paid").billing == "paid"
+
+    def test_only_free_routes_are_candidates(self):
+        import inspect
+
+        from app.capability import router
+
+        src = inspect.getsource(router.next_free_route)
+        assert 'route.billing != "free"' in src
+
+    def test_tried_routes_are_not_retried(self):
+        """换过去又撞额度时要继续往下，不能在两条之间来回弹。"""
+        import inspect
+
+        from app.capability import router
+
+        assert "route.key in tried" in inspect.getsource(router.next_free_route)
+
+    def test_route_key_separates_models_on_one_endpoint(self):
+        """同一个端点下换模型也算换路由 —— 百炼的额度是按模型算的。"""
+        a = self._route("free", model="qwen-image-3.0")
+        b = self._route("free", model="qwen-image-3.0-pro")
+        assert a.key != b.key
+
+    def test_failover_only_fires_on_quota(self):
+        """上游炸了该退避重试，不该换模型 —— 两种处置完全相反。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "CapErrorCode.QUOTA_EXCEEDED.value" in src
+
+    def test_pinned_route_is_never_swapped(self):
+        """调用方点名的路由不做自动轮换 —— 那多半是在做定向重试或比对。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "pinned" in src
+
+    def test_both_failure_shapes_are_covered(self):
+        """额度错误有两种到达方式：抛异常，或落进 result 变成 failed 任务。
+        只接一种等于漏掉一半。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "TaskStatus.failed" in src and "_failover(exc.code.value" in src

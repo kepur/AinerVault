@@ -26,6 +26,25 @@ class ResolvedRoute:
     tier: str = "*"
 
     @property
+    def billing(self) -> str:
+        """这条路由花不花钱：free / paid / unknown。
+
+        存在 default_params.billing 里，不新开一列 —— 它本来就是
+        「这条路由的配置」，而且免迁移，运维改一行 JSON 就能标。
+
+        **默认是 unknown，不是 free。** 额度耗尽自动换下一条时只认
+        明确标了 free 的：路由表里同时躺着 deepseek / mistral /
+        openrouter，猜一下就是在花别人的钱。宁可停下来报错。
+        """
+        raw = str(self.default_params.get("billing") or "").strip().lower()
+        return raw if raw in {"free", "paid"} else "unknown"
+
+    @property
+    def key(self) -> str:
+        """同一条路由的稳定标识，用来记「这条已经试过了」。"""
+        return f"{self.endpoint.id}:{self.model or ''}"
+
+    @property
     def catalog(self) -> CapabilityCatalog | None:
         raw = self.endpoint.caps_cache_json
         return CapabilityCatalog.model_validate(raw) if raw else None
@@ -135,3 +154,24 @@ def resolve_one(
             f"即可覆盖全部调用。",
         )
     return routes[0]
+
+
+def next_free_route(
+    db: Session, capability: Capability | str, purpose: str = "*",
+    tier: str | None = None, *, tried: "frozenset[str]" = frozenset(),
+) -> ResolvedRoute | None:
+    """还没试过的、**明确标了免费**的下一条路由。没有就返回 None。
+
+    用途只有一个：某个模型的免费额度用尽时接着往下跑。
+    百炼一个账号下几十个模型各有各的免费额度 —— 出图额度见底了，
+    换 qwen-image-3.0-pro 还能接着出；硬停在那里等人来改配置，
+    整章生产就断在半路。
+
+    只认 billing=free。路由表里同时配着付费端点，
+    自动掉过去就是在悄悄花钱 —— 那比停下来糟糕得多。
+    """
+    for route in resolve_routes(db, capability, purpose, tier):
+        if route.key in tried or route.billing != "free":
+            continue
+        return route
+    return None
