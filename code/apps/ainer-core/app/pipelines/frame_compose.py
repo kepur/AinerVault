@@ -145,7 +145,7 @@ def _asset_urls(db: Session, ids: Sequence[str]) -> list[str]:
 
 def _entity_look(
     db: Session, entity: WorldEntity, profile_id: str, chapter_order: int | None,
-    facing: str | None = None,
+    facing: str | None = None, shot_size: str | None = None,
 ) -> tuple[str, list[str]]:
     """人物外观。有时期数据时以时期为准，否则回落到基础视觉 + 成长状态。
 
@@ -184,7 +184,8 @@ def _entity_look(
         # 身份锚负责脸，三视角参考负责这一时期的身体/发型/衣着和准确朝向。
         # 两者不是二选一；只留锚会回到灰底头肩像，只留全身参考又会弱化脸。
         from app.pipelines.identity import character_reference_asset_id
-        view_ref = character_reference_asset_id(epoch, facing)
+        # 景别一起传：特写要头肩像，给它一张侧身全身参考等于没给参考
+        view_ref = character_reference_asset_id(epoch, facing, shot_size)
         if anchor and anchor not in refs:
             # 锚排最前：每个人物只取一张参考图，锚必须是那一张
             refs.insert(0, anchor)
@@ -516,6 +517,7 @@ def compose_frame_prompt(
         look, look_refs = _entity_look(
             db, entity, profile.id, chapter_order,
             _facing_for(db, shot.id, entity.id),
+            str(params.get("shot_size") or shot.shot_size or ""),
         )
         if look:
             positive.append(look)

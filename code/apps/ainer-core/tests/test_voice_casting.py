@@ -432,3 +432,44 @@ class TestUnorderableEpochsAreNotJudged:
                / "app" / "pipelines" / "casting.py").read_text("utf-8")
         body = src[src.index("def cast_epoch_voices"):]
         assert "orphaned" in body and "db.delete(row)" in body
+
+
+class TestNoVoiceNoAudio:
+    """没定音色的对白一律不出。
+
+    不拦的话请求不带 voice_id，方言回落到路由上配的默认模型
+    （sambert-zhide-v1）。后果不是「少一条」，是**串音**：
+    没配到音色的几个人共用同一把嗓子，而同一个人这一章用默认音、
+    下一章配上了又换一把 —— 听起来是角色换了人。
+    """
+
+    def test_generation_blocks_dialogue_without_voice_id(self):
+        import inspect
+
+        from app.pipelines import audio_compose
+
+        src = inspect.getsource(audio_compose.generate_audio)
+        assert 'AudioKind.dialogue' in src and 'voice_id' in src
+        # 报到人头上，不是只报一个计数
+        assert "_spec_speaker" in src
+
+    def test_only_dialogue_is_gated(self):
+        """环境音与 BGM 本来就没有音色，拦它们等于整条产线停摆。"""
+        import inspect
+
+        from app.pipelines import audio_compose
+
+        src = inspect.getsource(audio_compose.generate_audio)
+        gate = src[src.index("spec.kind == AudioKind.dialogue"):][:420]
+        assert "continue" in gate, "拦下来要跳过这一条，不是抛异常整批停"
+
+    def test_speaker_label_prefers_the_entity_name(self):
+        from app.models import AudioSpec
+        from app.pipelines.audio_compose import _spec_speaker
+
+        class FakeDb:
+            def get(self, _model, _id):
+                return None
+
+        spec = AudioSpec(entity_id=None, text="Hand over all your money")
+        assert _spec_speaker(FakeDb(), spec).startswith("Hand over")

@@ -373,6 +373,15 @@ class AudioGenResult:
         }
 
 
+def _spec_speaker(db: Session, spec: AudioSpec) -> str:
+    """这条对白是谁说的，用来把「没定音色」报到人头上。"""
+    if spec.entity_id:
+        ent = db.get(WorldEntity, spec.entity_id)
+        if ent is not None:
+            return ent.display_name
+    return (spec.text or "")[:20] or "未知说话人"
+
+
 def generate_audio(
     db: Session,
     plan: ShotPlan,
@@ -406,6 +415,22 @@ def generate_audio(
             result.skipped += 1
             continue
         if not (spec.text or "").strip():
+            continue
+        # **没定音色的对白一律不出。**
+        #
+        # 不拦的话请求就不带 voice_id，方言回落到路由上配的那个默认模型
+        # （现在是 sambert-zhide-v1）。后果不是「少一条」，是**串音**：
+        # 没配到音色的几个人共用同一把嗓子，而同一个人这一章用默认音、
+        # 下一章配上了又换一把 —— 观众听到的是角色换了人。
+        # 编译那一步已经把这些人报进 missing_voice 了，这里是花钱前的最后一道。
+        #
+        # 这与「对白不回落到旁白音色」是同一条纪律：宁可缺，不要错。
+        if spec.kind == AudioKind.dialogue and not (
+                spec.params_json or {}).get("voice_id"):
+            who = _spec_speaker(db, spec)
+            note = f"{who}：还没定音色，不出对白音频（会串成路由默认音）"
+            if note not in result.blocked:
+                result.blocked.append(note)
             continue
         pending.append(spec)
     if not pending:

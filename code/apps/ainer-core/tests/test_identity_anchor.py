@@ -135,3 +135,64 @@ def test_sex_noun_survives_when_the_age_phrase_lacks_it():
                {AGE_EN_KEY: "elderly, deeply lined"}),
         _Profile({"region": "RU", "era_span": [1855, 1917]}))
     assert "late 19th century Russian man" in p
+
+
+class TestBustReference:
+    """特写要头肩像。三张全身参考在特写里等于没有参考 ——
+    脸只占参考图的百分之几，模型只能自己把五官放大重画，
+    于是全片最该认得出人的那几个镜头恰恰最不像。"""
+
+    @pytest.mark.parametrize("size", ["cu", "ecu"])
+    def test_close_shots_take_the_bust(self, size):
+        from app.pipelines.identity import preferred_reference_view
+
+        assert preferred_reference_view("to_camera", size) == "bust"
+        assert preferred_reference_view("profile_right", size) == "bust"
+
+    @pytest.mark.parametrize("size", ["ms", "fs", "ws", "els", "", None])
+    def test_wider_shots_still_go_by_facing(self, size):
+        from app.pipelines.identity import preferred_reference_view
+
+        assert preferred_reference_view("to_camera", size) == "front"
+        assert preferred_reference_view("profile_right", size) == "profile_left"
+
+    def test_bust_falls_back_to_front_not_to_a_profile(self):
+        """没有头肩像时宁可用正面 —— 侧身全身那张连脸都不完整。"""
+        from app.models import AssetEpoch
+        from app.pipelines.identity import character_reference_asset_id
+
+        epoch = AssetEpoch(reference_set_json={"views": {
+            "front": {"asset_id": "a_front"},
+            "profile_left": {"asset_id": "a_profile"},
+        }})
+        assert character_reference_asset_id(epoch, "profile_left", "cu") == "a_front"
+
+    def test_bust_wins_when_present(self):
+        from app.models import AssetEpoch
+        from app.pipelines.identity import character_reference_asset_id
+
+        epoch = AssetEpoch(reference_set_json={"views": {
+            "front": {"asset_id": "a_front"},
+            "bust": {"asset_id": "a_bust"},
+        }})
+        assert character_reference_asset_id(epoch, "to_camera", "cu") == "a_bust"
+        assert character_reference_asset_id(epoch, "to_camera", "ms") == "a_front"
+
+    def test_bust_prompt_reframes_rather_than_crops(self):
+        """裁一刀出来的脸只有几十个像素，放大回去还是糊的。"""
+        from app.models import AssetEpoch
+        from app.pipelines.identity import compose_character_reference_prompt
+
+        got = compose_character_reference_prompt(AssetEpoch(), None, "bust")
+        assert "head-and-shoulders" in got
+        assert "filling the frame" in got
+        assert "skin texture" in got
+
+    def test_frame_compose_passes_the_shot_size_down(self):
+        """选参考图的函数拿得到景别，但没人传的话它永远走朝向那一支。"""
+        import inspect
+
+        from app.pipelines import frame_compose
+
+        src = inspect.getsource(frame_compose.compose_frame_prompt)
+        assert "shot_size" in src.split("_entity_look(")[1][:220]

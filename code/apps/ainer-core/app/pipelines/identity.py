@@ -98,21 +98,35 @@ ANCHOR_NEGATIVE = (
     "strong shadows, motion, action pose, text, watermark, multiple people"
 )
 
-#: 一套参考集只做三张，而不是九宫格拼贴。每张图单独生成、单独引用，
-#: 下游才能按镜头朝向选择；拼成一张图会让模型不知道该抄哪一个人。
+#: 参考集每张单独生成、单独引用，而不是九宫格拼贴 ——
+#: 拼成一张图，模型不知道该抄里面哪一个人。
+#:
+#: 视角分两个轴，缺哪个轴都会漏一类镜头：
+#:   **朝向**  正面／左前四分之三／左侧面。镜头人物朝哪边，就引哪一张。
+#:   **景别**  近景另有一张头肩像。三张全身参考在特写里等于没有 ——
+#:             脸只占参考图的百分之几，模型只能自己把五官放大重画，
+#:             于是全片最该认得出人的那几个镜头恰恰最不像。
+#:
+#: 顺序即优先级：额度有限时先出前三张，头肩像排在严格侧面之前 ——
+#: 特写比正侧面常见得多。
 CHARACTER_REFERENCE_VIEWS = (
-    "front", "three_quarter_left", "profile_left",
+    "front", "three_quarter_left", "bust", "profile_left",
 )
 REFERENCE_VIEW_CN = {
     "front": "正面全身",
     "three_quarter_left": "左前四分之三",
+    "bust": "头肩近景",
     "profile_left": "左侧面",
 }
 REFERENCE_REF_KINDS = {
     "front": "character_ref_front",
     "three_quarter_left": "character_ref_3q_left",
+    "bust": "character_ref_bust",
     "profile_left": "character_ref_profile_left",
 }
+
+#: 引用头肩像的景别。特写与大特写画的是脸，全身参考帮不上忙
+CLOSE_SHOT_SIZES = frozenset({"ecu", "cu"})
 REF_KIND_TO_VIEW = {v: k for k, v in REFERENCE_REF_KINDS.items()}
 CHARACTER_REFERENCE_NEGATIVE = (
     "different person, changed facial identity, changed body proportions, "
@@ -170,6 +184,19 @@ def compose_character_reference_prompt(
     """
     if view not in CHARACTER_REFERENCE_VIEWS:
         raise ValueError(f"unknown character reference view: {view}")
+    if view == "bust":
+        # 近景参考不是把全身图裁一刀，是**重新取景**：
+        # 裁出来的脸只有几十个像素，放大回去还是糊的。
+        return (
+            "Reframe the exact same character from the input reference as a "
+            "head-and-shoulders portrait, chest up, filling the frame. "
+            "Preserve the exact facial identity, apparent age, hairstyle, "
+            "hairline, facial hair, skin tone and the collar, neckline and "
+            "accessories of the same outfit. Neutral expression, head straight "
+            "to camera, eye-level 85mm portrait photography, even soft neutral "
+            "lighting, plain mid-grey seamless background, "
+            "sharp skin texture and pores, no retouching."
+        )
     if view != "front":
         angle = {
             "three_quarter_left": "a left three-quarter view (about 45 degrees)",
@@ -201,8 +228,15 @@ def compose_character_reference_prompt(
     )
 
 
-def preferred_reference_view(facing: str | None) -> str:
-    """镜头朝向 → 参考集里的具体一张。右侧面允许镜像使用左侧面。"""
+def preferred_reference_view(facing: str | None, shot_size: str | None = None) -> str:
+    """(朝向, 景别) → 参考集里的具体一张。右侧面允许镜像使用左侧面。
+
+    **景别先判。** 特写画的是脸，给它一张全身参考等于没给 ——
+    脸只占参考图的百分之几，模型只能自己把五官放大重画，
+    于是全片最该认得出人的那几个镜头恰恰最不像。
+    """
+    if str(shot_size or "") in CLOSE_SHOT_SIZES:
+        return "bust"
     return {
         "to_camera": "front",
         "three_quarter": "three_quarter_left",
@@ -212,10 +246,17 @@ def preferred_reference_view(facing: str | None) -> str:
     }.get(str(facing or ""), "three_quarter_left")
 
 
-def character_reference_asset_id(epoch: AssetEpoch, facing: str | None) -> str | None:
+def character_reference_asset_id(
+    epoch: AssetEpoch, facing: str | None, shot_size: str | None = None,
+) -> str | None:
     views = dict((epoch.reference_set_json or {}).get("views") or {})
-    preferred = preferred_reference_view(facing)
-    for key in (preferred, "three_quarter_left", "front", "profile_left"):
+    preferred = preferred_reference_view(facing, shot_size)
+    # 回落顺序也随景别走：近景没有头肩像时宁可用正面，
+    # 也不要一张侧身全身 —— 那张连脸都不完整
+    tail = (("front", "three_quarter_left", "profile_left")
+            if preferred == "bust"
+            else ("three_quarter_left", "front", "bust", "profile_left"))
+    for key in (preferred, *tail):
         item = views.get(key)
         if isinstance(item, dict) and item.get("asset_id"):
             return str(item["asset_id"])
