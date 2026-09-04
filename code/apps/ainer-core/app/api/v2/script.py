@@ -27,6 +27,12 @@ class GenerateIn(BaseModel):
     #: 给了映射就必须从该映射的已锁定译本生成目标世界剧本。
     #: 不给时仍允许源语言剧本，服务原语言制作。
     transform_id: str | None = None
+    #: 这一章已经有锁定译本时，仍然照原文出剧本。
+    #: 默认拦住 —— 静默照原文出的是一份源语言剧本，看起来完全正常
+    #: （有场次有对白有时长，每一步都成功），而整条影片线从那里起
+    #: 就走在原文世界里：出图提示词是中文、人名没过映射、名物没过词表，
+    #: 要到成片才看得出来。原语言制作是正当需求，但要明说。
+    allow_source: bool = False
 
 
 class SceneIn(BaseModel):
@@ -141,6 +147,7 @@ def generate_script(
             transform=transform,
             granularity=body.scene_granularity,
             keep_human_edits=body.keep_human_edits,
+            allow_source=body.allow_source,
         )
     except PipelineError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

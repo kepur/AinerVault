@@ -85,3 +85,48 @@ def test_film_audio_never_generates_narration():
     assert all(track[0] != "narration" for track in handoff.TRACKS)
     assert "AudioKind.dialogue, AudioKind.narration" not in inspect.getsource(
         delivery.build_manifest)
+
+
+class TestScreenplayProjectionGuard:
+    """有了锁定译本就不能再照原文出剧本。
+
+    不传 transform 时静默回落到 chapter.content，产出是一份中文剧本：
+    场景写着「J市第二中学教学楼一层走廊」，时间写「日」。它看起来完全
+    正常 —— 有场次、有对白、有时长，每一步都成功 —— 而整条影片线从这里
+    起就走在原文世界里：出图提示词是中文（图像模型不认），人名没过映射，
+    名物没过词表，要到成片才看得出来。
+
+    实跑撞到的正是这个：接口字段叫 transform_id，调用方传了 language=en-US，
+    多余字段被静默忽略，于是拿到一份中文剧本。
+    """
+
+    def test_guard_exists_and_names_the_transform(self):
+        import inspect
+
+        from app.pipelines import script_build
+
+        src = inspect.getsource(script_build._production_text)
+        assert "_active_transform_with_locked_prose" in src
+        assert "transform_id=" in src, "报错要给出该传哪个映射"
+
+    def test_only_locked_translations_block(self):
+        """建了映射还没开始翻的时候照原文出剧本是合理的 ——
+        那时根本没有译本可用。拦在那里只会变成一个挡路的误报。"""
+        import inspect
+
+        from app.pipelines import script_build
+
+        src = inspect.getsource(script_build._active_transform_with_locked_prose)
+        assert "TranslationBlock.locked.is_(True)" in src
+
+    def test_escape_hatch_is_real(self):
+        """报错里许诺的 allow_source 必须真的存在，否则那句话是空头支票。"""
+        import inspect
+
+        from app.api.v2.script import GenerateIn
+        from app.pipelines import script_build
+
+        assert "allow_source" in GenerateIn.model_fields
+        assert "allow_source" in inspect.signature(
+            script_build.build_script).parameters
+        assert "allow_source" in inspect.getsource(script_build._production_text)

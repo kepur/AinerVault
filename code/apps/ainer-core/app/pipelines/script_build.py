@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ids import new_id
@@ -112,8 +112,51 @@ def _active_doc(db: Session, chapter_id: str) -> ScriptDoc | None:
     ).scalars().first()
 
 
+def _active_transform_with_locked_prose(
+    db: Session, chapter: Chapter,
+) -> "WorldTransform | None":
+    """这一章有没有「已经锁定了译文」的 active 映射。
+
+    只认锁定过的：建了映射还没开始翻的时候，照原文出剧本是合理的 ——
+    那时根本没有译本可用。拦在这里才不会变成一个挡路的误报。
+    """
+    from app.models.world import TransformStatus
+
+    transforms = list(db.execute(
+        select(WorldTransform).where(
+            WorldTransform.novel_id == chapter.novel_id,
+            WorldTransform.status == TransformStatus.active,
+        )
+    ).scalars())
+    if not transforms:
+        return None
+    prose_doc = db.execute(
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
+        )
+    ).scalars().first()
+    if prose_doc is None:
+        return None
+    block_ids = select(ScriptBlock.id).where(
+        ScriptBlock.script_doc_id == prose_doc.id)
+    for tf in transforms:
+        locked = db.execute(
+            select(func.count()).select_from(TranslationBlock).where(
+                TranslationBlock.script_block_id.in_(block_ids),
+                TranslationBlock.transform_id == tf.id,
+                TranslationBlock.locked.is_(True),
+            )
+        ).scalar() or 0
+        if locked:
+            return tf
+    return None
+
+
 def _production_text(
     db: Session, chapter: Chapter, transform: WorldTransform | None,
+    *, allow_source: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Resolve the exact text that the screenplay adapter is allowed to read.
 
@@ -123,6 +166,27 @@ def _production_text(
     between the source and target cultures within one scene.
     """
     if transform is None:
+        # **这本书已经有译本了，就不该再照原文出剧本。**
+        #
+        # 不传 transform 时静默回落到 chapter.content，产出是一份中文剧本：
+        # 场景写着「J市第二中学教学楼一层走廊」，时间写「日」，情绪写
+        # 「压抑、暴力」。它看起来完全正常 —— 有场次、有对白、有时长，
+        # 每一步都成功 —— 而整条影片线从这里开始就走在原文世界里：
+        # 出图提示词是中文（图像模型不认），人名没过映射，
+        # 名物没过词表。要到成片才看得出来。
+        #
+        # 实跑撞到的正是这个：接口的字段叫 transform_id，调用方传了
+        # language=en-US，多余字段被静默忽略，于是拿到一份中文剧本。
+        blocker = (None if allow_source
+                   else _active_transform_with_locked_prose(db, chapter))
+        if blocker is not None:
+            raise PipelineError(
+                f"这一章已有锁定的译本（映射 {blocker.id}），"
+                f"不能照原文出剧本 —— 那会得到一份源语言剧本，"
+                f"而人名、名物、画风都还停在原文世界。"
+                f"请带上 transform_id={blocker.id} 重试；"
+                f"确实要出原文剧本请传 allow_source=true。"
+            )
         return (chapter.content or "").strip(), {
             "production_source": "original",
             "transform_id": None,
@@ -229,13 +293,15 @@ def build_script(
     granularity: str = "medium",
     keep_human_edits: bool = True,
     activate: bool = True,
+    allow_source: bool = False,
 ) -> ScriptDoc:
     """生成新版本 ScriptDoc。已有版本不被覆盖，便于比较与回滚。"""
     if not (chapter.content or "").strip():
         raise PipelineError("章节正文为空，无法生成剧本")
 
     novel_id = chapter.novel_id
-    production_text, production_meta = _production_text(db, chapter, transform)
+    production_text, production_meta = _production_text(
+        db, chapter, transform, allow_source=allow_source)
     if not production_text:
         raise PipelineError("用于剧本转换的文本为空")
     fp = fingerprint(production_text, granularity, transform.id if transform else "source")
