@@ -3536,6 +3536,25 @@ const Reader = {
 //: 「提示词台账」、首尾帧在「手动模式」、声音在「有声书」。
 //: 想确认「第 12 镜为什么画成这样」，得开五个页面各找一遍，
 //: 而且它们互相之间没有链接 —— 找得到的人只有写这套东西的人。
+//: 复制到剪贴板。**存在 data-copy 里而不是拼进 onclick** ——
+//: 提示词里带引号、换行、中文括号，拼进 onclick 会把整段 HTML 打断，
+//: 而打断之后那一行按钮就是不响应，控制台也不报错。
+async function copyText(btn) {
+  const text = decodeURIComponent(btn.dataset.copy || "");
+  const old = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "已复制 ✓";
+  } catch {
+    // 非 https 下 clipboard API 不可用，退回选中文本让人手动复制
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+    btn.textContent = "已复制 ✓";
+  }
+  setTimeout(() => { btn.textContent = old; }, 1200);
+}
+
 const Storyboard = {
   open: {},          // 展开了提示词的镜号
   page: 0,
@@ -3645,23 +3664,53 @@ const Storyboard = {
   },
 
   prompts(s) {
-    const box = (title, text) => text
-      ? `<div style="margin-top:8px">
-           <div class="sub" style="color:var(--muted)">${title}</div>
-           <div class="log" style="white-space:pre-wrap;max-height:200px">${h(text)}</div>
+    const box = (title, text, tag) => text
+      ? `<div style="margin-top:10px">
+           <div class="row" style="align-items:center;gap:6px">
+             <span class="tag ${tag === "EN" ? "t-ok" : "t-mute"}">${tag}</span>
+             <b style="font-size:13px">${title}</b>
+             <span class="grow"></span>
+             <button class="btn sm" onclick="copyText(this)"
+               data-copy="${encodeURIComponent(text)}">复制</button>
+           </div>
+           <div class="log" style="white-space:pre-wrap;max-height:220px;margin-top:4px"
+             >${h(text)}</div>
          </div>` : "";
+
+    const m = s.motion || {};
+    const f = s.first || {}, l = s.last || {};
+    // 中英并列：英文那份是**发给模型的**，中文那份是给人审的。
+    // 只显示一种的后果实测过 —— 人对着中文改了半天，
+    // 而模型收到的一直是另一份英文
+    const all = [
+      ["EN", "首帧 · 正向（发给出图模型）", f.prompt],
+      ["EN", "首帧 · 负向", f.negative_prompt],
+      ["EN", "尾帧 · 相对首帧改什么", l.derive_instruction || l.prompt],
+      ["EN", "物理运动（发给视频模型）", m.prompt_en],
+      ["中", "镜头内容", s.description],
+      ["中", "相机怎么动", m.camera_move],
+      ["中", "主体怎么动", m.subject_move],
+    ].filter(x => x[2]);
+
+    const full = all.map(([tag, t, v]) => `【${t}】\n${v}`).join("\n\n");
     return `<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:4px">
-      ${box("首帧 · 正向", s.first && s.first.prompt)}
-      ${box("首帧 · 负向", s.first && s.first.negative_prompt)}
-      ${box("尾帧 · 相对首帧改什么", s.last && (s.last.derive_instruction || s.last.prompt))}
-      ${box("物理运动（送视频模型）", s.motion && s.motion.prompt_en)}
-      ${s.motion && s.motion.deltas.length ? `<div style="margin-top:8px">
-        <div class="sub" style="color:var(--muted)">首尾可见差异</div>
-        ${s.motion.deltas.map(x => `<div style="font-size:13px">· ${h(x)}</div>`).join("")}
+      <div class="row" style="margin-top:6px">
+        <button class="btn sm pri" onclick="copyText(this)"
+          data-copy="${encodeURIComponent(full)}">📋 复制这一镜全部提示词</button>
+      </div>
+      ${all.map(([tag, t, v]) => box(t, v, tag)).join("")}
+      ${m.deltas && m.deltas.length ? `<div style="margin-top:10px">
+        <div class="row" style="align-items:center;gap:6px">
+          <span class="tag t-ok">EN</span><b style="font-size:13px">首尾可见差异</b>
+          <span class="grow"></span>
+          <button class="btn sm" onclick="copyText(this)"
+            data-copy="${encodeURIComponent(m.deltas.join("\n"))}">复制</button>
+        </div>
+        ${m.deltas.map(x => `<div style="font-size:13px">· ${h(x)}</div>`).join("")}
       </div>` : ""}
-      ${s.first && s.first.asset_keys.length ? `<div style="margin-top:8px">
+      ${f.asset_keys && f.asset_keys.length ? `<div style="margin-top:10px">
         <div class="sub" style="color:var(--muted)">引用素材</div>
-        <div>${s.first.asset_keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}</div>
+        <div>${f.asset_keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}</div>
       </div>` : ""}
     </div>`;
   },
