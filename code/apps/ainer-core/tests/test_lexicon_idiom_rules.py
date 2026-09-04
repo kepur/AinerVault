@@ -109,3 +109,51 @@ class TestIdioms:
         brief = ir.brief_for_prompt([("破釜沉舟", "idiom")])
         assert "破釜沉舟" in brief
         assert "idiom" in brief and "high" in brief
+
+
+class TestForbiddenFeedback:
+    """重译反馈要说清「原文哪个词、为什么」。
+
+    实跑：「草你妈的」定了译法 Fuck you 并禁用 Mom，模型仍写出
+    "Fuck you, Mom"。反馈只说「不得使用 Mom，应改为 Fuck you」，
+    模型无从下手 —— 它不知道这条针对的是哪个词，也不知道那是句
+    骂人的固定说法而不是在叫妈，于是改出 "Shit, Mom"，Mom 还在。
+    """
+
+    def _hit(self, forbidden, rationale):
+        from app.worldview.preflight import LexHit
+
+        class Row:
+            source_term = "草你妈的"
+            target_term = "Fuck you"
+            target_reading = None
+            forbidden_targets = list(forbidden)
+
+        Row.rationale = rationale
+        return LexHit(row=Row(), surfaces=["草你妈的"], count=1)
+
+    def test_fix_names_the_source_term_and_reason(self):
+        from app.worldview.validator import check_translation
+
+        vs = check_translation(
+            translated_text='"Fuck you, Mom, hurry up!"',
+            hits=[self._hit(["Mom"], "骂人的固定说法，与「妈」这个称呼无关")],
+            profile_forbidden=[], locked_names={},
+            source_text="“草你妈的，快点！”", block_id="b1",
+        )
+        forbidden = [v for v in vs if v.kind == "forbidden_token"]
+        assert forbidden, "禁用词必须报出来"
+        fix = forbidden[0].suggested_fix
+        assert "草你妈的" in fix, "要说清是原文哪个词"
+        assert "骂人的固定说法" in fix, "词条写了理由就要带上"
+
+    def test_retry_feedback_carries_the_fix(self):
+        from app.worldview.validator import build_retry_feedback, check_translation
+
+        vs = check_translation(
+            translated_text='"Fuck you, Mom!"',
+            hits=[self._hit(["Mom"], "骂人的固定说法")],
+            profile_forbidden=[], locked_names={},
+            source_text="“草你妈的！”", block_id="b1",
+        )
+        assert "草你妈的" in build_retry_feedback(vs)

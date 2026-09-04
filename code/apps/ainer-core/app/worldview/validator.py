@@ -57,10 +57,20 @@ def check_translation(
                 continue
             checked.add(token)
             if contains_token(translated_text, token):
+                # 说清是**原文哪个词**不该这么译，并把词条的理由带上。
+                # 只说「Mom 不属于该世界观」时模型无从下手 ——
+                # 它不知道这条针对的是「草你妈的」，也不知道那是句骂人的
+                # 固定说法而不是在叫妈。实跑里它照着改了一版
+                # 「Fuck you, Mom」→「Shit, Mom」，两版都留着 Mom。
+                why = (getattr(r.row, "rationale", None) or "").strip()
                 out.append(Violation(
                     kind="forbidden_token", severity="high", detected=token,
                     expected=r.target_term,
-                    suggested_fix=f"「{token}」不属于该世界观，应使用「{r.target_term}」",
+                    suggested_fix=(
+                        f"原文的「{r.source_term}」不能译出「{token}」，"
+                        f"应整体译作「{r.target_term}」"
+                        + (f"（{why}）" if why else "")
+                    ),
                     evidence={"block_id": block_id, "source_term": r.source_term},
                 ))
     # profile 级禁用词。若该词恰好是某条词条的源词，顺带给出正确译法 ——
@@ -124,7 +134,11 @@ def build_retry_feedback(violations: Sequence[Violation]) -> str:
     lines = ["上一版译文存在以下问题，请修正后重新输出（其余内容尽量保持不变）："]
     for v in violations:
         if v.kind == "forbidden_token":
-            lines.append(f"  · 不得使用「{v.detected}」，应改为「{v.expected}」")
+            # suggested_fix 里带着原文哪个词、为什么 —— 比「不得使用 Mom」
+            # 有用得多，模型照后者改只会换一个词继续留着 Mom
+            fix = v.suggested_fix or (
+                f"不得使用「{v.detected}」，应改为「{v.expected}」")
+            lines.append(f"  · {fix}")
         elif v.kind == "lexicon_miss":
             lines.append(f"  · 原文的「{v.detected}」必须译为「{v.expected}」")
         elif v.kind == "name_drift":
