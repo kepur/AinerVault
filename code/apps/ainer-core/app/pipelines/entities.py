@@ -442,10 +442,21 @@ def extract_entities(
             continue
 
         key = _canonical_key(name, kind.value)
-        aliases = [
-            str(a).strip() for a in (item.get("aliases") or [])
-            if str(a).strip() and str(a).strip() != name
-        ]
+        # 别名里的通称当场就丢掉，不要存进库再靠下游躲。
+        # 存了就会有别的地方读到它 —— 说话人切分、称呼表、检索，
+        # 每一处都得各自记得「这条别名不算数」，漏一处就是一个 bug。
+        aliases, generic_aliases = [], []
+        for raw in (item.get("aliases") or []):
+            alias = str(raw).strip()
+            if not alias or alias == name:
+                continue
+            (generic_aliases if _is_common_address(alias) else aliases).append(alias)
+        if generic_aliases:
+            result.rule_corrections.append({
+                "name": name, "model_said": f"别名 {'、'.join(generic_aliases)}",
+                "rule_says": "通称，不作别名",
+                "why": "指的是一类人。作别名会让全文每一个这词都换成这个角色的名字",
+            })
 
         family_key = None
         if kind == EntityKind.character:
@@ -722,7 +733,19 @@ def placeholder_map(
 
     返回 (替换表, 还原表, 缺译名的实体名)。
     """
-    from app.models import EntityAppellation, EntityWorldName, Register
+    from app.models import EntityAppellation, EntityWorldName, Register, WorldLexicon
+
+    # 名物词表里已有的字面不做占位符：那个词已经**有译法了**，
+    # 而且是通用译法（同桌 → seatmate）。同时当某个角色的别名时，
+    # 占位符这一闸跑在前面，于是全书每一个「同桌」都会变成她的名字，
+    # 别人的同桌也是她。判据用词表而不是新加字段 ——
+    # 词表里有的就是名物，这与命名管线 role_term_hit 用的是同一条判据。
+    lex_terms = {
+        t for row in db.execute(
+            select(WorldLexicon).where(WorldLexicon.transform_id == transform_id)
+        ).scalars()
+        for t in [row.source_term, *(row.source_aliases or [])] if t
+    }
 
     kind_prefix = {
         EntityKind.character: "CHAR", EntityKind.location: "LOC",
@@ -794,6 +817,14 @@ def placeholder_map(
             # 代词本来就不需要跨文化映射，交给翻译本身处理。
             if ap.register is Register.pronoun_like and _is_bare_pronoun(surface):
                 continue
+            # 通称同理。「小子」「老师」「同桌」是称呼，但落不到唯一的人身上，
+            # 也不需要占位符保护 —— 占位符是为了防**人名**被音译，
+            # 而通称本来就该意译。锁成固定短语反而出语法事故：
+            # 「小子」定形成 "that whelp"，「这小子是学习尖子」就成了
+            # "This that whelp is a straight-A student"。
+            # 交给翻译本身处理，它看得见上下文，知道该用 kid 还是 punk。
+            if _is_common_address(surface) or surface in lex_terms:
+                continue
             claimed.add(surface)
             if not ap.target_surface:
                 continue  # 未定形，留给下面按本名兜底
@@ -805,8 +836,21 @@ def placeholder_map(
 
         for surface in [e.display_name, *(e.aliases_json or [])]:
             surface = as_text(surface)
-            if surface and surface not in claimed:
-                source_to_ph.append((surface, ph))
+            if not surface or surface in claimed:
+                continue
+            # **通称不做占位符。** 理由同代词：占位符把它锁成一个固定形式，
+            # 而「学生」在一间教室里有五十个。别名里混进一个通称，
+            # 全文每一个「学生」都会变成主角的名字 ——
+            # 坏蛋第一章实跑到过：原文第七句才借旁人之口交代主角叫什么，
+            # 而第二句的「一个身材瘦弱的学生」已经直接点了名。
+            #
+            # 只挡别名，不挡 display_name：一个实体如果就叫「高个少年」，
+            # 那它的本名必须照常替换，否则译文里根本没有这个人。
+            if surface != e.display_name and (
+                _is_common_address(surface) or surface in lex_terms
+            ):
+                continue
+            source_to_ph.append((surface, ph))
 
     source_to_ph.sort(key=lambda kv: len(kv[0]), reverse=True)
     return source_to_ph, ph_to_target, missing
@@ -823,6 +867,13 @@ _BARE_PRONOUNS = frozenset(
 
 def _is_bare_pronoun(surface: str) -> bool:
     return surface.strip() in _BARE_PRONOUNS
+
+
+def _is_common_address(surface: str) -> bool:
+    """这个字面是不是通称（学生／老师／小子）。判据与建实体时同一套规则。"""
+    verdict = ar.classify(surface.strip(), EntityKind.character)
+    return verdict is not None and verdict.decisive \
+        and verdict.name_type is NameType.generic
 
 
 def _mutation_variants(prefix: str, target_name: str) -> list[str]:

@@ -144,3 +144,74 @@ class TestBarePronounsAreNotPlaceholders:
         body = src[src.index("def placeholder_map"):]
         assert "Register.pronoun_like" in body
         assert "_is_bare_pronoun(surface)" in body
+
+
+class TestCommonAddress:
+    """通称落不到具体某个人身上，不能当别名，更不能当占位符。
+
+    坏蛋第一章的实跑后果：「学生」是主角的别名，于是占位符那一闸
+    把全文每一个「学生」都换成了主角的译名 ——
+    原文到第七句才借旁人之口交代他叫什么，第二句就已经点了名。
+    「小子」被锁成 "that whelp"，「这小子是学习尖子」译成
+    "This that whelp is a straight-A student"，前面的「这」没了着落。
+    """
+
+    @pytest.mark.parametrize("word", [
+        "学生", "同学", "老师", "女生", "男生", "小子", "家伙",
+        "少年", "孩子", "男人", "女人", "众人", "年轻人",
+    ])
+    def test_common_nouns_are_decisively_generic(self, word):
+        from app.models import EntityKind, NameType
+        from app.worldview.appellation_rules import classify
+
+        v = classify(word, EntityKind.character)
+        assert v is not None and v.decisive
+        assert v.name_type is NameType.generic
+
+    @pytest.mark.parametrize("word", [
+        # 绰号在一场戏里指认得出唯一那个人 —— 那是 epithet，不是通称
+        "胖子", "高个", "矮胖少年",
+        # 职务走名物词表，一家客栈只有一个掌柜
+        "掌柜", "师父", "总镖头",
+        # 真名当然不能被误伤
+        "谢文东", "老周", "柳三娘",
+    ])
+    def test_specific_appellations_are_not_swept_up(self, word):
+        from app.models import EntityKind, NameType
+        from app.worldview.appellation_rules import classify
+
+        v = classify(word, EntityKind.character)
+        assert v is None or v.name_type is not NameType.generic
+
+    def test_placeholder_gate_skips_generic_aliases(self):
+        """存量数据里已经有通称别名，光靠抽取时过滤救不回来。"""
+        import inspect
+
+        from app.pipelines import entities
+
+        src = inspect.getsource(entities.placeholder_map)
+        assert "_is_common_address" in src
+
+    def test_display_name_is_never_skipped(self):
+        """实体本名就叫「少年」时仍要替换 —— 否则译文里没有这个人。"""
+        from app.pipelines.entities import _is_common_address
+
+        assert _is_common_address("少年") is True  # 字面确实是通称
+        src = __import__("inspect").getsource(
+            __import__("app.pipelines.entities", fromlist=["x"]).placeholder_map)
+        assert "surface != e.display_name" in src
+
+    def test_lexicon_terms_do_not_become_placeholders(self):
+        """名物词表里的词已经有译法了，不该再被某个角色的别名抢走。
+
+        坏蛋里「同桌」既是徐娜的别名，又在名物词表里定成 seatmate。
+        占位符这一闸跑在词表前面，于是全书每一个「同桌」都会变成徐娜 ——
+        连别人的同桌也是她。
+        """
+        import inspect
+
+        from app.pipelines import entities
+
+        src = inspect.getsource(entities.placeholder_map)
+        assert "lex_terms" in src
+        assert "WorldLexicon" in src
