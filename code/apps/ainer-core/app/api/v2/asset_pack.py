@@ -750,6 +750,48 @@ def generate_character_references(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/novels/{novel_id}/character-references:sheet")
+def compose_character_sheets(
+    novel_id: str, profile_id: str = Query(...),
+    body: CharacterReferenceIn | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """把每个人已有的几张视角图拼成**一张**三要素设定图。
+
+    本地拼，一次模型调用都不花 —— 图都已经在库里了。
+    让模型「再画一张包含四个角度的图」不但要花额度，
+    画出来的还是四个新的人：它不会去抄，它会去创作。
+    """
+    from app.models import EntityKind, WorldEntity
+    from app.pipelines import identity
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    body = body or CharacterReferenceIn()
+    q = select(WorldEntity).where(
+        WorldEntity.novel_id == novel_id,
+        WorldEntity.kind == EntityKind.character,
+    )
+    if body.entity_ids:
+        q = q.where(WorldEntity.id.in_(body.entity_ids))
+
+    made, empty = [], []
+    for ent in db.execute(q).scalars():
+        for epoch in identity.epochs_of(db, ent.id, profile.id):
+            aid = identity.compose_reference_sheet(db, epoch)
+            row = {"entity": ent.display_name, "epoch": epoch.epoch_key}
+            if aid:
+                views = (epoch.reference_set_json or {}).get(
+                    "views", {}).get(identity.SHEET_VIEW, {})
+                made.append({**row, "asset_id": aid,
+                             "views": views.get("views") or []})
+            else:
+                empty.append({**row, "why": "这一期一张视角图都还没有"})
+    db.flush()
+    return {"composed": len(made), "items": made, "skipped": empty}
+
+
 @router.get("/novels/{novel_id}/character-references")
 def get_character_references(
     novel_id: str, profile_id: str = Query(...),

@@ -51,11 +51,46 @@ class TestEraPhrase:
         {"region": "RU", "era_span": [1855, 1917]},
         {"region": "US", "era_span": [1990, 2030]},
     ])
-    def test_the_demonym_never_describes_the_person(self, axes):
-        """不能出现 "American man"／"Russian woman" 这种写法。"""
+    def test_era_phrase_is_the_setting_not_the_person(self, axes):
+        """这一句只说故事发生在哪。人长什么样由 demonym() 单独给 ——
+        两件事合成一句写过 "early 21st century American man"，
+        结果地域被当成人种、年代被当成形容词，两头都不准。"""
         got = era_phrase(_Profile(axes))
         assert " man" not in got and " woman" not in got
         assert "set in" in got
+
+
+class TestDemonym:
+    """人物外貌属于目标世界观 —— 和货币场所一样要映射。
+
+    不写的话模型照着原文的中文外貌描述画，坏蛋出来是一屋子中国脸，
+    而故事发生在美国、名字叫 Thomas。
+    """
+
+    @pytest.mark.parametrize("region,expect", [
+        ("US", "American"), ("RU", "Russian"), ("JP", "Japanese"),
+    ])
+    def test_reads_the_region(self, region, expect):
+        from app.pipelines.identity import demonym
+
+        assert demonym(_Profile({"region": region})) == expect
+
+    def test_unknown_region_gives_nothing(self):
+        """猜错族裔比不写更糟 —— 不写模型按其余线索推。"""
+        from app.pipelines.identity import demonym
+
+        assert demonym(_Profile({"region": "ZZ"})) == ""
+
+    @pytest.mark.parametrize("text,region,hit", [
+        ("East Asian male, monolid eyes", "US", True),
+        ("East Asian male, monolid eyes", "JP", False),   # 译到日本就是对的
+        ("square face, thick brows", "US", False),
+    ])
+    def test_unmapped_appearance_is_reported(self, text, region, hit):
+        from app.pipelines.identity import foreign_appearance_terms
+
+        got = foreign_appearance_terms(text, _Profile({"region": region}))
+        assert bool(got) is hit
 
     def test_missing_pieces_degrade_gracefully(self):
         assert era_phrase(_Profile({"region": "RU"})) == "set in a Russian city"
@@ -77,11 +112,10 @@ class TestAnchorPrompt:
             _Epoch({"sex": "male", "_en": "square face, thick brows"}),
             _Profile({"region": "RU", "era_span": [1855, 1917]}),
         )
-        assert p.startswith("man, ")
+        assert p.startswith("Russian man, ")
         assert "square face, thick brows" in p
-        # 年代地域排在人之后，且不描述这个人是哪国人
+        # 年代地域另起一段说「故事发生在哪」，不与族裔挤在一起
         assert "set in a Russian city, late 19th century" in p
-        assert "Russian man" not in p
         assert p.endswith(ANCHOR_FRAMING)
 
     def test_no_english_means_no_prompt(self):
@@ -137,7 +171,7 @@ class TestAgeFallback:
             _Epoch({"sex": "male", "_en": "square face"},
                    {AGE_EN_KEY: "early sixties"}),
             _Profile({"region": "RU", "era_span": [1855, 1917]}))
-        assert p.startswith("early sixties, man, square face")
+        assert p.startswith("early sixties, Russian man, square face")
         assert "set in a Russian city" in p
 
 
@@ -149,7 +183,8 @@ def test_sex_noun_is_dropped_when_the_age_phrase_already_has_it():
         _Epoch({"sex": "male", "_en": "square face"},
                {AGE_EN_KEY: "man in his late fifties"}),
         _Profile({"region": "RU", "era_span": [1855, 1917]}))
-    assert p.startswith("man in his late fifties, square face, ")
+    # 年龄短语自带 man，就不再补一个 —— 但族裔仍要写
+    assert p.startswith("man in his late fifties, Russian, square face, ")
     assert "Russian man" not in p
     assert "set in a Russian city" in p
 
@@ -160,8 +195,7 @@ def test_sex_noun_survives_when_the_age_phrase_lacks_it():
         _Epoch({"sex": "male", "_en": "square face"},
                {AGE_EN_KEY: "elderly, deeply lined"}),
         _Profile({"region": "RU", "era_span": [1855, 1917]}))
-    assert p.startswith("elderly, deeply lined, man, ")
-    assert "Russian man" not in p
+    assert p.startswith("elderly, deeply lined, Russian man, ")
 
 
 class TestBustReference:
@@ -341,3 +375,66 @@ class TestRefKindsAreDerivedNotCopied:
         for view in CHARACTER_REFERENCE_VIEWS:
             assert view in REFERENCE_REF_KINDS
             assert view in REFERENCE_VIEW_CN
+
+
+class TestReferenceSheet:
+    """四张视角分开存，分镜只会选中其中一张。
+
+    一个人物只占一个参考位 —— 正面那张里的服饰、侧脸那张里的轮廓，
+    到了实际出图时都不在场，于是同一个人在镜与镜之间漂：
+    这一镜外套长一点，下一镜下巴尖一点，每张单看都合理。
+    拼成一张，模型在同一个参考位上就能同时看到这几样。
+    """
+
+    def test_sheet_is_not_a_generated_view(self):
+        """拼图是本地拼的，不能混进「要向模型要几张图」那张表。"""
+        from app.pipelines.identity import CHARACTER_REFERENCE_VIEWS, SHEET_VIEW
+
+        assert SHEET_VIEW not in CHARACTER_REFERENCE_VIEWS
+
+    def test_sheet_wins_for_normal_shots(self):
+        from app.models import AssetEpoch
+        from app.pipelines.identity import SHEET_VIEW, character_reference_asset_id
+
+        epoch = AssetEpoch(reference_set_json={"views": {
+            "front": {"asset_id": "a_front"},
+            SHEET_VIEW: {"asset_id": "a_sheet"},
+        }})
+        assert character_reference_asset_id(epoch, "to_camera", "ms") == "a_sheet"
+        assert character_reference_asset_id(epoch, "to_camera", "ws") == "a_sheet"
+
+    def test_close_shots_still_take_the_bust(self):
+        """特写要的是脸的分辨率，拼图上的脸反而更小。"""
+        from app.models import AssetEpoch
+        from app.pipelines.identity import SHEET_VIEW, character_reference_asset_id
+
+        epoch = AssetEpoch(reference_set_json={"views": {
+            "bust": {"asset_id": "a_bust"},
+            SHEET_VIEW: {"asset_id": "a_sheet"},
+        }})
+        assert character_reference_asset_id(epoch, "to_camera", "cu") == "a_bust"
+
+    def test_sheet_falls_back_when_absent(self):
+        from app.models import AssetEpoch
+        from app.pipelines.identity import character_reference_asset_id
+
+        epoch = AssetEpoch(reference_set_json={"views": {
+            "front": {"asset_id": "a_front"}}})
+        assert character_reference_asset_id(epoch, "to_camera", "ms") == "a_front"
+
+    def test_labels_are_english(self):
+        """这张图会作为参考图送给出图模型 —— 中文标注在它眼里是汉字纹样。"""
+        from app.pipelines.identity import SHEET_LABELS
+
+        for text in SHEET_LABELS.values():
+            assert text.isascii()
+
+    def test_frames_block_the_sheet_layout(self):
+        """不挡的话模型会连版式一起抄，出来一张分格设定图而不是一个镜头。"""
+        import inspect
+
+        from app.pipelines import frame_compose
+
+        src = inspect.getsource(frame_compose.compose_frame_prompt)
+        for term in ("character sheet", "split screen", "collage"):
+            assert term in src

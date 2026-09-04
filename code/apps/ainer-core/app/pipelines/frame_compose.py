@@ -608,6 +608,10 @@ def compose_frame_prompt(
     # 塑料感不是风格问题，是默认交付物：不挡就是塑料三维渲染 + AI 磨皮 +
     # 均匀无方向光。挡掉它们，再给一个成片质感锚。
     negative.extend(cine.PLASTIC_NEGATIVES)
+    # 人物参考图是一张三要素设定图（正面/侧面/面部拼在一起）。
+    # 不挡的话模型会连同**版式**一起抄，出来一张分格设定图而不是一个镜头。
+    negative.extend(["character sheet", "turnaround sheet", "contact sheet",
+                     "multi-panel", "split screen", "collage", "grid layout"])
     positive.append(cine.GRADE_ANCHOR)
 
     # **中文一个字都不能进图像提示词。** 图像模型不认中文 ——

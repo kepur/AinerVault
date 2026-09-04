@@ -32,12 +32,15 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.capability.schemas import Capability
+from app.ids import new_id
 from app.capability.service import estimate_cost, submit_task
 from app.models import (
     INVARIANT_FIELDS, Asset, AssetEpoch, EntityKind, GenTask, TaskStatus,
@@ -69,6 +72,44 @@ def _ordinal(n: int) -> str:
     if 11 <= n % 100 <= 13:
         return f"{n}th"
     return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+#: 源文化的族裔词。**本地化时它们出现在不变项里，就是这一步没做映射。**
+#:
+#: 人物外貌和名物、货币、场所一样属于目标世界观：五元钱要变成
+#: five-dollar bill，人也要变成目标世界的人。抽取时读的是中文原文，
+#: 模型很自然地写出 East Asian、monolid eyes —— 提示词里其实写了
+#: 「族裔按目标圈层写」，但只是请求，没有任何一处检查。
+#: 坏蛋实跑：整本七个人的脸都是中国脸，而故事发生在美国，名字叫 Thomas。
+_SOURCE_ETHNICITY = (
+    "east asian", "asian", "chinese", "japanese", "korean",
+    "monolid", "oriental", "han chinese",
+)
+
+
+def foreign_appearance_terms(text: str, profile: WorldProfile) -> list[str]:
+    """不变项里还留着的、与目标圈层不符的族裔词。
+
+    只在目标圈层**不是**东亚时才报 —— 译到日本或中国的作品里
+    写 East Asian 完全正确，那不是漏做映射。
+    """
+    region = str((profile.axes_json or {}).get("region") or "").upper()
+    if region in {"CN", "JP", "KR", "TW", "HK", "SG", "VN"}:
+        return []
+    low = (text or "").lower()
+    return [t for t in _SOURCE_ETHNICITY if t in low]
+
+
+def demonym(profile: WorldProfile) -> str:
+    """目标圈层的人**长什么样**，一个词。
+
+    与 era_phrase 分开：那一句说「故事发生在哪」，这一个说「这里的人
+    是哪儿的人」。合成一句写过 "early 21st century American man"，
+    结果地域被当成人种、年代被当成形容词，两头都不准；
+    但完全不写也不行 —— 本地化作品的人物就该是目标世界的人，
+    不写的话模型照着原文的中文描述画，出来一屋子中国脸配着 Thomas 这种名字。
+    """
+    return _DEMONYM.get(str((profile.axes_json or {}).get("region") or "").upper(), "")
 
 
 def era_phrase(profile: WorldProfile) -> str:
@@ -237,7 +278,8 @@ def compose_character_reference_prompt(
     wardrobe = str(var.get(EN_KEY) or "").strip()
     age = str(var.get(AGE_EN_KEY) or "").strip()
     era = era_phrase(profile) if profile is not None else ""
-    specifics = ", ".join(dict.fromkeys(x for x in (age, era, wardrobe) if x))
+    who = demonym(profile) if profile is not None else ""
+    specifics = ", ".join(dict.fromkeys(x for x in (age, who, era, wardrobe) if x))
     if not specifics:
         return ""
     return (
@@ -278,7 +320,13 @@ def character_reference_asset_id(
     tail = (("front", "three_quarter_left", "profile_left")
             if preferred == "bust"
             else ("three_quarter_left", "front", "bust", "profile_left"))
-    for key in (preferred, *tail):
+    # 非特写优先用三要素合成图：一个人物只占一个参考位，
+    # 四张分开存就只有一张会被选中，另外三张的约束到出图时都不在场，
+    # 于是同一个人在镜与镜之间漂 —— 这一镜外套长一点，下一镜下巴尖一点。
+    # 特写仍走头肩像：那时要的是脸的分辨率，拼图上的脸反而更小。
+    order = (preferred, *tail) if preferred == "bust" else (
+        SHEET_VIEW, preferred, *tail)
+    for key in order:
         item = views.get(key)
         if isinstance(item, dict) and item.get("asset_id"):
             return str(item["asset_id"])
@@ -372,7 +420,12 @@ def compose_anchor_prompt(epoch: AssetEpoch,
     # 贴在性别词前面就成了「late 19th century Russian man」，
     # 模型把地域读成人种，于是不变项里写着 monolid eyes 的少年
     # 出成了一个白人。人先说完，再说他站在什么年代的什么城市。
-    parts = [p for p in (age, noun, en, era) if p]
+    # 族裔贴在性别词上：American man / American woman。
+    # 这是**本地化的一部分**，跟货币场所一样 —— 不写的话模型照着
+    # 原文的中文外貌描述画，出来一屋子中国脸配着 Thomas 这种名字。
+    who = demonym(profile) if profile is not None else ""
+    person = " ".join(x for x in (who, noun) if x)
+    parts = [p for p in (age, person, en, era) if p]
     return ", ".join(parts) + ", " + ANCHOR_FRAMING
 
 
@@ -795,6 +848,128 @@ def generate_character_references(
     return result
 
 
+
+#: 三要素合成图在参考集里的键。**不在 CHARACTER_REFERENCE_VIEWS 里** ——
+#: 那张表驱动「要向模型要几张图」，而这一张是本地拼的，一次调用都不花。
+SHEET_VIEW = "sheet"
+
+#: 拼图上每一格的标注。写英文 —— 这张图会作为参考图送给出图模型，
+#: 中文标注在它眼里是汉字纹样
+SHEET_LABELS = {
+    "front": "FRONT / OUTFIT",
+    "three_quarter_left": "3/4 LEFT",
+    "profile_left": "PROFILE",
+    "bust": "FACE",
+}
+#: 拼图顺序。正面在最左 —— 它带着全身与服饰，是这一期的权威
+SHEET_ORDER = ("front", "three_quarter_left", "profile_left", "bust")
+_SHEET_H = 1152          # 每格统一高度
+_SHEET_PAD = 16
+_SHEET_BG = (200, 200, 202)   # 与各视角的中灰底一致，拼缝不显眼
+
+
+def compose_reference_sheet(db: Session, epoch: AssetEpoch) -> str | None:
+    """把已有的几张视角图拼成**一张**人物设定图，返回新 asset 的 id。
+
+    ## 为什么要有这一张
+
+    分镜取参考图时，一个人物只占一个参考位 —— 四张分开存，就只有一张
+    会被选中，模型看不到另外三张。正面那张里的服饰、侧脸那张里的轮廓，
+    到了实际出图时都不在场，于是同一个人在不同镜头之间**漂**：
+    这一镜的外套长一点，下一镜的下巴尖一点，每一张单看都合理。
+
+    拼成一张之后，模型在同一个参考位上同时看到正面、服饰、侧脸与面部特写，
+    约束是完整的。这也是设定集本来的样子 —— 人物三视图从来都画在一张纸上。
+
+    ## 为什么不用模型拼
+
+    **本地拼，一次调用都不花。** 图都已经在库里了，让模型「再画一张
+    包含四个角度的图」不但要花额度，画出来的还是四个新的人 ——
+    它不会去抄，它会去创作。
+
+    没有任何一张视角图时返回 None；缺几张就拼几张（缺正面也照拼，
+    有总比没有强），但会把实际拼进去的记进 meta，方便回查。
+    """
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    from app.capability import mediastore
+    from app.models import Asset, AssetKind, AssetSource
+
+    views = dict((epoch.reference_set_json or {}).get("views") or {})
+    tiles: list[tuple[str, "Image.Image"]] = []
+    for key in SHEET_ORDER:
+        item = views.get(key)
+        if not isinstance(item, dict) or not item.get("asset_id"):
+            continue
+        asset = db.get(Asset, str(item["asset_id"]))
+        path = _local_path(asset)
+        if path is None:
+            continue
+        try:
+            img = Image.open(path).convert("RGB")
+        except Exception as exc:            # 坏图不该让整张拼图失败
+            log.warning("参考图打不开 %s：%s", path, exc)
+            continue
+        w = max(1, round(img.width * _SHEET_H / img.height))
+        tiles.append((key, img.resize((w, _SHEET_H), Image.LANCZOS)))
+    if not tiles:
+        return None
+
+    total_w = sum(t.width for _, t in tiles) + _SHEET_PAD * (len(tiles) + 1)
+    sheet = Image.new("RGB", (total_w, _SHEET_H + _SHEET_PAD * 2), _SHEET_BG)
+    draw = ImageDraw.Draw(sheet)
+    x = _SHEET_PAD
+    for key, tile in tiles:
+        sheet.paste(tile, (x, _SHEET_PAD))
+        draw.text((x + 8, _SHEET_PAD + 6), SHEET_LABELS.get(key, key),
+                  fill=(90, 90, 92))
+        x += tile.width + _SHEET_PAD
+
+    buf = BytesIO()
+    sheet.save(buf, format="JPEG", quality=92)
+    item = mediastore.store_bytes(buf.getvalue(), mime="image/jpeg")
+
+    existing = db.execute(
+        select(Asset).where(Asset.sha256 == item.get("sha256"))
+    ).scalars().first()
+    if existing is None:
+        existing = Asset(
+            id=new_id("as"), kind=AssetKind.image, url=item["url"],
+            sha256=item.get("sha256"), mime=item.get("mime"),
+            bytes=item.get("bytes"), source=AssetSource.generated,
+            novel_id=None,
+            meta_json={"composed": "character_reference_sheet",
+                       "views": [k for k, _ in tiles]},
+        )
+        db.add(existing)
+        db.flush()
+
+    doc = _reference_doc(epoch)
+    doc["views"][SHEET_VIEW] = {
+        "asset_id": existing.id,
+        "views": [k for k, _ in tiles],
+        # 上游是这几张视角图；其中任何一张换了，这张拼图就该重拼
+        "source_asset_id": ",".join(
+            str(views[k].get("asset_id")) for k, _ in tiles),
+        "status": "ready",
+    }
+    epoch.reference_set_json = doc
+    flag_modified(epoch, "reference_set_json")
+    return existing.id
+
+
+def _local_path(asset: "Asset | None") -> "Path | None":
+    """asset 的本地文件路径。拼图要读像素，读不到 URL 只能读盘。"""
+    from app.capability import mediastore
+
+    if asset is None or not asset.url:
+        return None
+    name = str(asset.url).rsplit("/", 1)[-1]
+    path = mediastore.media_root() / name
+    return path if path.exists() else None
+
 def character_reference_status(
     db: Session, novel_id: str, profile_id: str,
 ) -> dict[str, Any]:
@@ -806,13 +981,34 @@ def character_reference_status(
             )
         ).scalars()
     }
+    profile = db.get(WorldProfile, profile_id)
     items: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     complete = 0
     epoch_total = 0
     for eid, ent in entities.items():
         epoch_items = []
         for epoch in epochs_of(db, eid, profile_id):
             epoch_total += 1
+            # 人物外貌和名物、货币、场所一样属于目标世界观 ——
+            # 五元钱要变成 five-dollar bill，人也要变成目标世界的人。
+            # 抽取读的是中文原文，模型很自然写出 East Asian、monolid；
+            # 提示词里写了「族裔按目标圈层写」，但只是请求，没人检查。
+            # 不报的话结果是一屋子中国脸配着 Thomas 这种名字，
+            # 而每一步都显示成功。
+            stray = (foreign_appearance_terms(
+                str((epoch.invariant_json or {}).get(EN_KEY) or ""), profile)
+                if profile is not None else [])
+            if stray:
+                issues.append({
+                    "type": "unmapped_appearance",
+                    "entity": ent.display_name, "epoch": epoch.epoch_key,
+                    "found": stray,
+                    "detail": f"不变项里还写着「{'、'.join(stray)}」，"
+                              f"而目标圈层是{profile.display_name} —— "
+                              f"外貌这一层没做世界观映射，"
+                              f"出来的脸会与译名和场景对不上",
+                })
             doc = _reference_doc(epoch)
             views_out: dict[str, Any] = {}
             ready = 0
@@ -844,6 +1040,6 @@ def character_reference_status(
     return {
         "views_required": list(CHARACTER_REFERENCE_VIEWS),
         "epoch_sets": epoch_total, "complete_sets": complete,
-        "items": items,
+        "items": items, "issues": issues,
         "not_checked": ([] if epoch_total else ["还没有人物时期，无法建立三要素与三视角参考集"]),
     }
