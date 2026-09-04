@@ -8,16 +8,10 @@
 连起来却可能这一镜停三秒没事发生、下一镜台词还没说完就切了。
 那只有播一遍才知道。
 
-## 旁白不进视频
+## 电影没有旁白
 
-小说要旁白，影片不要 —— 影片里那些内容由画面承担。
-原来的交付清单把旁白与对白同等对待（它服务的是有声书与视频两种下游），
-到了剪辑台必须分开：`voiceover=False` 时旁白整轨不出现。
-
-**这会改变镜头长度。** 镜头时长本来按「对白+旁白」的真实时长回填，
-一个只有旁白的镜头因此长达九秒；旁白拿掉后，那九秒就没有依据了 ——
-画面停在那里不动，观众会以为卡住了。所以无旁白投影要按「画面拍子」
-重算这类镜头的长度，并把改动报出来。
+完整朗读只属于有声书。电影里的小说叙述必须在上游转成动作、反应、环境变化
+与视觉转场；剪辑层没有旁白开关，防止同一条产线又退回“图片配朗读”。
 
 ## 时长权威仍然是音频
 
@@ -29,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -39,9 +34,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Asset, AudioKind, AudioSpec, Chapter, FrameRole, FrameSpec, Scene,
-    ScriptDoc, Shot, ShotMotion, ShotPlan, WorldEntity,
+    Asset, AssetKind, AssetSource, AudioKind, AudioSpec, Chapter, CrewSheet,
+    FrameRole, FrameSpec, Scene, ScriptDoc, Shot, ShotMotion, ShotPerformance,
+    ShotPlan, WorldEntity,
 )
+from app.ids import new_id
 
 from app.pipelines import screenplay as sp
 
@@ -53,7 +50,6 @@ log = logging.getLogger(__name__)
 TRACKS: tuple[tuple[str, str, str], ...] = (
     ("video", "画面", "visual"),
     ("dialogue", "对白", "audio"),
-    ("narration", "旁白", "audio"),
     ("sfx", "音效", "audio"),
     ("ambience", "环境声", "audio"),
     ("bgm", "配乐", "audio"),
@@ -61,13 +57,28 @@ TRACKS: tuple[tuple[str, str, str], ...] = (
 
 #: 没有对白的镜头给多长。**不是随便定的**：
 #: 一个只有画面的镜头低于两秒观众来不及看清，高于五秒开始觉得卡住。
-#: 只在旁白被拿掉、镜头失去时长依据时才用到。
+#: 初始时长仍来自锁定译本的信息量，这里只负责夹进可信的单镜范围。
 _BEAT_MS = 2600
 _BEAT_MIN = 1600
 _BEAT_MAX = 5200
 
 #: 对白前后各留一点，否则切点压在字上
 _PAD_MS = 200
+
+
+def runtime_window(text: str) -> dict[str, int]:
+    """按原著信息量给电影章节一个节奏窗。
+
+    约 1000 个中文字／西文词对应 3–10 分钟。下限防止把剧情压成预告片，
+    上限防止靠静默与慢镜头灌水；超长章节到十分钟仍装不下时应拆集。
+    """
+    raw = text or ""
+    cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", raw))
+    latin_words = len(re.findall(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*", raw))
+    units = cjk + latin_words
+    minimum = max(30_000, min(600_000, units * 180))
+    maximum = max(minimum, min(600_000, units * 600))
+    return {"source_units": units, "min_ms": minimum, "max_ms": maximum}
 
 
 def _assets(db: Session, ids: Iterable[str | None]) -> dict[str, Asset]:
@@ -83,9 +94,11 @@ def _beat_ms(shot: Shot, motion: ShotMotion | None) -> int:
 
     有运动的镜头需要多一点时间把运动走完；静止镜头短一点。
     """
-    base = _BEAT_MS
+    # 分镜时已经按锁定译本的信息量估过时长，不能把每个视觉叙事镜头
+    # 一律砍成 2.6 秒，否则 1000 字章节会被压成一分钟预告片。
+    base = int(shot.duration_ms or _BEAT_MS)
     if motion is not None and (motion.camera_move or motion.subject_move):
-        base += 700
+        base = max(base, _BEAT_MS + 700)
     return max(_BEAT_MIN, min(base, _BEAT_MAX))
 
 
@@ -95,9 +108,10 @@ def build_timeline(
 ) -> dict[str, Any]:
     """把一章排成可播放的时间线。
 
-    voiceover=False（默认，影片）：旁白不出现，只有旁白的镜头按画面拍子给长度。
-    voiceover=True（有声书式）：旁白照常，与对白同轨排列。
+    ``voiceover`` 只为拦截旧调用保留；电影时间线永远没有旁白。
     """
+    if voiceover:
+        raise ValueError("电影时间线不允许旁白；请使用有声书时间线")
     doc = db.get(ScriptDoc, plan.script_doc_id)
     chapter = db.get(Chapter, doc.chapter_id) if doc else None
     cfg = plan.config_json or {}
@@ -143,8 +157,6 @@ def build_timeline(
 
     #: 哪些音频算进这条时间线的时长
     voiced_kinds = {AudioKind.dialogue}
-    if voiceover:
-        voiced_kinds.add(AudioKind.narration)
 
     clips: dict[str, list[dict[str, Any]]] = {t[0]: [] for t in TRACKS}
     gaps: list[dict[str, Any]] = []
@@ -175,8 +187,7 @@ def build_timeline(
             why = "按台词真实时长"
         else:
             dur = _beat_ms(shot, motion)
-            why = ("这一镜只有旁白，影片投影里旁白不出现，按画面拍子重算"
-                   if specs else "这一镜没有音频，按画面拍子")
+            why = "无对白视觉叙事镜头，按分镜信息量与画面拍子定长"
 
         # **首尾帧之间超过五秒就会审美疲劳。**
         # 走路、海浪、粒子 —— 五秒之内是一个动作，五秒之后是同一个动作重复。
@@ -268,7 +279,7 @@ def build_timeline(
             track = spec.kind.value
             if track not in clips:
                 continue
-            if spec.kind == AudioKind.narration and not voiceover:
+            if spec.kind == AudioKind.narration:
                 continue
             asset = assets.get(spec.asset_id or "")
             d = _dur(spec, assets)
@@ -316,11 +327,15 @@ def build_timeline(
                 "scene": scene.title if scene else None,
                 "loop": spec.kind == AudioKind.ambience,
             })
+            if asset is None:
+                gaps.append({
+                    "track": track, "shot": rng[0]["shot"],
+                    "why": f"场景{_cn(track)}还没生成",
+                    "fix": "先从声音制作单编译声景，再生成对应音频",
+                })
 
     out_tracks = []
     for tid, name, layer in TRACKS:
-        if tid == "narration" and not voiceover:
-            continue
         items = sorted(clips[tid], key=lambda c: c["start_ms"])
         out_tracks.append({
             "id": tid, "name": name, "layer": layer, "clips": items,
@@ -329,6 +344,164 @@ def build_timeline(
             "total": len(items),
         })
 
+    video_items = clips["video"]
+    placeholder_shots = sorted({
+        int(c["shot"]) for c in video_items if c.get("kind") != "video"
+    })
+    duplicate = sp.duplicate_changes(
+        [(s_.order_no,
+          (frames.get(s_.id, {}).get(FrameRole.last.value).derive_instruction
+           if frames.get(s_.id, {}).get(FrameRole.last.value) else None))
+         for s_ in shots]
+    )
+
+    # 最终成片不只要求“每格有个文件”。八工种、调度、物理运动和最终
+    # 提示词必须属于同一版；否则旧图旧视频虽然存在，内容已经过期。
+    from app.pipelines.frame_compose import _production_inputs, _production_revision
+    from app.worldview.crew import CREW
+
+    required_roles = {item.role for item in CREW}
+    crew_rows = list(db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id.in_(sids))
+    ).scalars())
+    crew_by_shot: dict[str, set[str]] = {}
+    sound_sheet_by_shot: dict[str, CrewSheet] = {}
+    for sheet in crew_rows:
+        if (sheet.prompt_en and not sheet.missing_json and not sheet.rejected_json):
+            crew_by_shot.setdefault(sheet.shot_id, set()).add(sheet.role)
+        if sheet.role == "sound":
+            sound_sheet_by_shot[sheet.shot_id] = sheet
+    incomplete_crew = [
+        shot.order_no for shot in shots
+        if crew_by_shot.get(shot.id, set()) < required_roles
+    ]
+
+    staged_ids = set(db.execute(
+        select(ShotPerformance.shot_id)
+        .where(ShotPerformance.shot_id.in_(sids)).distinct()
+    ).scalars())
+    unstaged = []
+    stale_prompts = []
+    invalid_motion = []
+    for shot in shots:
+        pair = frames.get(shot.id, {})
+        first = pair.get(FrameRole.first.value)
+        last = pair.get(FrameRole.last.value)
+        if first and first.entity_ids_json and shot.id not in staged_ids:
+            unstaged.append(shot.order_no)
+        prompts, motion, missing = _production_inputs(db, shot)
+        if "motion" in missing:
+            invalid_motion.append(shot.order_no)
+        revision = _production_revision(prompts, motion)
+        if any(
+            frame is not None
+            and (frame.params_json or {}).get("production_revision") != revision
+            for frame in (first, last)
+        ):
+            stale_prompts.append(shot.order_no)
+
+    # 声音制作单必须真正编译成规格。仅仅“写过声音设计”不算完成；
+    # 反过来，制作单明确写无配乐／静默时也不能硬造一条声音。
+    from app.pipelines.soundscape import (
+        K_AMBIENCE, K_MUSIC, K_OFFSCREEN, K_SFX, _is_none, _payload_en,
+        _split_cues,
+    )
+
+    soundscape_gaps: list[str] = []
+
+    def requested(sheet: CrewSheet, key: str) -> tuple[str, str] | None:
+        cn, en = _payload_en(sheet, key)
+        if not cn or _is_none(cn) or _is_none(en):
+            return None
+        return cn, en
+
+    for shot in shots:
+        sheet = sound_sheet_by_shot.get(shot.id)
+        if sheet is None:
+            continue
+        expected = sum(
+            len(_split_cues(pair[0]))
+            for key in (K_SFX, K_OFFSCREEN)
+            if (pair := requested(sheet, key)) is not None
+        )
+        actual = sum(
+            1 for spec in by_shot.get(shot.id, [])
+            if spec.kind == AudioKind.sfx
+            and (spec.params_json or {}).get("source") == "sound_sheet"
+        )
+        if actual < expected:
+            soundscape_gaps.append(
+                f"镜 {shot.order_no} 的声音单要求 {expected} 个音效点，只编译了 {actual} 个"
+            )
+
+    for scene_id, members in _shots_by_scene(shots).items():
+        sheet = next(
+            (sound_sheet_by_shot[s.id] for s in members
+             if s.id in sound_sheet_by_shot), None,
+        )
+        if sheet is None:
+            continue
+        for key, kind, label in (
+            (K_AMBIENCE, AudioKind.ambience, "环境床"),
+            (K_MUSIC, AudioKind.bgm, "配乐"),
+        ):
+            if requested(sheet, key) is None:
+                continue
+            actual = any(
+                spec.kind == kind
+                and (spec.params_json or {}).get("source") == "sound_sheet"
+                for spec in by_scene.get(scene_id, [])
+            )
+            if not actual:
+                soundscape_gaps.append(f"场 {scene_id[-6:]} 的{label}制作单尚未编译")
+
+    pace = runtime_window(chapter.content if chapter else "")
+    blockers: list[str] = []
+    if placeholder_shots:
+        blockers.append(f"{len(placeholder_shots)} 镜还在用静帧或黑屏代替动态视频")
+    if gaps:
+        blockers.append(f"{len(gaps)} 个画面／声音素材缺口")
+    if still_shots:
+        blockers.append(f"{len(still_shots)} 镜没有可见的首尾变化")
+    if duplicate:
+        blockers.append(f"{len(duplicate)} 组镜头复用了同一变化")
+    if needs_coverage:
+        blockers.append(f"{len(needs_coverage)} 镜超过单支 i2v 的可信时长，还缺补充机位")
+    if incomplete_crew:
+        blockers.append(f"{len(incomplete_crew)} 镜的八工种制作单不完整")
+    if unstaged:
+        blockers.append(f"{len(unstaged)} 个有人物的镜头缺站位、视线与表演调度")
+    if invalid_motion:
+        blockers.append(f"{len(invalid_motion)} 镜缺完整物理运动链")
+    if stale_prompts:
+        blockers.append(f"{len(stale_prompts)} 镜的提示词早于最新制作单，必须重新拼装")
+    if soundscape_gaps:
+        blockers.append(f"{len(soundscape_gaps)} 处声音制作单尚未编译成可生成规格")
+    if cursor < pace["min_ms"]:
+        blockers.append(
+            f"成片仅 {cursor/60000:.1f} 分钟，低于本章信息量的紧凑下限 "
+            f"{pace['min_ms']/60000:.1f} 分钟；需补视觉叙事与反应机位"
+        )
+    if cursor > pace["max_ms"]:
+        blockers.append(
+            f"成片 {cursor/60000:.1f} 分钟，超过单集节奏上限 "
+            f"{pace['max_ms']/60000:.1f} 分钟；需压缩或拆集"
+        )
+    quality = {
+        "grade": "final" if not blockers else "preview",
+        "production_ready": not blockers,
+        "blockers": blockers,
+        "placeholder_shots": placeholder_shots,
+        "actual_video_shots": len(shots) - len(set(placeholder_shots)),
+        "total_shots": len(shots),
+        "runtime_window": pace,
+        "incomplete_crew_shots": incomplete_crew,
+        "unstaged_shots": unstaged,
+        "invalid_motion_shots": invalid_motion,
+        "stale_prompt_shots": stale_prompts,
+        "soundscape_gaps": soundscape_gaps,
+    }
+
     return {
         "chapter": {"id": chapter.id if chapter else None,
                     "title": chapter.title if chapter else None,
@@ -336,7 +509,7 @@ def build_timeline(
         "shot_plan_id": plan.id,
         "language": plan.target_language_code,
         "aspect_ratio": aspect, "fps": fps,
-        "voiceover": voiceover,
+        "voiceover": False,
         "duration_ms": cursor,
         "shots": len(shots),
         "tracks": out_tracks,
@@ -344,16 +517,9 @@ def build_timeline(
         "retimed": retimed,
         "needs_coverage": needs_coverage,
         "still_shots": still_shots,
-        "duplicate_changes": sp.duplicate_changes(
-            [(s_.order_no,
-              (frames.get(s_.id, {}).get(FrameRole.last.value).derive_instruction
-               if frames.get(s_.id, {}).get(FrameRole.last.value) else None))
-             for s_ in shots]),
-        "notes": (
-            "影片投影：**旁白不出现** —— 那是小说的手法，影片里由画面承担。"
-            if not voiceover else
-            "有声书投影：旁白与对白同轨排列。"
-        ),
+        "duplicate_changes": duplicate,
+        "quality": quality,
+        "notes": "电影投影：无旁白；小说叙述由动作、反应、环境与视觉转场承担。",
     }
 
 
@@ -366,6 +532,14 @@ def _scene_of(shots: Sequence[Shot], order_no: int) -> str | None:
         if s.order_no == order_no:
             return s.scene_id
     return None
+
+
+def _shots_by_scene(shots: Sequence[Shot]) -> dict[str, list[Shot]]:
+    out: dict[str, list[Shot]] = {}
+    for shot in shots:
+        if shot.scene_id:
+            out.setdefault(shot.scene_id, []).append(shot)
+    return out
 
 
 def _dur(spec: AudioSpec, assets: dict[str, Asset]) -> int:
@@ -404,14 +578,19 @@ def _empty(chapter, plan, aspect, fps, voiceover) -> dict[str, Any]:
                     "title": chapter.title if chapter else None,
                     "novel_id": chapter.novel_id if chapter else None},
         "shot_plan_id": plan.id, "language": plan.target_language_code,
-        "aspect_ratio": aspect, "fps": fps, "voiceover": voiceover,
+        "aspect_ratio": aspect, "fps": fps, "voiceover": False,
         "duration_ms": 0, "shots": 0,
         "tracks": [{"id": t, "name": n, "layer": l, "clips": [], "ready": 0, "total": 0}
-                   for t, n, l in TRACKS if not (t == "narration" and not voiceover)],
+                   for t, n, l in TRACKS],
         "gaps": [{"track": "video", "shot": 0, "why": "这一章还没有分镜",
                   "fix": "先到「剧本转换」编译分镜"}],
         "retimed": [], "needs_coverage": [], "still_shots": [],
         "duplicate_changes": [],
+        "quality": {
+            "grade": "preview", "production_ready": False,
+            "blockers": ["还没有分镜"], "placeholder_shots": [],
+            "actual_video_shots": 0, "total_shots": 0,
+        },
         "notes": "这一章还没有分镜。",
     }
 
@@ -454,6 +633,8 @@ def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
     tl = build_timeline(db, plan, voiceover=voiceover, fps=fps)
     if not tl["duration_ms"]:
         raise RuntimeError("时间线是空的，没有可导出的内容")
+    doc = db.get(ScriptDoc, plan.script_doc_id)
+    chapter = db.get(Chapter, doc.chapter_id) if doc else None
 
     video_clips = next(t["clips"] for t in tl["tracks"] if t["id"] == "video")
     work = Path(tempfile.mkdtemp(prefix="cut_"))
@@ -521,11 +702,43 @@ def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
                   "-t", f"{total_s:.3f}", str(out)], timeout_sec)
 
         media = store_bytes(out.read_bytes(), mime="video/mp4")
+        quality = tl.get("quality") or {}
+        meta = {
+            "purpose": "final_cut",
+            "chapter_id": chapter.id if chapter else None,
+            "shot_plan_id": plan.id,
+            "grade": quality.get("grade") or "preview",
+            "quality_blockers": quality.get("blockers") or [],
+            "duration_ms": tl["duration_ms"],
+            "width": width, "height": height, "fps": fps,
+            "voiceover": voiceover,
+        }
+        asset = db.execute(
+            select(Asset).where(
+                Asset.novel_id == (chapter.novel_id if chapter else None),
+                Asset.url == str(media["url"]),
+            )
+        ).scalars().first()
+        if asset is None:
+            asset = Asset(
+                id=new_id("as"), kind=AssetKind.video,
+                url=str(media["url"]), sha256=str(media["sha256"]),
+                mime=str(media["mime"]), bytes=int(media["bytes"]),
+                meta_json=meta, source=AssetSource.generated,
+                novel_id=chapter.novel_id if chapter else None,
+            )
+            db.add(asset)
+        else:
+            asset.meta_json = meta
+        db.flush()
         return {
-            "url": media["url"], "bytes": media["bytes"],
+            "asset_id": asset.id, "url": media["url"], "bytes": media["bytes"],
             "duration_ms": tl["duration_ms"], "shots": len(video_clips),
             "voiceover": voiceover,
             "width": width, "height": height, "fps": fps,
+            "grade": quality.get("grade") or "preview",
+            "production_ready": bool(quality.get("production_ready")),
+            "quality_blockers": quality.get("blockers") or [],
             # **黑屏的镜号要报出来。** 一支片子里几秒黑屏很容易被当成转场，
             # 而它其实是「这一镜什么都没有」
             "black_shots": missing,
@@ -538,7 +751,7 @@ def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
 
 #: 各轨音量。对白 0dB 打底，其余依次压低 ——
 #: 环境声与配乐若不压，对白会被盖住，而那是唯一承载信息的一轨
-_GAIN_DB = {"dialogue": 0.0, "narration": -1.0, "sfx": -6.0,
+_GAIN_DB = {"dialogue": 0.0, "sfx": -6.0,
             "ambience": -18.0, "bgm": -20.0}
 
 
@@ -609,8 +822,10 @@ def generate_videos(
     """
     from app.capability.schemas import Capability
     from app.models import SpecStatus
+    from app.pipelines.frame_compose import _production_inputs, _production_revision
     from app.pipelines.base import checkpoint
     from app.capability.service import submit_task
+    from app.worldview.crew import CREW
 
     shots = list(db.execute(
         select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
@@ -621,6 +836,13 @@ def generate_videos(
         frames.setdefault(f.shot_id, {})[f.role.value] = f
     motions = {m.shot_id: m for m in db.execute(
         select(ShotMotion).where(ShotMotion.shot_id.in_(sids))).scalars()}
+    required_roles = {item.role for item in CREW}
+    crew_by_shot: dict[str, set[str]] = {}
+    for sheet in db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id.in_(sids))
+    ).scalars():
+        if (sheet.prompt_en and not sheet.missing_json and not sheet.rejected_json):
+            crew_by_shot.setdefault(sheet.shot_id, set()).add(sheet.role)
     assets = _assets(db, [f.asset_id for d in frames.values() for f in d.values()])
 
     doc = db.get(ScriptDoc, plan.script_doc_id)
@@ -644,9 +866,33 @@ def generate_videos(
                             "why": "只有首帧，没有尾帧；出来的运动是模型自己编的，"
                                    "与分镜算好的首尾差异无关"})
             continue
-        motion = motions.get(shot.id)
+        if crew_by_shot.get(shot.id, set()) < required_roles:
+            skipped.append({
+                "shot": shot.order_no,
+                "why": "八工种制作单不完整；不把未定的灯光、美术、声音与剪辑交给模型猜",
+            })
+            continue
+        prompts, motion, _missing_production = _production_inputs(db, shot)
+        if (motion is None or not motion.motion_prompt_en
+                or len(motion.deltas_en_json or []) < 2
+                or not motion.start_frame_en or not motion.end_frame_en):
+            skipped.append({
+                "shot": shot.order_no,
+                "why": "缺经验收的英文物理运动；不让视频模型自己猜动作",
+            })
+            continue
+        revision = _production_revision(prompts, motion)
+        if any(
+            (frame.params_json or {}).get("production_revision") != revision
+            for frame in (pair[FrameRole.first.value], pair[FrameRole.last.value])
+        ):
+            skipped.append({
+                "shot": shot.order_no,
+                "why": "首尾帧提示词早于最新制作单；请重新绑定拼装并出帧",
+            })
+            continue
         action = sp.is_action_beat(
-            shot.description, motion.subject_move if motion else None)
+            shot.description, motion.subject_move)
         cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
         todo.append((shot, a, b, min(shot.duration_ms, cap)))
 
@@ -656,7 +902,9 @@ def generate_videos(
     submitted = []
     for shot, a, b, dur in todo:
         motion = motions.get(shot.id)
-        prompt = (motion.motion_prompt_en if motion else None) or _camera_text(shot)
+        # 这里不再回落到只有一个运镜词的 prompt。上面的门禁保证了
+        # 每支视频都有主动作、惯性、受力、光影、面部与连续性约束。
+        prompt = motion.motion_prompt_en or ""
         task = submit_task(
             db, Capability.video_i2v,
             {"first_frame": {"url": a}, "last_frame": {"url": b},

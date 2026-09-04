@@ -21,21 +21,18 @@ from sqlalchemy.orm import Session
 from app.ids import new_id
 from app.models import (
     Chapter, DirectorProfile, DocStatus, FrameRole, FrameSpec, Scene, ScriptBlock,
-    ScriptDoc, Shot, ShotPlan, SpecStatus, TranslationBlock, WorldEntity,
-    WorldTransform,
+    ScriptDoc, Shot, ShotPlan, SpecStatus, TranslationBlock,
+    WorldProfile, WorldTransform,
 )
 from app.models.script import BlockType
 from app.worldview import resolve
+from app.worldview import profile_resolve
 from app.pipelines.base import PipelineError, as_text, chat_json, fingerprint
+from app.pipelines.entity_surfaces import load_entity_surfaces
 
 from app.pipelines import screenplay as sp
 
 log = logging.getLogger(__name__)
-
-#: 变化说明不可用时的替代。**刻意含糊**：
-#: 编一个具体动作（「他站起来」）会凭空造出原文没有的情节，
-#: 而一个轻微的姿态与光线变化至少让 i2v 有东西可插，且不撒谎。
-_NEUTRAL_DERIVE = "主体姿态与重心有轻微移动，光线随之变化"
 
 #: 景别代码 → 给图像模型的说法
 SHOT_SIZE_PROMPT: dict[str, str] = {
@@ -82,12 +79,15 @@ SHOT_SYSTEM = """你是分镜师。把剧本切成镜头，并为每个镜头写
 
 分工须知：景别、运镜、时长由系统按导演风格分配，**你不要指定这些**。
 你只负责：怎么切、镜头里发生什么、谁出场、用到哪些素材、尾帧相对首帧变了什么。
+这是无旁白电影：narration 块必须落实为观众看得见的动作、反应、环境变化、
+建立镜头或视觉转场，绝不能写成“旁白说明”或让字幕代替画面。
 
 要求：
 1. block_ids 填该镜头覆盖的剧本块 id。相邻的、同一动作单元的块可以合成一个镜头；
    一个块也可以拆成多个镜头。所有块必须被覆盖，不能遗漏。
 2. description 一句话说明镜头内容，中文，不要写景别与运镜。
-3. entity_names 填出场人物的原文名。
+3. entity_names 只能从 entity_catalog.name 中逐字选择。目标世界制作必须填目标文化名，
+   系统会把它回绑到原小说的稳定人物实体。
 4. asset_keys 填用到的素材 canonical_key（服装/道具/场景/氛围）。
 5. first_frame 写首帧的画面内容：谁在哪、在做什么、什么状态。
    **只写内容，不写画风、不写材质细节** —— 那些由素材库提供。
@@ -115,7 +115,12 @@ SHOT_SYSTEM = """你是分镜师。把剧本切成镜头，并为每个镜头写
    那在成片里就是一张静止画面停几秒，观众会以为卡住了。
 
    **每一镜的变化说明必须互不相同。** 几镜共用同一句，
-   意味着那几镜的尾帧长得一样，剪在一起像同一个画面播了几遍。"""
+   意味着那几镜的尾帧长得一样，剪在一起像同一个画面播了几遍。
+8. 一句对白超过约五秒时，要用说话人、听者反应、手部／关键道具细节、环境压力
+   等不同机位覆盖，不能整句只给一张脸。所有补镜必须来自剧本已经存在的人物、
+   物件、空间与情绪，不得新造情节。
+9. 首尾帧必须写清主体相对位置、接触关系、重心与动作阶段；人物不能凭空换边，
+   道具不能换手，门窗衣物头发与光源变化都必须有可见原因。"""
 
 
 @dataclass
@@ -233,7 +238,19 @@ def build_shot_plan(
     tf_id = transform.id if transform else None
     if tf_id is None and target_language:
         tf = resolve.active_transform(db, chapter.novel_id, target_language)
-        tf_id = tf.id if tf else None
+        if tf is not None:
+            transform = tf
+            tf_id = tf.id
+    if transform is not None:
+        if transform.novel_id != chapter.novel_id:
+            raise PipelineError("分镜映射不属于当前小说")
+        target_language = target_language or transform.target_language_code
+        script_transform = (script_doc.generator_meta or {}).get("transform_id")
+        if script_transform != transform.id:
+            raise PipelineError(
+                "当前剧本不是从这个已锁定译本生成的，不能直接进入目标世界分镜。"
+                "请回到「剧本转换」，选当前映射重新生成剧本"
+            )
 
     scenes = list(
         db.execute(
@@ -291,17 +308,20 @@ def build_shot_plan(
         config_json={
             "aspect_ratio": aspect_ratio, "director_code": director.code,
             "avg_shot_ms": avg_shot_ms, "planned_shots": total_shots,
+            "production_source": (script_doc.generator_meta or {}).get(
+                "production_source", "original"),
+            "production_transform_id": (script_doc.generator_meta or {}).get(
+                "transform_id"),
         },
     )
     db.add(plan)
     db.flush()
 
-    entities = {
-        e.display_name: e
-        for e in db.execute(
-            select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
-        ).scalars()
-    }
+    entity_index = load_entity_surfaces(
+        db, chapter.novel_id,
+        transform_id=transform.id if transform else None,
+    )
+    entities = entity_index.by_surface
 
     result = ShotPlanResult(shot_plan_id=plan.id, version=version)
     covered: set[str] = set()
@@ -309,7 +329,9 @@ def build_shot_plan(
 
     for scene, scene_blocks, _dur, count in scene_plan:
         raw_shots = _ask_llm_for_shots(
-            db, script_doc, scene, scene_blocks, count, director, version=version
+            db, script_doc, scene, scene_blocks, count, director,
+            transform=transform, entity_catalog=entity_index.catalog(),
+            version=version,
         )
         valid_ids = {b.id for b in scene_blocks}
         for item in raw_shots:
@@ -368,16 +390,15 @@ def build_shot_plan(
             # 「呼吸略显急促」这类 —— 五秒的镜头里那些看不出来，
             # 首尾帧于是几乎相同，i2v 无从插值，成片里就是一张静止画面。
             #
-            # 判出来之后**不丢弃也不硬编**：原话留在 static_derives 里给人看，
-            # 位置上换成一句中性的、至少能让画面动起来的说法。
-            # 硬编一个具体动作（「他站起来」）会凭空造出原文没有的情节。
+            # 判出来后保留原话并报出，不用「姿态轻微移动」这种假动作糊住。
+            # 后续动作导演会依据剧本、调度与八工种单，补齐完成该动作
+            # 所需的最小物理过程；在那之前，出帧与出视频都会被硬门禁挡住。
             derive = as_text(item.get("derive_instruction")) or None
             vis_ok, vis_why = sp.is_visible_change(derive)
             if not vis_ok:
                 result.static_derives.append({
                     "shot": shot.order_no, "instruction": derive, "why": vis_why,
                 })
-                derive = _NEUTRAL_DERIVE
 
             db.add(FrameSpec(
                 id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
@@ -419,7 +440,9 @@ def build_shot_plan(
 def _ask_llm_for_shots(
     db: Session, script_doc: ScriptDoc, scene: Scene | None,
     blocks: Sequence[ScriptBlock], target_count: int, director: DirectorProfile,
-    *, version: int = 1,
+    *, transform: WorldTransform | None = None,
+    entity_catalog: list[dict[str, object]] | None = None,
+    version: int = 1,
 ) -> list[dict]:
     scene_info = ""
     if scene is not None:
@@ -427,21 +450,34 @@ def _ask_llm_for_shots(
                 scene.weather, scene.mood]
         scene_info = " / ".join(b for b in bits if b)
 
+    target_world: dict[str, Any] | None = None
+    if transform is not None:
+        profile = db.get(WorldProfile, transform.target_profile_id)
+        if profile is None:
+            raise PipelineError("目标世界观档案不存在")
+        target_world = profile_resolve.resolve(db, profile)
+
     payload = {
         # 版本进输入：每次重新编译都是显式的「我要新结果」，
         # 不该命中上一版的缓存
         "plan_version": version,
         "scene": scene_info,
         "target_shot_count": target_count,
+        "production_language": script_doc.language_source,
+        "target_world": target_world,
+        "transform_policy": (transform.policy_json or {}) if transform else None,
+        "entity_catalog": entity_catalog or [],
         "blocks": [
             {"id": b.id, "type": b.block_type.value,
-             "speaker": b.speaker_tag, "text": b.source_text}
+             "speaker": b.speaker_tag, "production_text": b.source_text}
             for b in blocks
         ],
     }
     guidance = (
         f"【导演风格】{director.display_name}：{director.summary or ''}\n"
-        f"【本场目标镜头数】{target_count}（按该导演的平均镜长推算，可 ±1）"
+        f"【本场目标镜头数】{target_count}（按该导演的平均镜长推算，可 ±1）\n"
+        "【生产语义】blocks.production_text 是已锁定的目标世界剧本；"
+        "人名、称谓、时代、道具与空间必须服从 target_world，不得翻回或猜回原世界"
     )
     data, _ = chat_json(
         db,

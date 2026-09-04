@@ -14,7 +14,7 @@ from app.models.base import utcnow
 log = logging.getLogger(__name__)
 from app.ids import new_id
 from app.models import (
-    Chapter, DocStatus, Novel, ScriptDoc, SourceFormat, TranslationBlock,
+    Chapter, DocMode, DocStatus, Novel, ScriptDoc, SourceFormat, TranslationBlock,
     ScriptBlock, GenTask, TaskStatus, ShotPlan,
 )
 from app.pipelines.ingest import count_words, split_chapters
@@ -468,7 +468,9 @@ def list_chapters(
             cid: st.value
             for cid, st in db.execute(
                 select(ScriptDoc.chapter_id, ScriptDoc.status)
-                .where(ScriptDoc.chapter_id.in_(ids), ScriptDoc.status == DocStatus.active)
+                .where(ScriptDoc.chapter_id.in_(ids),
+                       ScriptDoc.doc_mode == DocMode.screenplay,
+                       ScriptDoc.status == DocStatus.active)
             ).all()
         }
 
@@ -480,12 +482,13 @@ def list_chapters(
             )
             .join(TranslationBlock, TranslationBlock.script_block_id == ScriptBlock.id)
             .join(ScriptDoc, ScriptDoc.id == ScriptBlock.script_doc_id)
-            .where(ScriptDoc.chapter_id.in_(ids))
+            .where(ScriptDoc.chapter_id.in_(ids), ScriptDoc.doc_mode == DocMode.prose)
             .group_by(ScriptBlock.script_doc_id, TranslationBlock.target_language_code)
         ).all()
         doc_to_chapter = {
             d: c for d, c in db.execute(
-                select(ScriptDoc.id, ScriptDoc.chapter_id).where(ScriptDoc.chapter_id.in_(ids))
+                select(ScriptDoc.id, ScriptDoc.chapter_id).where(
+                    ScriptDoc.chapter_id.in_(ids), ScriptDoc.doc_mode == DocMode.prose)
             ).all()
         }
         trans: dict[str, dict[str, float]] = {}
@@ -561,10 +564,13 @@ def novel_progress(novel_id: str, db: Session = Depends(get_db)) -> dict:
     ch_ids = select(Chapter.id).where(Chapter.novel_id == novel_id)
     docs = db.execute(
         select(ScriptDoc.chapter_id).where(
-            ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+            ScriptDoc.chapter_id.in_(ch_ids),
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active)
     ).scalars().all()
     doc_ids = select(ScriptDoc.id).where(
-        ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+        ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.doc_mode == DocMode.screenplay,
+        ScriptDoc.status == DocStatus.active)
 
     # 按语言分别统计译完的章数 —— 一本书可以同时译成几种语言，
     # 合在一起算会得到一个谁也用不上的平均数
@@ -574,7 +580,7 @@ def novel_progress(novel_id: str, db: Session = Depends(get_db)) -> dict:
                func.count(func.distinct(ScriptDoc.chapter_id)))
         .join(ScriptBlock, ScriptBlock.id == TranslationBlock.script_block_id)
         .join(ScriptDoc, ScriptDoc.id == ScriptBlock.script_doc_id)
-        .where(ScriptDoc.chapter_id.in_(ch_ids),
+        .where(ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.doc_mode == DocMode.prose,
                TranslationBlock.translated_text.isnot(None))
         .group_by(TranslationBlock.target_language_code)
     ).all():

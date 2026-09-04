@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.ids import new_id
-from app.models import BlockType, Chapter, DocStatus, Scene, ScriptBlock, ScriptDoc
+from app.models import (
+    BlockType, Chapter, DocMode, DocStatus, Scene, ScriptBlock, ScriptDoc,
+    WorldTransform,
+)
 from app.pipelines.base import PipelineError
 from app.pipelines.script_build import build_script, count_human_edits
 
@@ -21,6 +24,9 @@ class GenerateIn(BaseModel):
     scene_granularity: str = "medium"
     model: str | None = None
     confirm_discard_edits: bool = False
+    #: 给了映射就必须从该映射的已锁定译本生成目标世界剧本。
+    #: 不给时仍允许源语言剧本，服务原语言制作。
+    transform_id: str | None = None
 
 
 class SceneIn(BaseModel):
@@ -95,7 +101,11 @@ def get_script(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     _get_chapter(db, chapter_id)
     doc = db.execute(
         select(ScriptDoc)
-        .where(ScriptDoc.chapter_id == chapter_id, ScriptDoc.status == DocStatus.active)
+        .where(
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
+        )
     ).scalars().first()
     if doc is None:
         raise HTTPException(status_code=404, detail="该章节尚未生成剧本")
@@ -121,8 +131,14 @@ def generate_script(
                 },
             )
     try:
+        transform = None
+        if body.transform_id:
+            transform = db.get(WorldTransform, body.transform_id)
+            if transform is None or transform.novel_id != chapter.novel_id:
+                raise HTTPException(status_code=404, detail="该小说下没有这个世界观映射")
         doc = build_script(
             db, chapter,
+            transform=transform,
             granularity=body.scene_granularity,
             keep_human_edits=body.keep_human_edits,
         )
@@ -138,7 +154,8 @@ def list_versions(chapter_id: str, db: Session = Depends(get_db)) -> list[dict]:
     _get_chapter(db, chapter_id)
     rows = db.execute(
         select(ScriptDoc)
-        .where(ScriptDoc.chapter_id == chapter_id)
+        .where(ScriptDoc.chapter_id == chapter_id,
+               ScriptDoc.doc_mode == DocMode.screenplay)
         .order_by(ScriptDoc.version.desc())
     ).scalars().all()
     return [
@@ -157,7 +174,10 @@ def activate_version(
 ) -> dict:
     _get_chapter(db, chapter_id)
     rows = db.execute(
-        select(ScriptDoc).where(ScriptDoc.chapter_id == chapter_id)
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+        )
     ).scalars().all()
     target = next((d for d in rows if d.version == version), None)
     if target is None:

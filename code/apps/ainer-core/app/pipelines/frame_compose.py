@@ -26,11 +26,12 @@ from app.capability.schemas import Capability
 from app.capability.service import estimate_cost, submit_task
 from app.ids import new_id
 from app.models import (
-    Asset, AssetKindSpec, AssetSpec, AssetVariant, DirectorProfile, EntityChapterState,
-    EntityWorldVisual, FrameRole, FrameSpec, ReviewStatus, Scene, Shot, ShotAssetBinding,
-    ShotPlan, SpecStatus, WorldEntity, WorldProfile, WorldTransform,
+    Asset, AssetKindSpec, AssetSpec, AssetVariant, CrewSheet, DirectorProfile,
+    EntityChapterState, EntityWorldVisual, FrameRole, FrameSpec, ReviewStatus,
+    Scene, Shot, ShotAssetBinding, ShotMotion, ShotPlan, SpecStatus, WorldEntity,
+    WorldProfile, WorldTransform,
 )
-from app.pipelines.base import PipelineError, as_items, as_list, checkpoint
+from app.pipelines.base import PipelineError, as_items, as_list, checkpoint, fingerprint
 from app.pipelines.epochs import compose_epoch_prompt, resolve_epoch
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
 
@@ -46,6 +47,8 @@ class ComposeResult:
     #: 提示词里还留着的中文片段。**图像模型不认中文** ——
     #: 喂中文出来的是汉字纹样不是画面。哪条产线还欠英文渲染，看这里
     untranslated: list[dict[str, Any]] = field(default_factory=list)
+    #: 调度／制作单／运动没齐的镜头。prompt 可以预览，但不允许花钱出图。
+    missing_production: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -53,7 +56,54 @@ class ComposeResult:
             "missing_assets": self.missing_assets,
             "missing_entity_visual": self.missing_entity_visual,
             "untranslated": self.untranslated,
+            "missing_production": self.missing_production,
         }
+
+
+_VISUAL_CREW_ROLES = (
+    "cinematography", "lighting", "production_design", "costume_makeup",
+    "vfx", "color_grading",
+)
+
+
+def _production_inputs(
+    db: Session, shot: Shot,
+) -> tuple[list[str], ShotMotion | None, list[str]]:
+    """取真正会进画面的制作信息，并报出缺口。"""
+    rows = {
+        s.role: s for s in db.execute(
+            select(CrewSheet).where(CrewSheet.shot_id == shot.id)
+        ).scalars()
+    }
+    prompts: list[str] = []
+    missing: list[str] = []
+    for role in _VISUAL_CREW_ROLES:
+        sheet = rows.get(role)
+        if (sheet is None or not sheet.prompt_en
+                or sheet.missing_json or sheet.rejected_json):
+            missing.append(role)
+        else:
+            prompts.append(sheet.prompt_en.strip())
+    motion = db.execute(
+        select(ShotMotion).where(ShotMotion.shot_id == shot.id)
+    ).scalars().first()
+    if (motion is None or not motion.motion_prompt_en
+            or len(motion.deltas_en_json or []) < 2
+            or not motion.start_frame_en or not motion.end_frame_en):
+        missing.append("motion")
+    return prompts, motion, missing
+
+
+def _production_revision(
+    prompts: Sequence[str], motion: ShotMotion | None,
+) -> str:
+    return fingerprint(
+        *prompts,
+        motion.motion_prompt_en if motion else "",
+        *((motion.deltas_en_json or []) if motion else []),
+        motion.start_frame_en if motion else "",
+        motion.end_frame_en if motion else "",
+    )
 
 
 def _variant_index(
@@ -393,6 +443,17 @@ def compose_frame_prompt(
     if content:
         positive.append(content)
 
+    # 镜头制作单不是后台里「可以看的报表」，而是出图的直接输入。
+    # 以前八工种都已经落库，但首帧合成一条都没读，灯光、美术、服化和视效
+    # 只能由生图模型自由发挥。这里只注入已通过完整性验收的英文单。
+    crew_prompts, motion, _missing_production = _production_inputs(db, shot)
+    positive.extend(crew_prompts)
+    if motion is not None:
+        endpoint = (motion.end_frame_en if frame.role == FrameRole.last
+                    else motion.start_frame_en)
+        if endpoint:
+            positive.append(endpoint.strip())
+
     # ── 1 画风（全书一份）──
     style = by_kind.get(AssetKindSpec.style.value)
     if style is not None:
@@ -560,6 +621,12 @@ def bind_and_compose(
             ).scalars()
         )
         result.shots += 1
+        crew_prompts, motion, missing_production = _production_inputs(db, shot)
+        revision = _production_revision(crew_prompts, motion)
+        if missing_production:
+            result.missing_production.append({
+                "shot": shot.order_no, "missing": missing_production,
+            })
 
         for frame in frames:
             if frame.edited_by_human:
@@ -590,6 +657,7 @@ def bind_and_compose(
             ]
             merged = dict(params)
             merged["reference_images"] = refs
+            merged["production_revision"] = revision
             frame.params_json = merged
 
             cjk = cjk_segments(pos)
@@ -702,6 +770,18 @@ def generate_first_frames(
         if not frame.prompt:
             result.blocked.append(f"镜头 {shot.order_no} 还没拼 prompt，请先绑定素材")
             continue
+        crew_prompts, motion, missing = _production_inputs(db, shot)
+        if missing:
+            result.blocked.append(
+                f"镜头 {shot.order_no} 缺生产前置：{'、'.join(missing)}"
+            )
+            continue
+        current_revision = _production_revision(crew_prompts, motion)
+        if (frame.params_json or {}).get("production_revision") != current_revision:
+            result.blocked.append(
+                f"镜头 {shot.order_no} 的制作单或运动已变更，请先重新「绑定素材并拼 prompt」"
+            )
+            continue
         pending.append((frame, shot))
     if not pending:
         return result
@@ -783,6 +863,13 @@ def generate_last_frames(
 
     result = FrameGenResult()
     pending: list[tuple[FrameSpec, Shot, str]] = []
+    motion_by_shot = {
+        m.shot_id: m for m in db.execute(
+            select(ShotMotion).where(
+                ShotMotion.shot_id.in_([shot.id for _frame, shot in rows] or [""])
+            )
+        ).scalars()
+    }
     for frame, shot in rows:
         if frame.asset_id and not regenerate:
             result.skipped += 1
@@ -800,6 +887,15 @@ def generate_last_frames(
         ).scalars().first()
         if not url:
             result.blocked.append(f"镜头 {shot.order_no} 的首帧图不可用")
+            continue
+        motion = motion_by_shot.get(shot.id)
+        if (motion is None or not motion.motion_prompt_en
+                or len(motion.deltas_en_json or []) < 2
+                or not motion.start_frame_en or not motion.end_frame_en):
+            result.blocked.append(
+                f"镜头 {shot.order_no} 没有通过验收的英文物理运动；"
+                "不生成一张凭模型猜的尾帧"
+            )
             continue
         pending.append((frame, shot, url))
     if not pending:

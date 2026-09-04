@@ -12,7 +12,7 @@ from app.db import get_db
 from app.worldview import resolve
 from app.ids import new_id
 from app.models import (
-    Chapter, DocStatus, EntityKind, EntityWorldName, Novel,
+    Chapter, DocMode, DocStatus, EntityKind, EntityWorldName, Novel,
     NovelTranslationSettings, ReviewStatus, ScriptBlock, ScriptDoc, TranslationBlock,
     TranslationBlockStatus, WorldEntity, WorldTransform,
 )
@@ -442,7 +442,9 @@ def get_translation(chapter_id: str, lang: str,
     c = _chapter(db, chapter_id)
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter_id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:

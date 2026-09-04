@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Sequence
 
 from sqlalchemy import select
@@ -20,9 +23,9 @@ from app.capability.schemas import Capability
 from app.capability.service import estimate_cost, submit_task
 from app.ids import new_id
 from app.models import (
-    Asset, AssetKindSpec, AssetSpec, AssetVariant, AudioKind, AudioSpec, BlockType,
-    Chapter, ScriptBlock, SpecStatus, TranslationBlock, WorldEntity, WorldProfile,
-    WorldTransform,
+    Asset, AssetKind, AssetKindSpec, AssetSource, AssetSpec, AssetVariant,
+    AudioKind, AudioSpec, BlockType, Chapter, ScriptBlock, SpecStatus,
+    TranslationBlock, WorldEntity, WorldProfile, WorldTransform,
 )
 from app.pipelines import casting
 from app.pipelines.base import PipelineError, checkpoint
@@ -276,7 +279,7 @@ def _chapter_specs(db: Session, chapter: Chapter) -> list[AudioSpec]:
 
 
 def build_timeline(db: Session, chapter: Chapter) -> dict[str, Any]:
-    """章节音频时间轴。交付给拼接工具，本系统不做音频合成。"""
+    """章节音频时间轴，并返回最新的整章有声书成品。"""
     from app.pipelines.prose import active_prose_doc
 
     doc = active_prose_doc(db, chapter.id)
@@ -312,7 +315,9 @@ def build_timeline(db: Session, chapter: Chapter) -> dict[str, Any]:
     missing = 0
     for spec in specs:
         asset = assets.get(spec.asset_id) if spec.asset_id else None
-        dur = spec.duration_ms or int((asset.meta_json or {}).get("duration_ms") or 0)
+        dur = spec.duration_ms or int(
+            ((asset.meta_json or {}) if asset is not None else {}).get("duration_ms") or 0
+        )
         if asset is None:
             missing += 1
         block = blocks.get(spec.block_id)
@@ -329,6 +334,22 @@ def build_timeline(db: Session, chapter: Chapter) -> dict[str, Any]:
         })
         cursor += dur or 0
 
+    final_output = None
+    for asset in db.execute(
+        select(Asset).where(
+            Asset.novel_id == chapter.novel_id,
+            Asset.kind == AssetKind.audio,
+        ).order_by(Asset.created_at.desc())
+    ).scalars():
+        meta = asset.meta_json or {}
+        if meta.get("purpose") == "audiobook_final" and meta.get("chapter_id") == chapter.id:
+            final_output = {
+                "asset_id": asset.id, "url": asset.url, "bytes": asset.bytes,
+                "duration_ms": meta.get("duration_ms"),
+                "created_at": asset.created_at.isoformat() if asset.created_at else None,
+            }
+            break
+
     return {
         "chapter_id": chapter.id, "chapter_title": chapter.title,
         "total_duration_ms": cursor,
@@ -337,5 +358,84 @@ def build_timeline(db: Session, chapter: Chapter) -> dict[str, Any]:
             "segments": len(items), "generated": len(items) - missing,
             "missing": missing,
         },
-        "notes": "音频拼接不在本系统范围内。按 start_ms 顺序拼接即可。",
+        "final_output": final_output,
+        "notes": "可在本页按 start_ms 连续试听，全部段落生成后可导出单个 M4A 成品。",
     }
+
+
+def render_audiobook(
+    db: Session, chapter: Chapter, *, timeout_sec: int = 900,
+) -> dict[str, Any]:
+    """把章节的分段 TTS 按权威时间顺序混成一个可直接播放的 M4A。"""
+    from app.capability.mediastore import store_bytes
+    from app.pipelines import cut
+
+    if not cut.ffmpeg_available():
+        raise PipelineError("这台机器上没有 ffmpeg，无法导出整章有声书")
+    timeline = build_timeline(db, chapter)
+    if not timeline["segments"]:
+        raise PipelineError("本章还没有有声书音频规格")
+    if timeline["stats"]["missing"]:
+        raise PipelineError(
+            f"还有 {timeline['stats']['missing']} 段音频未生成，不导出一个中间空段的假成品"
+        )
+
+    paths: list[Path] = []
+    for segment in timeline["segments"]:
+        path = cut._local(segment.get("file"))
+        if path is None:
+            raise PipelineError(f"音频段 #{segment.get('seq_no')} 的本地文件不可用")
+        paths.append(path)
+
+    work = Path(tempfile.mkdtemp(prefix="audiobook_"))
+    try:
+        inputs: list[str] = []
+        filters: list[str] = []
+        labels: list[str] = []
+        for idx, path in enumerate(paths):
+            inputs += ["-i", str(path)]
+            filters.append(
+                f"[{idx}:a]aresample=48000,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo"
+                f"[a{idx}]"
+            )
+            labels.append(f"[a{idx}]")
+        graph = ";".join(filters) + ";" + "".join(labels) + (
+            f"concat=n={len(paths)}:v=0:a=1,"
+            "loudnorm=I=-16:TP=-1.5:LRA=11[out]"
+        )
+        out = work / "chapter.m4a"
+        cut._run([
+            "ffmpeg", "-y", *inputs, "-filter_complex", graph,
+            "-map", "[out]", "-c:a", "aac", "-b:a", "192k", str(out),
+        ], timeout_sec)
+        media = store_bytes(out.read_bytes(), mime="audio/mp4")
+        meta = {
+            "purpose": "audiobook_final", "chapter_id": chapter.id,
+            "duration_ms": timeline["total_duration_ms"],
+            "segments": len(paths),
+        }
+        asset = db.execute(
+            select(Asset).where(
+                Asset.novel_id == chapter.novel_id,
+                Asset.url == str(media["url"]),
+            )
+        ).scalars().first()
+        if asset is None:
+            asset = Asset(
+                id=new_id("as"), kind=AssetKind.audio,
+                url=str(media["url"]), sha256=str(media["sha256"]),
+                mime=str(media["mime"]), bytes=int(media["bytes"]),
+                meta_json=meta, source=AssetSource.generated,
+                novel_id=chapter.novel_id,
+            )
+            db.add(asset)
+        else:
+            asset.meta_json = meta
+        db.flush()
+        return {
+            "asset_id": asset.id, "url": asset.url, "bytes": asset.bytes,
+            "duration_ms": timeline["total_duration_ms"], "segments": len(paths),
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

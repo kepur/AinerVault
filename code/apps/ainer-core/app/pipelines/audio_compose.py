@@ -1,8 +1,12 @@
-"""音频编译：从素材包拼装 AudioSpec → TTS → 时长回填。
+"""电影声音编译：对白 + 声景 → TTS／音效／配乐 → 时长回填。
 
 与画面完全对称：对白的音色不是每次随便挑一个，而是绑定到角色的 voice 素材，
 用它的参考音频作 voice reference。音色一致性的根 = 参考音频 + voice_id，
 正如视觉一致性的根 = 参考图 + seed。
+
+电影线不编译旁白。小说叙述必须由剧本和分镜转换成画面；完整朗读只属于
+``audiobook.py``。这条边界写在编译层，避免剪辑时虽然静音了旁白，前面却
+已经为它付费生成。
 
 时长权威链（无论下游视频模型带不带音频，这条链都成立）：
     TTS 真实时长 → AudioSpec.duration_ms → Shot.duration_ms → 视频片段时长
@@ -33,13 +37,10 @@ from app.pipelines.base import PipelineError, checkpoint
 
 log = logging.getLogger(__name__)
 
-#: 旁白使用的 voice 素材 key。
-NARRATOR_KEY = "voice.narrator"
-
-
 @dataclass
 class AudioComposeResult:
     dialogue: int = 0
+    #: 保留在返回契约里用于旧客户端展示；电影线始终为 0。
     narration: int = 0
     scene_bgm: int = 0
     scene_tone: int = 0
@@ -179,7 +180,11 @@ def compile_audio(
                 continue
 
             is_dialogue = block.block_type == BlockType.dialogue
-            kind = AudioKind.dialogue if is_dialogue else AudioKind.narration
+            if not is_dialogue:
+                # 电影小说不是有声书。叙述已经在剧本／分镜中转成画面，
+                # 此处再建旁白规格既破坏节奏，也会白白消耗 TTS 额度。
+                continue
+            kind = AudioKind.dialogue
 
             # **对白只念引号里的话。**
             #
@@ -217,15 +222,9 @@ def compile_audio(
             )
             # 音色的权威是配音表，不是素材。素材只提供参考音频与既有 voice_id ——
             # 前者决定「是谁的嗓子」，后者只是某个引擎上的一次落地。
-            cast_row = casting.voice_for(
-                db,
-                block.speaker_entity_id if is_dialogue else casting.NARRATOR,
-                profile.id,
-            )
-            pair = _voice_for_entity(entity, variants) if is_dialogue else None
-            if not is_dialogue:
-                pair = pair or variants.get(NARRATOR_KEY)
-            elif pair is None and cast_row is None:
+            cast_row = casting.voice_for(db, block.speaker_entity_id, profile.id)
+            pair = _voice_for_entity(entity, variants)
+            if pair is None and cast_row is None:
                 # **对白不回落到旁白音色。** 借旁白的嗓子说台词，
                 # 数据上看不出问题，听起来却是旁白在自问自答 ——
                 # 这种错比「没有音色」更难发现。宁可缺，也不要错。
@@ -290,10 +289,7 @@ def compile_audio(
                 row.language_code = lang
                 row.params_json = params
                 row.entity_id = entity.id if entity else None
-            if is_dialogue:
-                result.dialogue += 1
-            else:
-                result.narration += 1
+            result.dialogue += 1
 
     # 场景级：BGM 与环境底噪同场景共用一条，不逐镜生成
     scenes = {
@@ -384,9 +380,11 @@ def generate_audio(
     q = select(AudioSpec).where(
         (AudioSpec.shot_id.in_(shot_ids))
         | ((AudioSpec.shot_id.is_(None)) & (AudioSpec.scene_id.in_(scene_ids)))
-    )
+    ).where(AudioSpec.kind != AudioKind.narration)
     if kinds:
-        q = q.where(AudioSpec.kind.in_([AudioKind(k) for k in kinds]))
+        requested = [AudioKind(k) for k in kinds
+                     if AudioKind(k) != AudioKind.narration]
+        q = q.where(AudioSpec.kind.in_(requested))
     specs = list(db.execute(q).scalars())
 
     result = AudioGenResult()
@@ -401,9 +399,7 @@ def generate_audio(
     if not pending:
         return result
 
-    tts_n = sum(
-        1 for s in pending if s.kind in {AudioKind.dialogue, AudioKind.narration}
-    )
+    tts_n = sum(1 for s in pending if s.kind == AudioKind.dialogue)
     est = estimate_cost(db, Capability.audio_tts, "dialogue", tts_n) if tts_n else 0.0
     result.estimated_cost = est
     if est is not None and est > cost_threshold and not confirm_cost:
@@ -415,7 +411,7 @@ def generate_audio(
 
     for spec in pending:
         params = dict(spec.params_json or {})
-        if spec.kind in {AudioKind.dialogue, AudioKind.narration}:
+        if spec.kind == AudioKind.dialogue:
             payload: dict[str, Any] = {
                 "text": spec.text,
                 "language": spec.language_code or "en-US",
@@ -482,7 +478,7 @@ def backfill_durations(db: Session, plan: ShotPlan) -> dict[str, Any]:
         db.execute(
             select(AudioSpec).where(
                 AudioSpec.shot_id.in_([s.id for s in shots]),
-                AudioSpec.kind.in_([AudioKind.dialogue, AudioKind.narration]),
+                AudioSpec.kind == AudioKind.dialogue,
                 AudioSpec.duration_ms.is_not(None),
             )
         ).scalars()

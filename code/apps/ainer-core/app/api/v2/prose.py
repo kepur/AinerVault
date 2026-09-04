@@ -398,10 +398,19 @@ def generate_audiobook(chapter_id: str, body: AudiobookGenIn,
 
 @router.get("/chapters/{chapter_id}/audiobook")
 def get_audiobook(chapter_id: str, db: Session = Depends(get_db)) -> dict:
-    """章节音频时间轴。交付给拼接工具，本系统不做音频合成。"""
+    """章节音频时间轴与最新整章成品。"""
     c = _chapter(db, chapter_id)
     try:
         return ab.build_timeline(db, c)
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/chapters/{chapter_id}/audiobook:render")
+def render_audiobook(chapter_id: str, db: Session = Depends(get_db)) -> dict:
+    """把所有已生成段落合成单个 M4A，并持久化为该章节的成品。"""
+    try:
+        return ab.render_audiobook(db, _chapter(db, chapter_id))
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

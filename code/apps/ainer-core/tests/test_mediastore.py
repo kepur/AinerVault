@@ -31,8 +31,14 @@ class TestSniff:
 
     def test_every_sniffable_type_has_an_extension(self):
         for mime in ("image/jpeg", "image/png", "image/webp", "image/gif",
-                     "audio/mpeg", "audio/wav", "audio/ogg", "video/mp4"):
+                     "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4",
+                     "video/mp4"):
             assert mime in _EXT, mime
+
+    def test_m4a_container_stays_audio(self):
+        raw = b"\x00\x00\x00\x18ftypM4A " + b"rest"
+        assert sniff(raw, "audio/mp4") == "audio/mp4"
+        assert sniff(raw, "video/mp4") == "video/mp4"
 
 
 def test_same_bytes_give_the_same_url(tmp_path, monkeypatch):

@@ -82,8 +82,8 @@ class TestStageOrdering:
         from app.api.v2 import console
 
         src = inspect.getsource(console.chapter_stages)
-        keys = ["script", "prose", "shots", "staging", "crew", "motion",
-                "first_frame", "last_frame", "audio", "handoff"]
+        keys = ["prose", "script", "shots", "staging", "crew", "motion",
+                "first_frame", "last_frame", "audio", "video", "handoff"]
         pos = [src.index(f'"{k}"') for k in keys]
         assert pos == sorted(pos), "章节阶段的声明顺序必须与依赖顺序一致"
 
@@ -95,7 +95,17 @@ class TestStageOrdering:
 
         src = inspect.getsource(console.chapter_stages)
         assert "no_first" in src
-        assert 'blocked_by=no_plan or no_first' in src
+        assert 'blocked_by=no_plan or no_motion or no_first' in src
+
+    def test_frames_wait_for_production_design(self):
+        """首帧早于调度、八工种和物理运动时，模型只能自己猜。"""
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console.chapter_stages)
+        assert 'blocked_by=no_plan or no_staging or no_crew or no_motion' in src
+        assert '"video", "动态镜头"' in src
 
     def test_novel_stages_are_book_wide(self):
         """整本共享的东西放在章节里做，会导致每章各定一套 ——
@@ -218,3 +228,9 @@ class TestMediaLibrary:
         assert keys.index("identity") < keys.index("first_frame")
         assert keys.index("asset_ref") < keys.index("first_frame")
         assert keys[-1] == "orphan"
+
+    def test_finished_chapter_outputs_are_not_orphans(self):
+        from app.api.v2.console import _USE_CN
+
+        assert _USE_CN["audiobook_final"] == "有声书成品"
+        assert _USE_CN["final_cut"] == "章节成片／审片"

@@ -1,4 +1,4 @@
-"""交付投影 —— 一份产出，两种消费方式。
+"""电影交付投影 —— 一份产出，两种消费方式。
 
 本系统不生成视频。它把一章编译成「首尾帧 + 音频 + 指令」，
 交给下游的视频能力去合成。而下游有两类：
@@ -14,8 +14,8 @@
 **两种投影的上游产出完全相同**。不要为它们建两条工作流 ——
 差别只在 manifest 的形态，而形态由 Discovery 里模型声明的能力决定。
 
-无论哪种投影，时长权威都是 TTS 的真实时长。带音频的模型也需要一个确定的
-时长约束，否则字幕对不上、镜头长度失控。
+无论哪种投影都只有对白、音效、环境和音乐，没有旁白；完整小说朗读属于
+有声书成品。带音频的模型也必须服从对白 TTS 的时长，否则字幕对不上。
 """
 from __future__ import annotations
 
@@ -149,6 +149,9 @@ def build_manifest(
         if last_asset is None:
             warnings.append(f"镜头 {shot.order_no} 缺尾帧")
 
+        motion_prompt = _motion_prompt(db, shot)
+        if not motion_prompt:
+            warnings.append(f"镜头 {shot.order_no} 缺完整英文物理运动提示词")
         entry: dict[str, Any] = {
             "index": shot.order_no,
             "shot_id": shot.id,
@@ -159,7 +162,7 @@ def build_manifest(
             "description": shot.description,
             "first_frame": first_asset.url if first_asset else None,
             "last_frame": last_asset.url if last_asset else None,
-            "motion_prompt": _motion_prompt(db, shot),
+            "motion_prompt": motion_prompt,
             # 首尾帧的完整提示词。下游要重出或改图时靠它，
             # 只给一张图的 URL 是改不动的
             "first_frame_prompt": first.prompt if first else None,
@@ -177,8 +180,7 @@ def build_manifest(
         subtitles: list[dict[str, Any]] = []
 
         for spec in specs:
-            if spec.kind not in {AudioKind.dialogue, AudioKind.narration,
-                                 AudioKind.sfx}:
+            if spec.kind not in {AudioKind.dialogue, AudioKind.sfx}:
                 continue
             asset = assets.get(spec.asset_id) if spec.asset_id else None
             dur = spec.duration_ms or (
@@ -214,9 +216,7 @@ def build_manifest(
                     "speaker": speaker.display_name if speaker else None,
                 })
 
-            if include_subtitles and spec.kind in {
-                AudioKind.dialogue, AudioKind.narration
-            } and spec.text:
+            if include_subtitles and spec.kind == AudioKind.dialogue and spec.text:
                 subtitles.append({
                     "text": spec.text,
                     "start_ms": cursor_ms + local,
@@ -297,25 +297,19 @@ def build_manifest(
 def _motion_prompt(db: Session, shot: Shot) -> str:
     """这一镜的运动，**英文**。
 
-    优先用运动描述那一份（起幅落幅怎么走都写清了），
-    没有才回落到分镜的相机字段。
-
-    **不回落到 shot.description** —— 那是中文，
-    而视频模型和图像模型一样不认中文：喂中文出来的是纹样不是画面。
-    宁可只给「static locked-off」这一句，也不要掺一段读不懂的文字。
+    只接受通过最低结构验收的运动描述。缺失时返回空并由 manifest 报警，
+    不用一个运镜词伪装成可生产提示词。
     """
     from app.models import ShotMotion
 
     m = db.execute(
         select(ShotMotion).where(ShotMotion.shot_id == shot.id)
     ).scalars().first()
-    if m is not None and m.motion_prompt_en:
+    if (m is not None and m.motion_prompt_en
+            and len(m.deltas_en_json or []) >= 2
+            and m.start_frame_en and m.end_frame_en):
         return m.motion_prompt_en
-    cam = shot.camera_json or {}
-    bits = [str(cam.get("move") or "static").replace("_", " ")]
-    if cam.get("speed") is not None:
-        bits.append(f"speed {cam['speed']}")
-    return ", ".join(bits)
+    return ""
 
 
 def _crew_block(db: Session, shot: Shot) -> dict[str, Any]:

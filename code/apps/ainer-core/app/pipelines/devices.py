@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.ids import new_id
 from app.models import (
     apply_fidelity, choose_strategy, strategy_brief, Fidelity,
-    Chapter, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType,
+    Chapter, CulturalLoad, DeviceEffect, DeviceStrategy, DeviceType, DocMode,
     NarrativeDevice, PlotLoad, ScriptBlock, ScriptDoc, StoryBeat, Volatility,
 )
 from app.models.script import DocStatus
@@ -155,7 +155,9 @@ def extract_devices(
     """抽离一章的叙事装置。重跑覆盖整章 —— 装置是对全章的解读。"""
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         ).order_by(ScriptDoc.version.desc())
     ).scalars().first()
     if doc is None:

@@ -10,12 +10,11 @@ from app.pipelines import cut
 
 
 class TestTracks:
-    def test_narration_is_a_separate_track(self):
-        """小说要旁白，影片不要 —— 影片里那些内容由画面承担。
-        交付清单把两者同等对待（它服务两种下游），到了剪辑台必须分开。"""
+    def test_film_has_no_narration_track(self):
+        """完整朗读只属于有声书；电影叙述必须转成画面。"""
         ids = [t[0] for t in cut.TRACKS]
-        assert "dialogue" in ids and "narration" in ids
-        assert ids.index("dialogue") < ids.index("narration")
+        assert "dialogue" in ids
+        assert "narration" not in ids
 
     def test_visual_track_comes_first(self):
         """先画面后声音，声音里对白在最上层 —— 剪辑软件也是这么排的。"""
@@ -43,11 +42,15 @@ class TestBeat:
         ms = cut._beat_ms(self._Shot(), None)
         assert cut._BEAT_MIN <= ms <= cut._BEAT_MAX
 
-    def test_moving_shot_gets_more_time(self):
-        """有运动的镜头要把运动走完。"""
-        still = cut._beat_ms(self._Shot(), None)
-        moving = cut._beat_ms(self._Shot(), self._Motion())
-        assert moving > still
+    def test_existing_story_information_is_not_crushed_to_default(self):
+        """分镜已经按译本信息量估出 9 秒，不能退回固定 2.6 秒；
+        单镜上限由后面的拆机位规则处理。"""
+        assert cut._beat_ms(self._Shot(), self._Motion()) == cut._BEAT_MAX
+
+    def test_thousand_units_targets_three_to_ten_minutes(self):
+        pace = cut.runtime_window("字" * 1000)
+        assert pace["min_ms"] == 180_000
+        assert pace["max_ms"] == 600_000
 
 
 class TestMixLevels:
@@ -105,6 +108,49 @@ class TestRenderContract:
 
         src = inspect.getsource(cut.render)
         assert "black_shots" in src
+
+    def test_preview_cannot_masquerade_as_final(self):
+        """静帧交叉溶解可以审节奏，但不是电影成片。"""
+        import inspect
+
+        from app.api.v2 import audio
+
+        src = inspect.getsource(audio.render_cut)
+        assert "NOT_FINAL_READY" in src
+        assert "production_ready" in src
+
+    def test_render_is_persisted_as_chapter_output(self):
+        import inspect
+
+        src = inspect.getsource(cut.render)
+        assert '"purpose": "final_cut"' in src
+        assert "asset_id" in src
+
+
+class TestVideoGenerationGate:
+    def test_video_never_falls_back_to_camera_only(self):
+        import inspect
+
+        src = inspect.getsource(cut.generate_videos)
+        assert "缺经验收的英文物理运动" in src
+        code = "\n".join(ln for ln in src.splitlines()
+                         if not ln.strip().startswith("#"))
+        assert "or _camera_text" not in code
+
+
+class TestFilmProjection:
+    def test_old_voiceover_calls_are_rejected(self):
+        import inspect
+
+        assert "电影时间线不允许旁白" in inspect.getsource(cut.build_timeline)
+
+    def test_final_quality_reads_production_inputs(self):
+        import inspect
+
+        src = inspect.getsource(cut.build_timeline)
+        assert "incomplete_crew" in src
+        assert "invalid_motion" in src
+        assert "stale_prompts" in src
 
 
 class TestAtMs:

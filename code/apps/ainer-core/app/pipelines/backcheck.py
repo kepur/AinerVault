@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
-    BackTranslationCheck, Chapter, DocStatus, NarrativeDevice, ScriptBlock,
+    BackTranslationCheck, Chapter, DocMode, DocStatus, NarrativeDevice, ScriptBlock,
     ScriptDoc, StoryBeat, TranslationBlock, WorldTransform,
 )
 from app.pipelines.base import PipelineError, chat_json, as_items
@@ -133,7 +133,9 @@ def back_check(
     lang = transform.target_language_code
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         ).order_by(ScriptDoc.version.desc())
     ).scalars().first()
     if doc is None:

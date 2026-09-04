@@ -32,6 +32,7 @@ _EXT = {
     "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
     "image/gif": ".gif",
     "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/ogg": ".ogg",
+    "audio/mp4": ".m4a",
     "video/mp4": ".mp4",
 }
 
@@ -57,8 +58,10 @@ def sniff(raw: bytes, declared: str) -> str:
         return "image/webp"
     if raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
         return "audio/wav"
-    if raw[4:12] in (b"ftypisom", b"ftypmp42", b"ftypM4V "):
-        return "video/mp4"
+    if raw[4:12] in (b"ftypisom", b"ftypmp42", b"ftypM4V ", b"ftypM4A "):
+        # MP4 是容器，仅看 ftyp 分不出是视频还是 M4A。上游明确声明
+        # audio/mp4 时保留音频类型，否则浏览器会把有声书当成黑画面视频。
+        return "audio/mp4" if declared.startswith("audio/") else "video/mp4"
     return declared
 
 

@@ -24,7 +24,8 @@ from app.capability.service import submit_task
 from app.ids import new_id
 from app.models import (
     STRATEGY_BRIEF,
-    Chapter, DocStatus, GlossaryTerm, NovelTranslationSettings, ScriptBlock, ScriptDoc,
+    Chapter, DocMode, DocStatus, GlossaryTerm, NovelTranslationSettings,
+    ScriptBlock, ScriptDoc,
     TaskStatus, TermStatus, TranslationBlock, TranslationBlockStatus, WorldProfile,
     WorldTransform,
 )
@@ -69,11 +70,13 @@ class TranslateResult:
 def _active_doc(db: Session, chapter_id: str) -> ScriptDoc:
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter_id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:
-        raise PipelineError("该章节还没有 active 剧本，请先生成剧本")
+        raise PipelineError("该章节还没有译本分块，请先执行 prose:build")
     return doc
 
 

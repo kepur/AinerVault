@@ -1,4 +1,4 @@
-"""表演抽取：从原文抽出「这一刻画面里发生什么」。
+"""表演抽取：从目标世界电影剧本抽出「这一刻画面里发生什么」。
 
 抽的是**瞬时状态**，不是恒定属性。区别很实：
     恒定  沈砚身量瘦高，一道旧疤在左眉        → world_entities.appearance
@@ -23,10 +23,11 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
-    Chapter, DocStatus, Facing, ScriptBlock, ScriptDoc, Shot, ShotPerformance,
+    Chapter, DocMode, DocStatus, Facing, ScriptBlock, ScriptDoc, Shot, ShotPerformance,
     ShotPlan, SpeechRole, StagePosition, WorldEntity,
 )
 from app.pipelines.base import PipelineError, chat_json, as_text, as_items
+from app.pipelines.entity_surfaces import load_entity_surfaces
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +85,9 @@ class DialogResult:
 def _blocks_of(db: Session, chapter: Chapter) -> list[ScriptBlock]:
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:
@@ -109,11 +112,12 @@ def resolve_dialogue(
     if not blocks:
         raise PipelineError("章节没有正文")
 
-    names = sorted({
-        e.display_name for e in db.execute(
-            select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
-        ).scalars()
-    })
+    doc = db.get(ScriptDoc, blocks[0].script_doc_id)
+    transform_id = (doc.generator_meta or {}).get("transform_id") if doc else None
+    entity_index = load_entity_surfaces(
+        db, chapter.novel_id, transform_id=transform_id,
+    )
+    names = sorted(entity_index.canonical_by_entity.values())
     result = DialogResult()
     by_id = {b.id: b for b in blocks}
 
@@ -299,17 +303,12 @@ def extract_performance(
     if chapter is None:
         raise PipelineError("分镜对应的章节不存在")
 
-    entities = list(
-        db.execute(
-            select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
-        ).scalars()
+    entity_index = load_entity_surfaces(
+        db, chapter.novel_id, transform_id=plan.transform_id,
     )
-    # 名字 → 实体。别名一并收，模型用原文称呼填
-    by_name: dict[str, WorldEntity] = {}
-    for e in entities:
-        for n in [e.display_name, *(e.aliases_json or [])]:
-            if n:
-                by_name.setdefault(str(n), e)
+    # 当前生产语言的人名、称谓与源名都回到同一个稳定实体。
+    by_name = dict(entity_index.by_surface)
+    production_names = sorted(entity_index.canonical_by_entity.values())
 
     blocks = {b.id: b for b in _blocks_of(db, chapter)}
     existing = {
@@ -350,7 +349,8 @@ def extract_performance(
             [
                 {"role": "system", "content": PERF_SYSTEM},
                 {"role": "user", "content": (
-                    f"【角色表】{', '.join(sorted(by_name))}\n\n"
+                    f"【当前世界角色表】{', '.join(production_names)}\n"
+                    "cast.entity 必须从该表逐字选择。\n\n"
                     + json.dumps({"shots": payload}, ensure_ascii=False, indent=1)
                 )},
             ],

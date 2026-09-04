@@ -29,10 +29,11 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
-    Chapter, CrewSheet, ScriptBlock, ScriptDoc, SheetStatus, Shot, ShotMotion,
-    ShotPlan, WorldProfile,
+    Chapter, CrewSheet, FrameRole, FrameSpec, ScriptBlock, ScriptDoc, SheetStatus,
+    Shot, ShotMotion, ShotPlan, WorldProfile,
 )
 from app.pipelines.base import PipelineError, as_text, chat_json
+from app.pipelines import screenplay as sp
 from app.worldview.crew import CREW, CREW_BY_ROLE, CrewSpec
 
 log = logging.getLogger(__name__)
@@ -306,14 +307,23 @@ def generate_sheets(
 MOTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["start_frame", "end_frame", "camera_move", "subject_move",
-                 "pacing", "deltas",
+                 "secondary_motion", "physics_constraints", "lighting_change",
+                 "facial_change", "continuity_constraints", "pacing", "deltas",
                  "start_frame_en", "end_frame_en", "camera_move_en",
-                 "subject_move_en", "deltas_en"],
+                 "subject_move_en", "secondary_motion_en",
+                 "physics_constraints_en", "lighting_change_en",
+                 "facial_change_en", "continuity_constraints_en",
+                 "pacing_en", "deltas_en"],
     "properties": {
         "start_frame": {"type": "string"},
         "end_frame": {"type": "string"},
         "camera_move": {"type": "string"},
         "subject_move": {"type": "string"},
+        "secondary_motion": {"type": "string"},
+        "physics_constraints": {"type": "string"},
+        "lighting_change": {"type": "string"},
+        "facial_change": {"type": "string"},
+        "continuity_constraints": {"type": "string"},
         "pacing": {"type": "string"},
         "deltas": {"type": "array", "items": {"type": "string"}},
         # 英文那一份**直接交给视频模型**。视频模型与图像模型一样不认中文
@@ -321,22 +331,35 @@ MOTION_SCHEMA: dict[str, Any] = {
         "end_frame_en": {"type": "string"},
         "camera_move_en": {"type": "string"},
         "subject_move_en": {"type": "string"},
+        "secondary_motion_en": {"type": "string"},
+        "physics_constraints_en": {"type": "string"},
+        "lighting_change_en": {"type": "string"},
+        "facial_change_en": {"type": "string"},
+        "continuity_constraints_en": {"type": "string"},
+        "pacing_en": {"type": "string"},
         "deltas_en": {"type": "array", "items": {"type": "string"}},
     },
 }
 
-MOTION_SYSTEM = """你要写清这一镜的**运动** —— 首帧到尾帧之间发生了什么。
+MOTION_SYSTEM = """你是动作导演、场记与动画指导。你要写清这一镜的**运动**：
+首帧到尾帧之间每一步如何在现实时间与空间中发生。
 
 这份描述有两个用处，都很实：
   尾帧靠它做 i2i，知道该改画面的哪一部分而不是整张重画
   视频模型靠它知道怎么动
 
-四件事必须写死：
+必须写死：
   start_frame  起幅。镜头开始的那一瞬间，画面是什么样
   end_frame    落幅。结束的那一瞬间是什么样
   camera_move  相机怎么动。**静止也要明写「机位固定」** ——
                不写，视频模型会自己加运动
   subject_move 主体怎么动
+  secondary_motion 衣摆、头发、烟雾、雨、尘土、道具的跟随运动与滞后。
+                   没有就明写哪些保持静止，不让模型自加风与粒子
+  physics_constraints 脚与地面的受力、重心转移、手与道具的接触、惯性与遍历路径
+  lighting_change 只能由光源、遮挡、人或机位的位移导致；原因没变就明写光位、色温不变
+  facial_change 眼神落点、眨眼、下颌与面部肌肉的微小过程；不得改脸型、年龄、五官
+  continuity_constraints 上一动作的落点、轴线、视线、道具所在手与服装必须锁定
 
 deltas 逐项列出首尾之间**变化了什么**：
   「表情从平静变为警觉」「右手从膝上移到刀柄」「门缝的光变宽」
@@ -344,10 +367,61 @@ deltas 逐项列出首尾之间**变化了什么**：
 
 pacing 写速度与节奏曲线：匀速／先慢后快／急停／缓入缓出。
 
+运动必须成为「因果触发 → 主动作 → 次级反应 → 稳定落幅」。
+若剧本只给了起点和结果，可补齐**完成该动作所必需的最小过程**，
+但不得新增情节、道具、人物或突然变化的光源。
+
+英文 `_en` 字段是直接交给图像／视频模型的可执行提示词，不是摘要；
+与中文必须同等完整。结尾明确禁止：teleportation, body morphing,
+extra limbs, foot sliding, object penetration, texture boiling, lighting flicker, identity drift。
+
 不合格的写法：
   ✗ 「镜头缓缓移动」—— 从哪到哪
   ✗ 「人物有所动作」—— 什么动作
   ✗ 「画面富有张力」—— 那不是运动"""
+
+
+_MOTION_DETAIL_FIELDS = (
+    "camera_move", "subject_move", "secondary_motion", "physics_constraints",
+    "lighting_change", "facial_change", "continuity_constraints", "pacing",
+)
+
+
+def _motion_issues(data: dict[str, Any]) -> list[str]:
+    """运动单的可执行性验收。只用形式化判据，不再调一次模型。"""
+    issues: list[str] = []
+    for key in _MOTION_DETAIL_FIELDS:
+        if not as_text(data.get(key)).strip():
+            issues.append(f"缺 {key}")
+        if not as_text(data.get(f"{key}_en")).strip():
+            issues.append(f"缺 {key}_en")
+    start = as_text(data.get("start_frame")).strip()
+    end = as_text(data.get("end_frame")).strip()
+    if not start or not end:
+        issues.append("起幅或落幅为空")
+    elif start == end:
+        issues.append("起幅与落幅相同")
+    if not as_text(data.get("start_frame_en")).strip() \
+            or not as_text(data.get("end_frame_en")).strip():
+        issues.append("缺英文起幅或落幅")
+
+    deltas = [as_text(x).strip() for x in (data.get("deltas") or []) if as_text(x).strip()]
+    deltas_en = [as_text(x).strip() for x in (data.get("deltas_en") or []) if as_text(x).strip()]
+    if len(deltas) < 2:
+        issues.append("首尾可见差异少于 2 项")
+    if len(deltas_en) < 2:
+        issues.append("英文首尾可见差异少于 2 项")
+    visible, why = sp.is_visible_change(
+        as_text(data.get("subject_move")) + "；" + as_text(data.get("camera_move"))
+    )
+    if not visible:
+        issues.append(f"主体与相机都没有可见位移：{why}")
+    english = " ".join(
+        as_text(data.get(f"{key}_en")) for key in _MOTION_DETAIL_FIELDS
+    ) + " " + " ".join(deltas_en)
+    if re.search(r"[\u3400-\u9fff]", english):
+        issues.append("英文运动提示词混入中文")
+    return issues
 
 
 def generate_motion(
@@ -424,30 +498,46 @@ def generate_motion(
         row.deltas_en_json = [
             d for d in (as_text(x) for x in (data.get("deltas_en") or [])) if d
         ] or None
+        labels = {
+            "camera_move": "相机", "subject_move": "主体",
+            "secondary_motion": "次级运动", "physics_constraints": "物理约束",
+            "lighting_change": "光影", "facial_change": "面部",
+            "continuity_constraints": "连续性", "pacing": "节奏",
+        }
         row.motion_prompt = "；".join(
-            x for x in (row.camera_move, row.subject_move, row.pacing) if x
-        )
-        # 视频模型读的是这一条。不带中文 —— 中文进去出来的是纹样不是画面
-        row.motion_prompt_en = ", ".join(
-            x.strip().rstrip(".;") for x in (
-                as_text(data.get("camera_move_en")),
-                as_text(data.get("subject_move_en")),
-                as_text(data.get("pacing")),
-            ) if x.strip()
+            f"{labels[key]}：{as_text(data.get(key)).strip()}"
+            for key in _MOTION_DETAIL_FIELDS if as_text(data.get(key)).strip()
         ) or None
-        if not row.motion_prompt_en:
-            thin.append({"shot": shot.order_no,
-                         "why": "没有英文运动描述 —— 视频模型不认中文，这一条交不出去"})
+        # 视频模型读的是这一条。把主动作、受力、惯性、光影、脸部与
+        # 连续性都放进去；只放 camera+subject 会把剩下的自由度全丢给视频模型猜。
+        row.motion_prompt_en = ". ".join(
+            as_text(data.get(f"{key}_en")).strip().rstrip(".;")
+            for key in _MOTION_DETAIL_FIELDS
+            if as_text(data.get(f"{key}_en")).strip()
+        ) or None
+
+        issues = _motion_issues(data)
+        thin.extend({"shot": shot.order_no, "why": issue} for issue in issues)
+        if not issues:
+            # 分镜阶段的 derive_instruction 只是初判；动作导演把调度、
+            # 制作单与物理过程都纳入后，这份通过验收的差异才是尾帧权威。
+            last = db.execute(
+                select(FrameSpec).where(
+                    FrameSpec.shot_id == shot.id,
+                    FrameSpec.role == FrameRole.last,
+                )
+            ).scalars().first()
+            if last is not None and not last.edited_by_human:
+                last.derive_instruction = "；".join(deltas)
         row.status = SheetStatus.drafted
         made += 1
-        # 首尾相同 = 这一镜没有运动，i2i 无从改起
-        if row.start_frame and row.start_frame == row.end_frame:
-            thin.append({"shot": shot.order_no, "why": "起幅与落幅相同，没有运动"})
-        elif not deltas:
-            thin.append({"shot": shot.order_no, "why": "没有列出首尾差异，i2i 无从改起"})
 
     db.flush()
-    return {"shots": len(shots), "generated": made, "thin": thin}
+    return {
+        "shots": len(shots), "generated": made,
+        "quality_ready": max(0, made - len({x["shot"] for x in thin})),
+        "thin": thin,
+    }
 
 
 # ── 场记：跨镜连续性 ─────────────────────────────────────────────────────────

@@ -51,7 +51,6 @@ TRACKS: tuple[tuple[str, str, str], ...] = (
     ("frame_last", "尾帧", "从首帧派生，只写「变了什么」，不要重写整句"),
     ("video", "运动", "把首尾帧交给图生视频；静止也要明写，否则模型会自己加运动"),
     ("dialogue", "对白", "文本 + 音色 + 表演指示。时长以生成结果为准，不要按字数估"),
-    ("narration", "旁白", "同对白，但音色固定用旁白音"),
     ("sfx", "音效", "挂在镜头内的相对位置，不是整场"),
     ("bgm", "配乐", "挂整场，不挂单镜"),
     ("ambience", "环境声", "整场铺底，需要能无缝循环"),
@@ -149,7 +148,9 @@ def format_image(prompt: str, negative: str, *, target: str,
 def format_video(motion: str, *, first_url: str | None, last_url: str | None,
                  duration_ms: int) -> str:
     """图生视频的一格。**首尾帧的地址要跟着走** —— 手搓时那是要上传的文件。"""
-    lines = [motion.strip() or "static locked-off shot"]
+    if not (motion or "").strip():
+        return ""
+    lines = [motion.strip()]
     lines.append(f"【时长】{duration_ms / 1000:.1f}s")
     lines.append(f"【首帧】{first_url or '未生成 —— 需先出首帧'}")
     lines.append(f"【尾帧】{last_url or '未生成 —— 可只用首帧'}")
@@ -249,7 +250,7 @@ def compose_video_cn(motion: dict[str, Any], *, first_url: str | None,
     order = ("起幅", "落幅", "相机", "主体", "节奏")
     bits = [f"{k}：{motion[k]}" for k in order if motion.get(k)]
     if not bits:
-        bits = ["机位固定，无相机运动"]
+        return ""
     bits.append(f"【时长】{duration_ms / 1000:.1f}s")
     bits.append(f"【首帧】{first_url or '未生成 —— 需先出首帧'}")
     bits.append(f"【尾帧】{last_url or '未生成 —— 可只用首帧'}")
@@ -395,7 +396,17 @@ def build_handoff(
             ))
 
         motion = motions.get(shot.id)
-        motion_text = (motion.motion_prompt_en if motion else "") or _camera_text(shot)
+        motion_text = (
+            motion.motion_prompt_en
+            if (motion and motion.motion_prompt_en
+                and len(motion.deltas_en_json or []) >= 2
+                and motion.start_frame_en and motion.end_frame_en)
+            else ""
+        )
+        if not motion_text:
+            gaps.append({"track": "video", "shot": shot.order_no,
+                         "why": "缺完整英文物理运动提示词",
+                         "fix": "到「八工种制作单」生成运动；不要让视频模型自由编动作"})
         clips["video"].append(_clip(
             "video", shot, cursor, shot.duration_ms, label,
             _url_by_id(assets, shot.video_asset_id),
@@ -410,6 +421,8 @@ def build_handoff(
         local = 0
         for spec in sorted(audio_shot.get(shot.id, []),
                            key=lambda a: (a.kind != AudioKind.dialogue, a.id)):
+            if spec.kind == AudioKind.narration:
+                continue
             track = spec.kind.value
             if track not in clips:
                 continue
@@ -417,13 +430,13 @@ def build_handoff(
             dur = spec.duration_ms or (
                 int((asset.meta_json or {}).get("duration_ms") or 0) if asset else 0)
             est = False
-            if not dur and spec.kind in (AudioKind.dialogue, AudioKind.narration):
+            if not dur and spec.kind == AudioKind.dialogue:
                 dur = estimate_speech_ms(spec.text or "")
                 est = estimated_any = bool(dur)
             params = spec.params_json or {}
             speaker = entities.get(spec.entity_id or "")
             copy_cn = ""
-            if spec.kind in (AudioKind.dialogue, AudioKind.narration):
+            if spec.kind == AudioKind.dialogue:
                 voice_id = params.get("voice_asset_key") or params.get("voice_id")
                 instruct = params.get("style_prompt") or params.get("instruct")
                 copy = format_speech(
@@ -723,14 +736,14 @@ def _url_by_id(assets: dict[str, Asset], asset_id: str | None) -> str | None:
 # ── 导出 ──────────────────────────────────────────────────────────────────────
 
 def to_srt(handoff: dict[str, Any]) -> str:
-    """字幕。对白与旁白按绝对时间码排。
+    """电影字幕。只排对白；小说旁白只出现在有声书。
 
     估算时长的行照出不误 —— 但整份文件开头不加任何说明性文字：
     SRT 里多一行非字幕内容，播放器会把它当第一句台词显示出来。
     """
     lines: list[dict[str, Any]] = []
     for track in as_items(handoff, "tracks"):
-        if track["id"] not in ("dialogue", "narration"):
+        if track["id"] != "dialogue":
             continue
         for clip in track["clips"]:
             text = (clip.get("copy") or "").split("\n")[0].strip()

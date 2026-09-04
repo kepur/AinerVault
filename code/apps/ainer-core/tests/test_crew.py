@@ -337,13 +337,20 @@ class TestMotionEnglish:
     def test_schema_asks_for_both(self):
         from app.pipelines.crew_sheets import MOTION_SCHEMA
         req = set(MOTION_SCHEMA["required"])
-        for k in ("start_frame", "camera_move", "deltas"):
+        for k in ("start_frame", "camera_move", "subject_move",
+                  "secondary_motion", "physics_constraints", "lighting_change",
+                  "facial_change", "continuity_constraints", "pacing", "deltas"):
             assert k in req and f"{k}_en" in req, k
 
     def test_missing_english_is_reported(self):
-        import inspect
+        from app.pipelines.crew_sheets import _motion_issues
 
-        from app.pipelines.crew_sheets import generate_motion
+        issues = _motion_issues({})
+        assert any("_en" in x for x in issues)
+        assert "缺英文起幅或落幅" in issues
 
-        src = inspect.getsource(generate_motion)
-        assert "没有英文运动描述" in src
+    def test_motion_is_a_physical_chain_not_two_adjectives(self):
+        from app.pipelines.crew_sheets import MOTION_SYSTEM
+
+        for phrase in ("因果触发", "重心转移", "次级反应", "identity drift"):
+            assert phrase in MOTION_SYSTEM

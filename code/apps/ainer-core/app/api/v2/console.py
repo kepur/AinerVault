@@ -28,10 +28,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import (
-    AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet, DocStatus, FrameRole,
-    FrameSpec, Novel, ScriptBlock, ScriptDoc, Shot, ShotMotion, ShotPerformance,
-    ShotPlan, TranslationBlock, VoiceCasting, WorldEntity, WorldLexicon,
-    WorldTransform,
+    TRANSLATABLE_TYPES, AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet,
+    DocMode, DocStatus, FrameRole, FrameSpec, Novel, ScriptBlock, ScriptDoc,
+    Shot, ShotMotion, ShotPerformance, ShotPlan, TranslationBlock, VoiceCasting,
+    WorldEntity, WorldLexicon, WorldTransform,
 )
 
 router = APIRouter(prefix="/api/v2", tags=["console"])
@@ -181,10 +181,13 @@ def _novel_card(db: Session, novel: Novel) -> dict[str, Any]:
     ch_ids = select(Chapter.id).where(Chapter.novel_id == novel.id)
     scripted = db.execute(
         select(func.count(func.distinct(ScriptDoc.chapter_id)))
-        .where(ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+        .where(ScriptDoc.chapter_id.in_(ch_ids),
+               ScriptDoc.doc_mode == DocMode.screenplay,
+               ScriptDoc.status == DocStatus.active)
     ).scalar() or 0
     doc_ids = select(ScriptDoc.id).where(
-        ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.status == DocStatus.active)
+        ScriptDoc.chapter_id.in_(ch_ids), ScriptDoc.doc_mode == DocMode.screenplay,
+        ScriptDoc.status == DocStatus.active)
     planned = db.execute(
         select(func.count(func.distinct(ShotPlan.script_doc_id)))
         .where(ShotPlan.script_doc_id.in_(doc_ids))
@@ -231,33 +234,64 @@ def console(limit: int = Query(50, ge=1, le=200),
 # ── 章节级 ────────────────────────────────────────────────────────────────────
 
 def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
-    """一章从原文走到成品要经过的每一步。
+    """一章的真实生产依赖链。
 
-    顺序不是随便排的，是**真实的依赖**：没有剧本就没有分镜，
-    没有分镜就没有帧，没有首帧就派生不出尾帧，
-    没有真实音频就定不下镜头长度。
+    这里刻意不允许「先画几张再说」：首帧若早于调度、制作单与
+    物理运动，出图模型就只能自己猜站位、灯光、衣着与落幅；后面再补
+    提示词也已经晚了。
     """
+    prose_doc = db.execute(
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
+        )
+    ).scalars().first()
     doc = db.execute(
-        select(ScriptDoc).where(ScriptDoc.chapter_id == chapter.id,
-                                ScriptDoc.status == DocStatus.active)
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
+        )
     ).scalars().first()
 
-    blocks = tr_done = 0
-    if doc:
-        blocks = _count(db, ScriptBlock, ScriptBlock.script_doc_id == doc.id)
-        blk_ids = select(ScriptBlock.id).where(ScriptBlock.script_doc_id == doc.id)
-        tr_done = db.execute(
-            select(func.count(func.distinct(TranslationBlock.script_block_id)))
-            .where(TranslationBlock.script_block_id.in_(blk_ids),
-                   TranslationBlock.translated_text.isnot(None))
-        ).scalar() or 0
+    tr_total = tr_done = 0
+    transform_id = _default_transform(db, chapter.novel_id)
+    if prose_doc:
+        tr_total = _count(
+            db, ScriptBlock,
+            ScriptBlock.script_doc_id == prose_doc.id,
+            ScriptBlock.block_type.in_(list(TRANSLATABLE_TYPES)),
+        )
+        block_ids = select(ScriptBlock.id).where(
+            ScriptBlock.script_doc_id == prose_doc.id,
+            ScriptBlock.block_type.in_(list(TRANSLATABLE_TYPES)),
+        )
+        if transform_id:
+            tr_done = db.execute(
+                select(func.count(func.distinct(TranslationBlock.script_block_id)))
+                .where(
+                    TranslationBlock.script_block_id.in_(block_ids),
+                    TranslationBlock.transform_id == transform_id,
+                    TranslationBlock.translated_text.isnot(None),
+                    TranslationBlock.locked.is_(True),
+                )
+            ).scalar() or 0
+
+    wrong_projection = bool(
+        doc is not None and transform_id
+        and (doc.generator_meta or {}).get("transform_id") != transform_id
+    )
+    production_doc = None if wrong_projection else doc
 
     plan = db.execute(
-        select(ShotPlan).where(ShotPlan.script_doc_id == (doc.id if doc else ""))
+        select(ShotPlan).where(
+            ShotPlan.script_doc_id == (production_doc.id if production_doc else "")
+        )
         .order_by(ShotPlan.version.desc())
-    ).scalars().first() if doc else None
+    ).scalars().first() if production_doc else None
 
-    shots = perf = crew = motion = 0
+    shots = perf = crew = motion = videos = 0
     first_n = last_n = 0
     au_total = au_done = 0
     if plan:
@@ -265,13 +299,42 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
             select(Shot.id).where(Shot.shot_plan_id == plan.id)).scalars())
         shots = len(shot_rows)
         if shot_rows:
-            perf = db.execute(
-                select(func.count(func.distinct(ShotPerformance.shot_id)))
-                .where(ShotPerformance.shot_id.in_(shot_rows))).scalar() or 0
-            crew = db.execute(
-                select(func.count(func.distinct(CrewSheet.shot_id)))
-                .where(CrewSheet.shot_id.in_(shot_rows))).scalar() or 0
-            motion = _count(db, ShotMotion, ShotMotion.shot_id.in_(shot_rows))
+            staged_ids = set(db.execute(
+                select(ShotPerformance.shot_id)
+                .where(ShotPerformance.shot_id.in_(shot_rows)).distinct()
+            ).scalars())
+            character_shots = {
+                frame.shot_id for frame in db.execute(
+                    select(FrameSpec).where(
+                        FrameSpec.shot_id.in_(shot_rows),
+                        FrameSpec.role == FrameRole.first,
+                    )
+                ).scalars()
+                if frame.entity_ids_json
+            }
+            # 纯环境空镜没有人物站位可抽，不应因此永远卡在调度阶段。
+            perf = sum(1 for sid in shot_rows
+                       if sid not in character_shots or sid in staged_ids)
+            from app.worldview.crew import CREW
+
+            required_roles = {c.role for c in CREW}
+            by_shot: dict[str, set[str]] = {}
+            for sheet in db.execute(
+                select(CrewSheet).where(CrewSheet.shot_id.in_(shot_rows))
+            ).scalars():
+                if (sheet.role in required_roles and sheet.prompt_en
+                        and not sheet.missing_json and not sheet.rejected_json):
+                    by_shot.setdefault(sheet.shot_id, set()).add(sheet.role)
+            crew = sum(1 for sid in shot_rows
+                       if by_shot.get(sid, set()) >= required_roles)
+
+            motions = list(db.execute(
+                select(ShotMotion).where(ShotMotion.shot_id.in_(shot_rows))
+            ).scalars())
+            motion = sum(1 for m in motions
+                         if m.motion_prompt_en and len(m.deltas_en_json or []) >= 2
+                         and m.start_frame and m.end_frame
+                         and m.start_frame.strip() != m.end_frame.strip())
             first_n = _count(db, FrameSpec, FrameSpec.shot_id.in_(shot_rows),
                              FrameSpec.role == FrameRole.first,
                              FrameSpec.asset_id.isnot(None))
@@ -279,39 +342,61 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
                             FrameSpec.role == FrameRole.last,
                             FrameSpec.asset_id.isnot(None))
             au_total = _count(db, AudioSpec, AudioSpec.shot_id.in_(shot_rows),
-                              AudioSpec.kind.in_([AudioKind.dialogue,
-                                                  AudioKind.narration]))
+                              AudioSpec.kind == AudioKind.dialogue)
             au_done = _count(db, AudioSpec, AudioSpec.shot_id.in_(shot_rows),
-                             AudioSpec.kind.in_([AudioKind.dialogue,
-                                                 AudioKind.narration]),
+                             AudioSpec.kind == AudioKind.dialogue,
                              AudioSpec.asset_id.isnot(None))
+            videos = _count(db, Shot, Shot.id.in_(shot_rows),
+                            Shot.video_asset_id.isnot(None))
 
-    no_doc = "还没有剧本" if doc is None else None
+    no_prose = "还没有译本分块" if prose_doc is None else None
+    no_locked_translation = (
+        f"译本还没锁定完（{tr_done}/{tr_total}）"
+        if transform_id and prose_doc is not None and tr_done < tr_total else None
+    )
+    no_doc = (
+        "当前是原文或其他映射的旧剧本，需从当前已锁定译本重生成"
+        if wrong_projection else "还没有目标世界剧本" if doc is None else None
+    )
     no_plan = "还没有分镜" if plan is None else None
+    no_staging = (f"调度与表演还没完成（{perf}/{shots}）"
+                  if plan is not None and perf < shots else None)
+    no_crew = (f"八工种制作单还没逐镜齐全（{crew}/{shots}）"
+               if plan is not None and crew < shots else None)
+    no_motion = (f"可执行的物理运动还没齐（{motion}/{shots}）"
+                 if plan is not None and motion < shots else None)
     no_first = ("首帧还没出" if plan is not None and first_n < shots else None)
+    no_last = ("尾帧还没出" if plan is not None and last_n < shots else None)
 
     return [
-        _stage("script", "剧本转换", 1 if doc else 0, 1, page="script",
-               hint="分场 · 时间 · 天气 · 氛围 · 对白"),
-        _stage("prose", "译本", tr_done, blocks, page="prose",
-               hint="分块 → 装置 → 翻译 → 审核 → 回译 → 锁定",
-               blocked_by=no_doc),
+        _stage("prose", "译本锁定", tr_done, max(tr_total, 1), page="prose",
+               hint="原著 → 世界观 → 翻译 → 审核 → 回译 → 锁定"),
+        _stage("script", "目标世界剧本", 1 if production_doc else 0, 1, page="script",
+               hint="只从已锁定译本分场：时间 · 地点 · 对白 · 动作",
+               blocked_by=no_prose or no_locked_translation),
         _stage("shots", "分镜", shots, max(shots, 1), page="script",
                hint="把场拆成镜，定景别与时长", blocked_by=no_doc),
         _stage("staging", "调度与表演", perf, shots, page="staging",
                hint="站位 · 朝向 · 视线 · 表情 · 动作", blocked_by=no_plan),
         _stage("crew", "八工种制作单", crew, shots, page="crew",
                hint="摄影 灯光 美术 服化 视效 调色 剪辑 声音",
-               blocked_by=no_plan),
-        _stage("motion", "运动描述", motion, shots, page="crew",
-               hint="首尾之间变了什么 —— 尾帧与视频都读它", blocked_by=no_plan),
+               blocked_by=no_plan or no_staging),
+        _stage("motion", "运动与物理连续", motion, shots, page="crew",
+               hint="因果动作 · 重心接触 · 惯性 · 光影 · 微表情 · 落幅",
+               blocked_by=no_plan or no_staging or no_crew),
         _stage("first_frame", "首帧", first_n, shots, page="prompts",
                hint="带身份锚的走编辑模型，锚当底图，脸才保得住",
-               blocked_by=no_plan),
+               blocked_by=no_plan or no_staging or no_crew or no_motion),
         _stage("last_frame", "尾帧", last_n, shots, page="prompts",
-               hint="从首帧派生，只改「变了什么」", blocked_by=no_plan or no_first),
-        _stage("audio", "配音", au_done, au_total, page="audio",
-               hint="真实时长决定镜头长度，不要按字数估", blocked_by=no_plan),
+               hint="从首帧派生，只改可见物理变化",
+               blocked_by=no_plan or no_motion or no_first),
+        _stage("audio", "对白配音", (au_done if au_total else (1 if plan else 0)),
+               max(au_total, 1), page="audio",
+               hint="电影只配对白；完整旁白只在有声书。TTS 真实时长决定对白镜头",
+               blocked_by=no_plan),
+        _stage("video", "动态镜头", videos, shots, page="cut",
+               hint="每镜都读首帧、尾帧与英文物理运动；缺一项就不花额度",
+               blocked_by=no_plan or no_motion or no_last),
         _stage("handoff", "成片交付 / 手动模式", 0, 0, page="handoff",
                hint="轨道时间轴 · 中英双份提示词 · 字幕与剪辑标记表",
                blocked_by=no_plan, countable=False),
@@ -394,6 +479,84 @@ def chapter_desk(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     return row
 
 
+@router.get("/chapters/{chapter_id}/products")
+def chapter_products(chapter_id: str, db: Session = Depends(get_db)) -> dict:
+    """该章节可直接试听／试看的成品与当前品质等级。"""
+    from app.models import Asset, AssetKind
+    from app.pipelines import audiobook, cut
+    from app.pipelines.base import PipelineError
+
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    audiobook_data: dict[str, Any] = {
+        "segments": 0, "generated": 0, "duration_ms": 0, "output": None,
+    }
+    try:
+        timeline = audiobook.build_timeline(db, chapter)
+        audiobook_data.update({
+            "segments": timeline["stats"]["segments"],
+            "generated": timeline["stats"]["generated"],
+            "duration_ms": timeline["total_duration_ms"],
+            "output": timeline.get("final_output"),
+        })
+    except PipelineError:
+        pass
+
+    doc = db.execute(
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
+        )
+    ).scalars().first()
+    plan = db.execute(
+        select(ShotPlan).where(
+            ShotPlan.script_doc_id == (doc.id if doc else ""),
+            ShotPlan.status == DocStatus.active,
+        ).order_by(ShotPlan.version.desc())
+    ).scalars().first() if doc else None
+
+    film_data: dict[str, Any] = {
+        "shot_plan_id": plan.id if plan else None,
+        "quality": None, "output": None,
+    }
+    if plan:
+        film_data["quality"] = cut.build_timeline(db, plan).get("quality")
+
+    # 成品是内容寻址的 Asset；取这一章最近导出的一份。
+    for asset in db.execute(
+        select(Asset).where(
+            Asset.novel_id == chapter.novel_id,
+            Asset.kind.in_([AssetKind.audio, AssetKind.video]),
+        ).order_by(Asset.created_at.desc())
+    ).scalars():
+        meta = asset.meta_json or {}
+        if meta.get("chapter_id") != chapter.id:
+            continue
+        purpose = meta.get("purpose")
+        item = {
+            "asset_id": asset.id, "url": asset.url, "bytes": asset.bytes,
+            "duration_ms": meta.get("duration_ms"),
+            "grade": meta.get("grade"),
+            "created_at": asset.created_at.isoformat() if asset.created_at else None,
+        }
+        if purpose == "audiobook_final" and not audiobook_data["output"]:
+            audiobook_data["output"] = item
+        elif purpose == "final_cut" and not film_data["output"]:
+            film_data["output"] = item
+        if audiobook_data["output"] and film_data["output"]:
+            break
+
+    return {
+        "chapter": {"id": chapter.id, "title": chapter.title,
+                    "order_no": chapter.order_no},
+        "audiobook": audiobook_data,
+        "film": film_data,
+    }
+
+
 # ── 资源库 ────────────────────────────────────────────────────────────────────
 #
 # 一本小说跑下来会攒下几百个文件：身份锚、素材参考图、每镜的首尾帧、
@@ -408,6 +571,8 @@ def chapter_desk(chapter_id: str, db: Session = Depends(get_db)) -> dict:
 #: 用途 → 中文与排序。顺序照「从整本到单镜」排 ——
 #: 找东西时人先想「是哪本书的什么」，再想「第几镜」
 _USE_ORDER: tuple[tuple[str, str], ...] = (
+    ("audiobook_final", "有声书成品"),
+    ("final_cut", "章节成片／审片"),
     ("identity", "身份锚"),
     ("asset_ref", "素材参考图"),
     ("first_frame", "首帧"),
@@ -443,6 +608,21 @@ def _media_index(db: Session, novel_id: str) -> dict[str, dict[str, Any]]:
         if not aid:
             return
         idx.setdefault(aid, {"use": use, "label": label, **extra})
+
+    # 整章成品不挂在某个镜头上，它的引用关系在 Asset.meta_json。
+    # 不先标记的话，真正的成片反而会掉进「未被引用」桶里。
+    for asset in db.execute(
+        select(Asset).where(Asset.novel_id == novel_id)
+    ).scalars():
+        meta = asset.meta_json or {}
+        purpose = str(meta.get("purpose") or "")
+        if purpose == "audiobook_final":
+            mark(asset.id, purpose, "章节有声书成品",
+                 chapter_id=meta.get("chapter_id"))
+        elif purpose == "final_cut":
+            grade = "最终成片" if meta.get("grade") == "final" else "审片预览"
+            mark(asset.id, purpose, f"章节{grade}",
+                 chapter_id=meta.get("chapter_id"), grade=meta.get("grade"))
 
     ent_names = {
         e.id: e.display_name

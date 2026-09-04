@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.ids import new_id
 from app.models import (
     NameType,
-    Chapter, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
+    Chapter, DocMode, DocStatus, EntityKind, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.pipelines.base import PipelineError, chat_json, as_text, as_items
 from app.worldview import appellation_rules as ar
@@ -301,7 +301,9 @@ def _blocks_text(db: Session, chapter: Chapter, limit: int = 8000) -> tuple[str,
     """
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:

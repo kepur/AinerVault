@@ -1,6 +1,7 @@
 """剧本层：ScriptDoc → Scene → Block。
 
-主干决策：ScriptDoc 语言无关，只算一次；翻译是 Block 的语言层（见 translation.py）。
+主干决策：prose 保存译本分块；screenplay 是从完整锁定译本生成的电影化投影。
+两者各自只有一个 active 版本，但必须能够同时存在。
 """
 from __future__ import annotations
 

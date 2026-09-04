@@ -720,6 +720,10 @@ const Library = {
             Library.bar(`已译 ${h(k)}`, v, prog.chapters)).join("")}
           ${Library.bar("已分镜", prog.shot_planned, prog.chapters)}
         </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn pri" onclick="Library.jumpAdd()">+ 逐章录入（章节标题 + 正文）</button>
+          <span class="sub" style="font-size:12px;color:var(--muted)">连载或一章一章导入用这个</span>
+        </div>
       </div>` : ""}
 
       ${cur ? `
@@ -765,8 +769,8 @@ const Library = {
         <div id="imp-out" style="margin-top:11px"></div>
       </div>
 
-      <div class="card">
-        <h2>加一章 <span class="sub mono" style="color:var(--muted)">逐章录入</span></h2>
+      <div class="card" id="one-chapter-card" style="border-color:var(--accent)">
+        <h2>+ 逐章录入 <span class="sub mono" style="color:var(--muted)">章节标题 + 正文</span></h2>
         <p class="hint">上面的整本 txt 是给「已经有全本」的情况。
           <b>连载中、或者一章一章写的，用这里</b> ——
           原来批量入口是唯一的入口，只有一章要加的人只能去拼一个假的整本再拖进来。<br>
@@ -774,8 +778,8 @@ const Library = {
         <div class="grid g2">
           <div><label>章号（可留空）</label>
             <input id="one-order" type="number" min="1" placeholder="留空 = 接着排"></div>
-          <div><label>标题</label>
-            <input id="one-title" placeholder="第三章 · 夜访"></div>
+          <div><label>章节标题（可手动输入）</label>
+            <input id="one-title" placeholder="例：第三章 · 夜访"></div>
         </div>
         <label style="margin-top:8px">正文</label>
         <textarea id="one-body" rows="9" placeholder="把这一章的正文粘进来"></textarea>
@@ -839,7 +843,11 @@ const Library = {
               <td class="mono">${c.word_count}</td>
               <td><span class="tag ${st.script==='active'?'t-ok':'t-mute'}">${h(st.script||"none")}</span></td>
               <td>${langs || '<span class="tag t-mute">未译</span>'}</td>
-              <td><button class="btn sm" onclick="Library.open('${c.id}')">打开译本 →</button></td>
+              <td><div class="row" style="gap:4px;flex-wrap:nowrap">
+                <button class="btn sm" onclick="goto('audio','${cur.id}','${c.id}')">🎧 有声</button>
+                <button class="btn sm" onclick="goto('cut','${cur.id}','${c.id}')">🎬 视频</button>
+                <button class="btn sm" onclick="goto('chapter','${cur.id}','${c.id}')">工作台</button>
+              </div></td>
             </tr>`}).join("")
           : `<tr><td colspan="7" class="empty">${this.q?"没有匹配的章节":"还没有章节"}</td></tr>`}
         </tbody></table></div>
@@ -951,6 +959,11 @@ const Library = {
   resize(n) { this.size = +n; this.page = 0; App.refresh(); },
   search() { this.q = ($("#ch-q").value||"").trim(); this.page = 0; App.refresh(); },
   clearQ() { this.q = ""; this.page = 0; App.refresh(); },
+  jumpAdd() {
+    const card = document.getElementById("one-chapter-card");
+    if (card) card.scrollIntoView({behavior:"smooth", block:"start"});
+    setTimeout(()=>{ const title=document.getElementById("one-title"); if(title) title.focus(); }, 350);
+  },
 
   pick(id) {
     State.novelId = id; State.chapterId = ""; State.transformId = "";
@@ -1361,6 +1374,7 @@ const Model = {
   async render(v) {
     if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
       请先在「书架」打开一个章节</div></div>`; return; }
+    await App.ensureTransform();
     const [ch, wm] = await Promise.all([
       api("GET", `/chapters/${State.chapterId}`),
       api("GET", `/chapters/${State.chapterId}/world-model`).catch(()=>null),
@@ -1456,6 +1470,7 @@ const Script = {
   async render(v) {
     if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
       请先在「书架」打开一个章节</div></div>`; return; }
+    await App.ensureTransform();
     const [ch, doc] = await Promise.all([
       api("GET", `/chapters/${State.chapterId}`),
       api("GET", `/chapters/${State.chapterId}/script`).catch(()=>null),
@@ -1464,8 +1479,9 @@ const Script = {
       <div class="card">
         <h2>${h(ch.title||"")} <span class="sub mono" style="color:var(--muted)">
           ${ch.word_count} 字</span></h2>
-        <p class="hint">把章节拆成场景与内容块，带时间、地点、天气、氛围。
-          与译本分块的区别：译本是纯规则按段落切，剧本要 LLM 理解场景边界与说话人。</p>
+        <p class="hint">把<b>当前世界观映射下已审核锁定的译本</b>拆成电影场景与内容块，
+          带时间、地点、天气、氛围、对白和动作。这一步不再回头读原著；
+          否则译好的人名、称谓与世界规则会在影视线里被换回去。</p>
         <div class="row">
           <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
                         font-size:12.5px;color:var(--muted)">切分粒度</label>
@@ -1477,7 +1493,8 @@ const Script = {
           <label style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);
                         font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px">
             <input type="checkbox" id="sc-keep" checked style="width:auto"> 保留人工编辑</label>
-          <button class="btn pri" onclick="Script.gen(this)">剧本转换</button>
+          <button class="btn pri" onclick="Script.gen(this)" ${State.transformId?"":"disabled"}>
+            从已锁定译本生成电影剧本</button>
           <button class="btn" onclick="Script.gen(this,true)"
             style="border-color:var(--warn);color:var(--warn)">重新生成（消耗 Token）</button>
         </div>
@@ -1489,6 +1506,9 @@ const Script = {
         <div class="step done"><div class="k">内容块</div>
           <div class="v">${doc.scenes.reduce((n,s)=>n+(s.blocks||[]).length,0)}</div></div>
         <div class="step"><div class="k">状态</div><div class="v">${h(doc.status||"")}</div></div>
+        <div class="step ${doc.generator_meta&&doc.generator_meta.production_source==="locked_translation"?'done':'blocked'}">
+          <div class="k">生产来源</div><div class="v">${
+            doc.generator_meta&&doc.generator_meta.production_source==="locked_translation"?'已锁定译本':'原文旧剧本'}</div></div>
       </div>
       ${doc.scenes.map(sc=>`<div class="card">
         <h2>${h(sc.title||`场景 ${sc.order_no}`)}</h2>
@@ -1516,6 +1536,7 @@ const Script = {
       const r = await api("POST", `/chapters/${State.chapterId}/script:generate`, {
         scene_granularity: $("#sc-gran").value,
         keep_human_edits: $("#sc-keep").checked,
+        transform_id: State.transformId || null,
       });
       logOk(`剧本 v${r.version}：场景 ${(r.scenes||[]).length}　`
             + `块 ${(r.scenes||[]).reduce((n,s)=>n+(s.blocks||[]).length,0)}`);
@@ -1797,7 +1818,9 @@ const Prose = {
 
 // ───────────────────────── 有声书 ─────────────────────────
 const Audio = {
+  player: null, files: [], playing: false, index: 0,
   async render(v) {
+    this.stop();
     if (!State.chapterId) { v.innerHTML = `<div class="card"><div class="empty">
       请先在「书架」打开一个章节</div></div>`; return; }
     await App.ensureTransform();
@@ -1811,9 +1834,22 @@ const Audio = {
         <div class="row">
           <button class="btn" onclick="Audio.compile(this)">1 编译音频规格</button>
           <button class="btn pri" onclick="Audio.gen(this)">2 生成 TTS</button>
+          <button class="btn" id="ab-play" onclick="Audio.toggle()"
+            ${tl&&tl.stats&&tl.stats.generated?"":"disabled"}>▶ 连续试听整章</button>
+          <button class="btn" onclick="Audio.renderFinal(this)"
+            ${tl&&tl.stats&&tl.stats.missing===0&&tl.stats.segments?"":"disabled"}>
+            导出整章 .m4a</button>
           <button class="btn" onclick="App.refresh()">刷新时间轴</button>
         </div>
+        <div id="ab-now" class="sub" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
       </div>
+      ${tl&&tl.final_output ? `<div class="card">
+        <h2>整章成品 <span class="tag t-ok">可直接播放</span></h2>
+        <audio controls preload="metadata" src="${tl.final_output.url}" style="width:100%"></audio>
+        <div class="row" style="margin-top:7px">
+          <a class="btn" href="${tl.final_output.url}" target="_blank">打开／下载 M4A</a>
+        </div>
+      </div>` : ""}
       ${tl && tl.segments ? `<div class="card">
         <h2>时间轴 <span class="sub mono" style="color:var(--muted)">
           ${tl.stats.generated}/${tl.stats.segments} 段 ·
@@ -1834,6 +1870,7 @@ const Audio = {
       </div>` : `<div class="card"><div class="empty">还没有音频规格，先执行编译</div></div>`}
       <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>
     `;
+    this.files = (tl&&tl.segments||[]).filter(s=>s.file);
     const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
   },
   async compile(btn) {
@@ -1860,6 +1897,34 @@ const Audio = {
       }
       App.refresh();
     }, "生成中");
+  },
+  toggle() { this.playing ? this.stop() : this.playAll(); },
+  playAll() {
+    if (!this.files.length) return logErr("还没有可播放的音频段");
+    this.stop(); this.playing = true; this.index = 0; this.playNext();
+  },
+  playNext() {
+    if (!this.playing || this.index >= this.files.length) { this.stop(); return; }
+    const seg = this.files[this.index];
+    this.player = new window.Audio(seg.file);
+    this.player.onended = ()=>{ this.index += 1; this.playNext(); };
+    this.player.onerror = ()=>{ this.index += 1; this.playNext(); };
+    const now = document.getElementById("ab-now");
+    if (now) now.textContent = `正在播放 ${this.index+1}/${this.files.length}　${seg.speaker?seg.speaker+"：":""}${(seg.text||"").slice(0,70)}`;
+    const btn = document.getElementById("ab-play"); if (btn) btn.textContent = "■ 停止连续试听";
+    this.player.play().catch(e=>{ logErr(`播放失败：${e.message}`); this.stop(); });
+  },
+  stop() {
+    if (this.player) { this.player.pause(); this.player = null; }
+    this.playing = false;
+    const btn = document.getElementById("ab-play"); if (btn) btn.textContent = "▶ 连续试听整章";
+  },
+  async renderFinal(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/chapters/${State.chapterId}/audiobook:render`, {});
+      logOk(`整章有声书已导出：${r.segments} 段　${(r.bytes/1048576).toFixed(1)} MB`);
+      window.open(r.url, "_blank"); App.refresh();
+    }, "正在合成整章 M4A");
   },
 };
 
@@ -3038,7 +3103,7 @@ const Casting = {
 //
 // 界面上最要紧的两件事：复制要一下就成，缺什么要说在最前面。
 const TRACK_ICO = {frame_first:"🖼", frame_last:"🖼", video:"🎞",
-  dialogue:"💬", narration:"📖", sfx:"🔊", bgm:"🎵", ambience:"🌫"};
+  dialogue:"💬", sfx:"🔊", bgm:"🎵", ambience:"🌫"};
 
 const Handoff = {
   data: null,
@@ -3340,7 +3405,7 @@ const Console = {
       <div class="card">
         <h2>控制台 <span class="sub mono" style="color:var(--muted)">${d.count} 部</span></h2>
         <p class="hint">一部小说走完全程要备两类东西：<b>整本共享的</b>（人物长什么样、
-          名物怎么译、谁是什么嗓子）和<b>逐章推进的</b>（剧本 → 译本 → 分镜 → 帧 → 声音）。<br>
+          名物怎么译、谁是什么嗓子）和<b>逐章推进的</b>（译本 → 剧本 → 分镜 → 动作与制作单 → 帧 → 声音与视频 → 成片）。<br>
           前者放在章节里做会出事：每章各定一套，第二十章的人就不是第一章那个人了。
           所以下面先列整本的六步，进到章里才是那十步。</p>
         <div class="row"><button class="btn" onclick="goto('library')">书架 · 导入与删除</button>
@@ -3376,7 +3441,7 @@ const Console = {
       ${rows.length ? `<table class="tbl" style="margin-top:10px"><thead><tr>
         <th style="width:38px">章</th><th>标题</th>
         <th style="width:120px">进度</th><th style="width:150px">下一步</th>
-        <th style="width:170px"></th></tr></thead><tbody>
+        <th style="width:245px"></th></tr></thead><tbody>
         ${rows.map(c => `<tr>
           <td class="mono">${c.order_no}</td>
           <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -3391,8 +3456,10 @@ const Console = {
             ? h(c.next.name)+` <span class="mono" style="color:var(--muted)">${
                 c.next.total?c.next.done+"/"+c.next.total:""}</span>`
             : `<span class="tag t-ok">走完了</span>`}</td>
-          <td><button class="btn pri" style="padding:3px 8px;font-size:12px"
-              onclick="goto('cut','${n.id}','${c.id}','${tf}')">🎬 成品</button>
+          <td><button class="btn" style="padding:3px 8px;font-size:12px"
+              onclick="goto('audio','${n.id}','${c.id}','${tf}')">🎧 有声</button>
+            <button class="btn pri" style="padding:3px 8px;font-size:12px"
+              onclick="goto('cut','${n.id}','${c.id}','${tf}')">🎬 成片</button>
             <button class="btn" style="padding:3px 8px;font-size:12px"
               onclick="goto('chapter','${n.id}','${c.id}','${tf}')">工作台</button></td>
         </tr>`).join("")}</tbody></table>
@@ -3441,7 +3508,7 @@ const NovelDesk = {
           第一二章还没转剧本。点进去看这一章的十步。</p>
         <table class="tbl"><thead><tr>
           <th style="width:52px">章</th><th>标题</th>
-          <th style="width:96px">阶段</th><th>下一步</th><th style="width:78px"></th>
+          <th style="width:96px">阶段</th><th>下一步</th><th style="width:245px"></th>
         </tr></thead><tbody>
         ${ch.items.map(c => `<tr>
           <td class="mono">${c.order_no}</td>
@@ -3458,7 +3525,11 @@ const NovelDesk = {
                 c.next.total ? c.next.done + "/" + c.next.total : ""}</span>`
             : `<span class="tag t-ok">走完了</span>`}</td>
           <td><button class="btn" style="padding:3px 9px;font-size:12px"
-            onclick="goto('chapter','${d.novel.id}','${c.id}','${d.novel.transform_id||""}')">进入</button></td>
+            onclick="goto('audio','${d.novel.id}','${c.id}','${d.novel.transform_id||""}')">🎧 有声</button>
+            <button class="btn pri" style="padding:3px 9px;font-size:12px"
+            onclick="goto('cut','${d.novel.id}','${c.id}','${d.novel.transform_id||""}')">🎬 成片</button>
+            <button class="btn" style="padding:3px 9px;font-size:12px"
+            onclick="goto('chapter','${d.novel.id}','${c.id}','${d.novel.transform_id||""}')">工作台</button></td>
         </tr>`).join("")}
         </tbody></table>
         ${ch.total > ch.limit ? `<div class="row" style="margin-top:9px">
@@ -3478,7 +3549,10 @@ const NovelDesk = {
 const ChapterDesk = {
   async render(v) {
     if (!State.chapterId) { State.page = "console"; State.save(); return App.refresh(); }
-    const d = await api("GET", `/chapters/${State.chapterId}/desk`);
+    const [d, products] = await Promise.all([
+      api("GET", `/chapters/${State.chapterId}/desk`),
+      api("GET", `/chapters/${State.chapterId}/products`).catch(()=>null),
+    ]);
     const nx = d.next;
     v.innerHTML = `
       <div class="card">
@@ -3490,19 +3564,50 @@ const ChapterDesk = {
           <span style="color:var(--muted)"> › </span>${h(d.title || "第" + d.order_no + "章")}
           <span class="sub mono" style="color:var(--muted)">${d.words || 0} 字 ·
             ${d.done_stages}/${d.total_stages} 步</span></h2>
-        <p class="hint">十步按<b>真实的依赖</b>排：没有剧本就没有分镜，没有分镜就没有帧，
-          没有首帧就派生不出尾帧，没有真实配音就定不下镜头长度。<br>
+        <p class="hint">十步按<b>真实的依赖</b>排：已锁定译本 → 目标世界剧本 → 分镜 →
+          调度／八工种／物理运动 → 首尾帧 → 配音 → 动态镜头。<br>
           <b>灰掉的不是没做，是还轮不到</b> —— 鼠标停上去会说是谁挡着。</p>
         ${nx ? `<div class="row" style="align-items:center">
           <span style="font-size:13px">现在该做：<b style="color:var(--ink)">${h(nx.name)}</b>
             <span class="mono" style="color:var(--muted)">${
               nx.total ? nx.done + "/" + nx.total : ""}</span></span>
           <button class="btn pri" onclick="goto('${nx.page}','${
-            d.novel ? d.novel.id : ""}','${d.id}','${d.novel ? (d.novel.transform_id||"") : ""}')">去做 →</button>
-          <button class="btn" onclick="goto('cut','${d.novel ? d.novel.id : ""}','${d.id}')"
-            >🎬 剪辑台 · 播一遍看看</button></div>`
+            d.novel ? d.novel.id : ""}','${d.id}','${d.novel ? (d.novel.transform_id||"") : ""}')">去做 →</button></div>`
         : `<span class="tag t-ok">这一章十步都走完了</span>`}
+        <div class="row" style="margin-top:10px">
+          <button class="btn" onclick="goto('audio','${d.novel ? d.novel.id : ""}','${d.id}')">
+            🎧 有声小说 · 连续试听</button>
+          <button class="btn pri" onclick="goto('cut','${d.novel ? d.novel.id : ""}','${d.id}')">
+            🎬 电影剪辑台 · 试看成片</button>
+          <button class="btn" onclick="goto('handoff','${d.novel ? d.novel.id : ""}','${d.id}')">
+            📋 中英手动制作包</button>
+        </div>
       </div>
+
+      ${products ? `<div class="card">
+        <h2>本章成品</h2>
+        <div class="grid g2">
+          <div class="prop"><b>🎧 有声小说</b>
+            <div class="sub mono" style="margin-top:5px;color:var(--muted)">${
+              products.audiobook.generated}/${products.audiobook.segments} 段 · ${
+              CutRoom.fmt(products.audiobook.duration_ms||0)}</div>
+            ${products.audiobook.output
+              ? `<audio controls preload="metadata" src="${products.audiobook.output.url}"
+                   style="width:100%;margin-top:8px"></audio>`
+              : `<div class="eff">还没有导出整章 M4A，可进有声书页连续试听</div>`}
+          </div>
+          <div class="prop"><b>🎬 影片</b>
+            <div style="margin-top:5px">${products.film.quality
+              ? `<span class="tag ${products.film.quality.production_ready?'t-ok':'t-warn'}">${
+                  products.film.quality.production_ready?'最终成片就绪':'审片预览'}</span>`
+              : `<span class="tag t-mute">还没有分镜</span>`}</div>
+            ${products.film.output
+              ? `<video controls preload="metadata" src="${products.film.output.url}"
+                   style="width:100%;max-height:180px;background:#000;margin-top:8px"></video>`
+              : `<div class="eff">还没有导出 MP4，进剪辑台可实时试看</div>`}
+          </div>
+        </div>
+      </div>` : ""}
 
       <div class="card">
         <h2>本章的十步</h2>
@@ -3635,7 +3740,7 @@ const MediaLib = {
 // 拿其中任何一条当基准，缺了它整条时间线就停摆。
 const CutRoom = {
   tl: null, t: 0, playing: false, raf: 0, last: 0,
-  mute: {}, voiceover: false,
+  mute: {},
 
   async render(v) {
     if (!State.chapterId) {
@@ -3651,8 +3756,7 @@ const CutRoom = {
       return;
     }
     this.pid = pid;
-    const d = await api("GET",
-      `/shot-plans/${pid}/timeline?voiceover=${this.voiceover}`);
+    const d = await api("GET", `/shot-plans/${pid}/timeline`);
     this.tl = d; this.stop();
 
     const secs = d.duration_ms/1000;
@@ -3662,17 +3766,27 @@ const CutRoom = {
           <span class="sub mono" style="color:var(--muted)">${d.shots} 镜 ·
             ${Math.floor(secs/60)}分${Math.round(secs%60)}秒 · ${d.aspect_ratio} ·
             ${h(d.language||"")}</span></h2>
+        <div style="margin-bottom:8px"><span class="tag ${d.quality&&d.quality.production_ready?'t-ok':'t-warn'}">${
+          d.quality&&d.quality.production_ready?'最终成片就绪':'审片预览（非最终成片）'}</span>
+          ${d.quality?`<span class="sub mono" style="color:var(--muted)">
+            真视频 ${d.quality.actual_video_shots}/${d.quality.total_shots} 镜</span>`:""}</div>
         <p class="hint">${h(d.notes)}<br>
-          没出视频的镜头用<b>首尾帧交叉溶解</b>顶上 —— 静止两张图也远比黑屏有用，
-          而且一眼看得出这一镜还没出视频。</p>
+          没出视频的镜头用<b>首尾帧交叉溶解</b>仅供审片定节奏；
+          它会被明确标为预览，不再冒充电影成片。</p>
         <div class="row">
-          <label style="font-size:12px;color:var(--muted)">
-            <input type="checkbox" ${d.voiceover?"checked":""}
-              onchange="CutRoom.setVO(this.checked)"> 保留旁白（有声书式）</label>
-          <button class="btn" onclick="CutRoom.export(this)">导出成片 .mp4</button>
+          <span class="tag t-info">无旁白电影模式</span>
+          <button class="btn pri" onclick="CutRoom.genVideos(this)">生成下一批 6 镜动态视频</button>
+          <button class="btn" onclick="CutRoom.export(this)">${
+            d.quality&&d.quality.production_ready?'导出最终成片 .mp4':'导出审片预览 .mp4'}</button>
           <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.srt" target="_blank">字幕 .srt</a>
         </div>
       </div>
+
+      ${d.quality&&(d.quality.blockers||[]).length ? `<div class="card">
+        <h2>为什么还不是最终成片</h2>
+        ${(d.quality.blockers||[]).map(x=>`<div class="gap" style="margin-bottom:6px">
+          <div class="eff">${h(x)}</div></div>`).join("")}
+      </div>` : ""}
 
       <div class="card">
         <div id="cut-stage" style="position:relative;width:100%;max-width:760px;margin:0 auto;
@@ -3703,9 +3817,9 @@ const CutRoom = {
         ${this.gapList(d.gaps)}</div>` : ""}
       ${d.retimed.length ? `<div class="card">
         <h2>镜头长度被重算 <span class="tag t-warn">${d.retimed.length} 镜</span></h2>
-        <p class="hint">镜头时长本来按「对白+旁白」的真实时长回填。
-          影片投影里旁白不出现，只有旁白的镜头就失去了长度依据 ——
-          画面停在那里不动，观众会以为卡住了。这些按画面拍子重算。</p>
+        <p class="hint">有对白的镜头服从 TTS 真实时长；无对白的视觉叙事镜头
+          服从剧本信息量与 1.6–5.2 秒的可信画面拍子。超过单支视频能力的内容
+          必须拆机位，不能靠拉长静帧凑时间。</p>
         ${d.retimed.slice(0,8).map(r=>`<div class="gap" style="margin-bottom:6px">
           <div class="gh"><b style="color:var(--ink)">镜 ${r.shot}</b>
           <span class="mono" style="color:var(--muted)">${(r.from_ms/1000).toFixed(1)}s →
@@ -3847,7 +3961,7 @@ const CutRoom = {
     if (sub) {
       let line = "";
       for (const t of d.tracks) {
-        if (t.id !== "dialogue" && t.id !== "narration") continue;
+        if (t.id !== "dialogue") continue;
         const c = t.clips.find(c => ms >= c.start_ms && ms < c.start_ms + c.duration_ms);
         if (c && c.text) { line = (c.speaker ? c.speaker + "：" : "") + c.text; break; }
       }
@@ -3865,8 +3979,6 @@ const CutRoom = {
   },
 
   toggleMute(id) { this.mute[id] = !this.mute[id]; App.refresh(); },
-  setVO(on) { this.voiceover = on; App.refresh(); },
-
   fmt(ms) {
     const s = Math.max(0, ms)/1000;
     return `${String(Math.floor(s/60)).padStart(2,"0")}:${(s%60).toFixed(1).padStart(4,"0")}`;
@@ -3875,10 +3987,19 @@ const CutRoom = {
   async export(btn) {
     await run(btn, async () => {
       const r = await api("POST", `/shot-plans/${this.pid}/render`,
-                          {voiceover: this.voiceover});
-      logOk(`成片已导出：${(r.bytes/1048576).toFixed(1)} MB　${r.note}`);
+                          {final: !!(this.tl.quality&&this.tl.quality.production_ready)});
+      logOk(`${r.grade==="final"?"最终成片":"审片预览"}已导出：${
+        (r.bytes/1048576).toFixed(1)} MB　${r.note}`);
       window.open(r.url, "_blank");
     }, "导出中（逐镜编码，一章要几分钟）");
+  },
+  async genVideos(btn) {
+    await run(btn, async () => {
+      const r = await api("POST", `/shot-plans/${this.pid}/videos:generate`, {limit:6});
+      logOk(`动态视频提交 ${r.submitted} 镜，剩余 ${r.remaining} 镜`);
+      (r.skipped||[]).slice(0,12).forEach(x=>logWarn(`镜 ${x.shot}：${x.why}`));
+      App.refresh();
+    }, "提交动态镜头中");
   },
 };
 

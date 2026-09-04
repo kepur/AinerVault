@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /srv
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libpq5 curl && rm -rf /var/lib/apt/lists/*
+      libpq5 curl ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY apps/ainer-core/pyproject.toml /srv/pyproject.toml
 RUN pip install --no-cache-dir \

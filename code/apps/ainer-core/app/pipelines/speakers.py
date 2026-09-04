@@ -1,6 +1,6 @@
 """说话人归属：把剧本里的 speaker_tag 解析到稳定实体。
 
-script_build 填的 speaker_tag 是原文里的称呼（「小二」「李掌柜」「他」），
+script_build 填的 speaker_tag 是当前生产文本里的称呼（「小二」「李掌柜」「Ethan」），
 刻意不做归一化 —— 归一化交给这一步，因为需要全书实体表才判得准。
 
 不解析的后果很具体：对白绑不到角色的 voice 素材，全部落到旁白音色兜底，
@@ -22,10 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Chapter, DocStatus, ScriptBlock, ScriptDoc, WorldEntity,
+    Chapter, DocMode, DocStatus, ScriptBlock, ScriptDoc, WorldEntity,
 )
 from app.models.script import BlockType
 from app.pipelines.base import PipelineError, chat_json, as_text, as_items
+from app.pipelines.entity_surfaces import load_entity_surfaces
 from app.worldview.naming import cn_surname
 
 log = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ RESOLVE_SYSTEM = """你要把剧本里的说话人称呼对应到人物表中的
 3. 职业称呼（掌柜、小二、差役）若上下文明确指向某个具体人物，就对应过去；
    若指的是路人甲，留空。
 4. confidence 0–1，低于 0.6 的会被丢弃。
-5. reason 一句话说明依据，引用原文线索。"""
+5. reason 一句话说明依据，引用当前剧本里的线索。"""
 
 
 def resolve_speakers(
@@ -158,7 +159,9 @@ def resolve_speakers(
     """解析一章的说话人。已绑定的默认不动。"""
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:
@@ -176,11 +179,11 @@ def resolve_speakers(
         and (overwrite or not b.speaker_entity_id)
     ]
 
-    entities = list(
-        db.execute(
-            select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
-        ).scalars()
+    transform_id = (doc.generator_meta or {}).get("transform_id")
+    entity_index = load_entity_surfaces(
+        db, chapter.novel_id, transform_id=transform_id,
     )
+    entities = list(entity_index.entities)
     result = ResolveResult()
     if not targets:
         return result
@@ -191,25 +194,10 @@ def resolve_speakers(
     # 比 display_name + aliases 完整得多。不并进索引的话，
     # 这些称呼每次都要落到第 3 层去问模型 ——
     # 而答案早就在库里，只是没被查。
-    from app.models import EntityAppellation
-
-    appellations: dict[str, list[str]] = {}
-    if entities:
-        for a in db.execute(
-            select(EntityAppellation).where(
-                EntityAppellation.entity_id.in_([e.id for e in entities])
-            )
-        ).scalars():
-            surface = str(a.source_surface or "").strip()
-            if surface:
-                appellations.setdefault(a.entity_id, []).append(surface)
-
     by_exact: dict[str, WorldEntity] = {}
     by_norm: dict[str, WorldEntity] = {}
     for e in entities:
-        for surface in [
-            e.display_name, *(e.aliases_json or []), *appellations.get(e.id, []),
-        ]:
+        for surface in entity_index.surfaces_by_entity[e.id]:
             s = as_text(surface)
             if not s:
                 continue
@@ -248,7 +236,7 @@ def resolve_speakers(
 
     # ── 第 3 层：剩下的交模型判定 ──
     if ambiguous and use_llm:
-        by_name = {e.display_name: e for e in entities}
+        by_name = dict(entity_index.by_surface)
         samples: dict[str, list[str]] = {}
         for b in targets:
             tag = str(b.speaker_tag).strip()
@@ -261,11 +249,7 @@ def resolve_speakers(
                 samples.setdefault(tag, []).append(" / ".join(ctx)[:160])
 
         payload = {
-            "entities": [
-                {"name": e.display_name, "aliases": e.aliases_json or [],
-                 "summary": (e.summary or "")[:60]}
-                for e in entities if e.kind.value == "character"
-            ],
+            "entities": entity_index.catalog(),
             "unresolved": [
                 {"speaker_tag": t, "context": samples.get(t, [])} for t in ambiguous
             ],

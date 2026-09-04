@@ -396,12 +396,16 @@ class TestVoiceForKeying:
         assert voice_for(None, None, "wp_x") is None
 
     def test_callers_name_the_narrator_explicitly(self):
-        """两条产线都必须显式传 NARRATOR，靠传空是查不出来的写法。"""
+        """只有有声书产线使用旁白，且必须显式传 NARRATOR。
+
+        电影声音编译不应出现 NARRATOR：叙述已转成画面。
+        """
         import pathlib
         root = pathlib.Path(__file__).resolve().parent.parent / "app" / "pipelines"
-        for name in ("audio_compose.py", "audiobook.py"):
-            src = (root / name).read_text(encoding="utf-8")
-            assert "casting.NARRATOR," in src, name
+        audiobook = (root / "audiobook.py").read_text(encoding="utf-8")
+        film = (root / "audio_compose.py").read_text(encoding="utf-8")
+        assert "casting.NARRATOR," in audiobook
+        assert "casting.NARRATOR" not in film
 
 
 class TestUnorderableEpochsAreNotJudged:

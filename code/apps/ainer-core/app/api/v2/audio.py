@@ -1,8 +1,4 @@
-"""音频与交付：编译 → TTS → 时长回填 → manifest。
-
-本系统不生成视频。交付物是「首尾帧 + 音频 + 指令」，
-按下游视频模型是否自带音频投影成两种 manifest。
-"""
+"""电影音频与交付：对白／声景 → 时长回填 → 动态镜头 → 成片。"""
 from __future__ import annotations
 
 import subprocess
@@ -41,7 +37,7 @@ class CompileIn(BaseModel):
 
 @router.post("/shot-plans/{plan_id}/audio:compile")
 def compile_audio(plan_id: str, body: CompileIn, db: Session = Depends(get_db)) -> dict:
-    """把分镜编译成音频规格。对白绑定角色的 voice 素材，不自由挑音色。"""
+    """把分镜编译成电影声音。只有对白、声景和音乐，没有旁白。"""
     plan = _plan(db, plan_id)
     t = db.get(WorldTransform, body.transform_id)
     if t is None:
@@ -94,10 +90,15 @@ def list_audio(plan_id: str, kind: str | None = Query(None),
     order = {s.id: s.order_no for s in shots}
     scene_ids = [s.scene_id for s in shots if s.scene_id]
 
+    if kind == AudioKind.narration.value:
+        raise HTTPException(status_code=409, detail={
+            "code": "FILM_HAS_NO_NARRATION",
+            "message": "电影音频没有旁白；请查询本章有声书时间线",
+        })
     q = select(AudioSpec).where(
         (AudioSpec.shot_id.in_(list(order)))
         | ((AudioSpec.shot_id.is_(None)) & (AudioSpec.scene_id.in_(scene_ids)))
-    )
+    ).where(AudioSpec.kind != AudioKind.narration)
     if kind:
         q = q.where(AudioSpec.kind == AudioKind(kind))
     rows = list(db.execute(q).scalars())
@@ -380,19 +381,26 @@ def compile_soundscape(plan_id: str, transform_id: str = Query(...),
 # ── 剪辑台 ────────────────────────────────────────────────────────────────────
 
 class RenderIn(BaseModel):
+    #: 兼容旧客户端，但电影端点拒绝开启；完整旁白请走 audiobook API。
     voiceover: bool = False
     width: int = 1280
     height: int = 720
     fps: int = 24
+    final: bool = False
 
 
 @router.get("/shot-plans/{plan_id}/timeline")
 def get_timeline(plan_id: str, voiceover: bool = Query(False),
                  db: Session = Depends(get_db)) -> dict:
-    """可播放的时间线。轨道排开、按时间码对齐。"""
+    """可播放的电影时间线。旁白只属于有声书。"""
     from app.pipelines import cut
 
-    return cut.build_timeline(db, _plan(db, plan_id), voiceover=voiceover)
+    if voiceover:
+        raise HTTPException(status_code=409, detail={
+            "code": "FILM_HAS_NO_NARRATION",
+            "message": "电影小说不使用旁白；完整朗读请打开本章的有声书成品",
+        })
+    return cut.build_timeline(db, _plan(db, plan_id))
 
 
 class VideoGenIn(BaseModel):
@@ -416,16 +424,30 @@ def generate_shot_videos(plan_id: str, body: VideoGenIn,
 
 @router.post("/shot-plans/{plan_id}/render")
 def render_cut(plan_id: str, body: RenderIn, db: Session = Depends(get_db)) -> dict:
-    """把时间线渲成一支 mp4。"""
+    """把时间线渲成 MP4。缺动态镜头时只能导出审片预览。"""
     from app.pipelines import cut
+
+    if body.voiceover:
+        raise HTTPException(status_code=409, detail={
+            "code": "FILM_HAS_NO_NARRATION",
+            "message": "电影成片不混入旁白；完整朗读请导出有声书 M4A",
+        })
 
     if not cut.ffmpeg_available():
         raise HTTPException(
             status_code=422,
             detail="这台机器上没有 ffmpeg。剪辑台仍可在浏览器里预览播放，"
                    "导出成片需要先装 ffmpeg。")
+    if body.final:
+        quality = cut.build_timeline(db, _plan(db, plan_id)).get("quality") or {}
+        if not quality.get("production_ready"):
+            raise HTTPException(status_code=409, detail={
+                "code": "NOT_FINAL_READY",
+                "message": "当前只能导出审片预览，不能标成最终成片",
+                "blockers": quality.get("blockers") or [],
+            })
     try:
-        return cut.render(db, _plan(db, plan_id), voiceover=body.voiceover,
+        return cut.render(db, _plan(db, plan_id),
                           width=body.width, height=body.height, fps=body.fps)
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

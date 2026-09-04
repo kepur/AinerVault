@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import (
-    Chapter, DirectorProfile, DocStatus, FrameRole, FrameSpec, Scene, ScriptDoc, Shot,
-    ShotPlan, WorldTransform,
+    Chapter, DirectorProfile, DocMode, DocStatus, FrameRole, FrameSpec, Scene,
+    ScriptDoc, Shot, ShotPlan, WorldTransform,
 )
 from app.models.world import TransformStatus
 from app.pipelines import asset_refs, frame_compose, shot_plan as sp
@@ -41,7 +41,9 @@ def _plan(db: Session, plan_id: str) -> ShotPlan:
 def _active_doc(db: Session, chapter_id: str) -> ScriptDoc:
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter_id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:

@@ -82,10 +82,10 @@ class TestVideoFormatting:
         assert "未生成" in out
         assert "4.0s" in out
 
-    def test_static_default_when_no_motion(self):
-        """静止也要明写，否则视频模型会自己加运动。"""
+    def test_missing_motion_is_not_disguised_as_static(self):
+        """缺运动要由缺口面板阻断，不能用一句 static 冒充生产提示词。"""
         out = hf.format_video("", first_url="u", last_url=None, duration_ms=2000)
-        assert "static locked-off shot" in out
+        assert out == ""
 
 
 class TestSpeechFormatting:
@@ -202,12 +202,11 @@ class TestBilingualCopy:
                                   negative="美式元素、现代都市")
         assert "【不要】美式元素、现代都市" in out
 
-    def test_video_cn_falls_back_to_locked_off(self):
-        """静止也要明写 —— 中文那份同样不能留空。"""
+    def test_video_cn_does_not_hide_missing_motion(self):
+        """中文侧也不能用机位固定掩盖缺失的物理运动设计。"""
         out = hf.compose_video_cn({}, first_url=None, last_url=None,
                                   duration_ms=3000)
-        assert "机位固定" in out
-        assert "3.0s" in out
+        assert out == ""
 
     def test_video_cn_orders_by_shooting_sequence(self):
         out = hf.compose_video_cn(

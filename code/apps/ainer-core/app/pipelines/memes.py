@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.ids import new_id
 from app.models import (
-    Chapter, DeviceStrategy, DocStatus, MemeEntry, MemeRegister, MemeRendering,
+    Chapter, DeviceStrategy, DocMode, DocStatus, MemeEntry, MemeRegister, MemeRendering,
     PlotLoad, ReviewStatus, ScriptBlock, ScriptDoc, Volatility, WorldProfile,
     WorldTransform, choose_strategy,
 )
@@ -185,7 +185,9 @@ class RenderResult:
 def _blocks(db: Session, chapter: Chapter) -> list[ScriptBlock]:
     doc = db.execute(
         select(ScriptDoc).where(
-            ScriptDoc.chapter_id == chapter.id, ScriptDoc.status == DocStatus.active
+            ScriptDoc.chapter_id == chapter.id,
+            ScriptDoc.doc_mode == DocMode.prose,
+            ScriptDoc.status == DocStatus.active,
         )
     ).scalars().first()
     if doc is None:
