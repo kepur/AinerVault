@@ -322,11 +322,7 @@ def _attach_to_ref(
                     [*(variant.ref_asset_ids or []), *(a.id for a in assets)]
                 ))
                 variant.ref_asset_ids = merged
-        elif ref_kind in {
-            "character_ref_front",
-            "character_ref_3q_left",
-            "character_ref_profile_left",
-        }:
+        elif ref_kind in _character_ref_kinds():
             from app.models import AssetEpoch
             from app.pipelines.identity import REF_KIND_TO_VIEW
 
@@ -367,6 +363,20 @@ def _attach_to_ref(
     except Exception:  # noqa: BLE001 - 回挂失败不应让回调整体失败
         log.exception("产物回挂失败 task=%s ref=%s/%s", task.id, ref_kind, ref_id)
 
+
+
+def _character_ref_kinds() -> frozenset[str]:
+    """哪些 ref_kind 是人物参考图。**从视角表派生，不要再抄一份。**
+
+    这里原来手写了三个字符串，与 identity.REFERENCE_REF_KINDS 是同一份
+    清单的第二个副本。加第四个视角（头肩近景）时只改了那一份 ——
+    于是 bust 的任务提交成功、图也出来了，回挂时判不出它是人物参考，
+    asset_id 一直是空。而参考集里那一格写着 status: succeeded，
+    从状态上看完全正常，只有真去取图的时候才会发现是空的。
+    """
+    from app.pipelines.identity import REF_KIND_TO_VIEW
+
+    return frozenset(REF_KIND_TO_VIEW)
 
 
 def _supersedes(db: Session, spec: Any, task: GenTask) -> bool:

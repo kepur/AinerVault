@@ -302,3 +302,42 @@ class TestStaleReferences:
 
         src = inspect.getsource(identity.generate_character_references)
         assert "front_id and epoch.identity_ref_asset_id" in src
+
+
+class TestRefKindsAreDerivedNotCopied:
+    """回挂时判「这是不是人物参考图」的那份清单，必须从视角表派生。
+
+    原来是手写的三个字符串，与 identity.REFERENCE_REF_KINDS 是同一份
+    清单的第二个副本。加第四个视角（头肩近景）时只改了那一份 ——
+    于是 bust 的任务提交成功、图也出来了，回挂时判不出它是人物参考，
+    asset_id 一直是空。而参考集里那一格写着 status: succeeded，
+    从状态上看完全正常，只有真去取图时才发现是空的。
+    """
+
+    def test_every_view_can_be_attached_back(self):
+        from app.capability.service import _character_ref_kinds
+        from app.pipelines.identity import (
+            CHARACTER_REFERENCE_VIEWS, REFERENCE_REF_KINDS,
+        )
+
+        kinds = _character_ref_kinds()
+        for view in CHARACTER_REFERENCE_VIEWS:
+            assert REFERENCE_REF_KINDS[view] in kinds, f"{view} 回挂不了"
+
+    def test_no_second_hardcoded_copy(self):
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service)
+        assert '"character_ref_front"' not in src, "清单只应有一份，在 identity 里"
+
+    def test_every_view_has_a_ref_kind_and_a_chinese_name(self):
+        """加视角时三张表要一起加，缺一张就是一处静默的空。"""
+        from app.pipelines.identity import (
+            CHARACTER_REFERENCE_VIEWS, REFERENCE_REF_KINDS, REFERENCE_VIEW_CN,
+        )
+
+        for view in CHARACTER_REFERENCE_VIEWS:
+            assert view in REFERENCE_REF_KINDS
+            assert view in REFERENCE_VIEW_CN
