@@ -34,6 +34,7 @@ from app.models import (
 from app.pipelines.base import PipelineError, as_items, as_list, checkpoint, fingerprint
 from app.pipelines.epochs import compose_epoch_prompt, resolve_epoch
 from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
+from app.worldview import cinematography as cine
 
 log = logging.getLogger(__name__)
 
@@ -386,11 +387,17 @@ def _staging_prompt(db: Session, shot: Shot, frame: FrameSpec) -> str:
         act = (en.get("action_end") if is_last else en.get("action")) \
             or en.get("action") \
             or (p.action_end if is_last else p.action) or p.action
-        if expr:
+        # 背对镜头时不写表情，也不写视线落点 —— 那张脸不在画面里。
+        # 「seen from behind, stern expression, cold gaze, looking at offscreen」
+        # 是互相矛盾的一串指令，模型只能折中：给一张似正似背的脸，
+        # 姿态含糊、五官平板，正是那种一眼假的塑料感。
+        # 矛盾不会报错，它只是让每一镜都差一点。
+        face_visible = p.facing is not Facing.away
+        if expr and face_visible:
             seg.append(str(expr))
         if act:
             seg.append(str(act))
-        if p.gaze_target:
+        if p.gaze_target and face_visible:
             seg.append(_gaze_phrase(str(p.gaze_target), where))
         seg = [x for x in seg if x]
         if seg:
@@ -580,15 +587,13 @@ def compose_frame_prompt(
     if cam.get("lens_mm"):
         positive.append(f"{cam['lens_mm']}mm lens")
     if director is not None:
-        comp = director.composition_json or {}
-        light = director.lighting_json or {}
-        for key in ("framing", "depth"):
-            if comp.get(key):
-                positive.append(str(comp[key]).replace("_", " "))
-        for key in ("key_ratio", "color_temp", "contrast", "grain"):
-            if light.get(key):
-                positive.append(f"{key.replace('_', ' ')}: {light[key]}")
-        negative.extend(str(x).replace("_", " ") for x in (director.avoid_json or []))
+        # 枚举要翻成摄影师的说法再送。原样拼出来是
+        # 「key ratio: hard_8:1, color temp: cool_with_warm_practicals」——
+        # 模型读不懂就当噪声跳过，灯光实际上由它自己发挥，
+        # 而报表上写着「已注入」。palette 更是从建库起就没被读过。
+        positive.extend(cine.render_composition(director.composition_json))
+        positive.extend(cine.render_lighting(director.lighting_json))
+        negative.extend(cine.render_avoid(director.avoid_json))
 
     # 场景元信息
     if scene is not None:
@@ -598,9 +603,19 @@ def compose_frame_prompt(
 
     negative.extend((profile.visual_json or {}).get("visual_dont") or [])
     negative.extend(["text", "watermark", "signature", "extra limbs", "deformed hands"])
+    # 塑料感不是风格问题，是默认交付物：不挡就是塑料三维渲染 + AI 磨皮 +
+    # 均匀无方向光。挡掉它们，再给一个成片质感锚。
+    negative.extend(cine.PLASTIC_NEGATIVES)
+    positive.append(cine.GRADE_ANCHOR)
 
-    pos = ", ".join(dict.fromkeys(p for p in positive if p))
-    neg = ", ".join(dict.fromkeys(str(n) for n in negative if n))
+    # **中文一个字都不能进图像提示词。** 图像模型不认中文 ——
+    # 好一点的当噪声跳过，差一点的把汉字当纹样画进画面。
+    # 负向里以前一直漏着「美式元素, 现代都市, 东亚建筑」这类整条中文，
+    # 等于这几条约束从来没生效过，而没有任何一处会报错。
+    # 丢掉的中文全部记进 result.untranslated，知道哪条产线还欠英文。
+    pos = ", ".join(dict.fromkeys(p for p in positive if p and not _CJK.search(p)))
+    neg = ", ".join(dict.fromkeys(
+        str(n) for n in negative if n and not _CJK.search(str(n))))
     # 同一 tag 只保留一张参考图，避免权重互相打架
     seen: set[str] = set()
     uniq_refs = []

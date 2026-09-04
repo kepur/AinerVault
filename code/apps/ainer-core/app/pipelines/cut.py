@@ -822,7 +822,9 @@ def generate_videos(
     """
     from app.capability.schemas import Capability
     from app.models import SpecStatus
-    from app.pipelines.frame_compose import _production_inputs, _production_revision
+    from app.pipelines.frame_compose import (
+        _CJK, _production_inputs, _production_revision,
+    )
     from app.pipelines.base import checkpoint
     from app.capability.service import submit_task
     from app.worldview.crew import CREW
@@ -879,6 +881,17 @@ def generate_videos(
             skipped.append({
                 "shot": shot.order_no,
                 "why": "缺经验收的英文物理运动；不让视频模型自己猜动作",
+            })
+            continue
+        # 「字段名叫 _en」不等于「内容是英文」。存量运动单里有整段中文
+        # 混在 motion_prompt_en 里，而 i2v 的门禁只看它非空 ——
+        # 视频模型不认中文，那段节奏与物理约束等于没写过，
+        # 而它正是「动起来像不像人」的关键一条。
+        # 存量重出一遍运动单就好；这里只负责不让它花钱跑出废片。
+        if _CJK.search(motion.motion_prompt_en or ""):
+            skipped.append({
+                "shot": shot.order_no,
+                "why": "英文运动提示词里混着中文；请重出这一镜的运动单",
             })
             continue
         revision = _production_revision(prompts, motion)

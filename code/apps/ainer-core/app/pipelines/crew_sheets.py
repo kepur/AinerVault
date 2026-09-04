@@ -191,7 +191,37 @@ def _shot_context(db: Session, shot: Shot, blocks: dict[str, ScriptBlock]) -> st
         f"景别 {shot.shot_size or '未定'}　时长 {shot.duration_ms / 1000:.1f}s"
         f"　{shot.description or ''}"
     )
-    return head + "\n原文：\n" + "\n".join(texts)[:1200]
+    # **运镜必须告诉动作导演。** 分镜按导演档案的运动分布给每一镜定了
+    # 推轨／横摇／环绕／手持，而这里以前一个字都没传 ——
+    # 提示词又写着「静止也要明写机位固定」，于是模型每一镜都写「机位固定」，
+    # 送进 i2v 的就是三十段锁死机位的片子。看着像 PPT，
+    # 而 shot.camera_json 里那份运镜从头到尾没人读过（_camera_text 定义了没人调）。
+    cam = shot.camera_json or {}
+    bits = [f"运镜 {_CAMERA_MOVE_CN.get(str(cam.get('move') or ''), cam.get('move') or '未定')}"]
+    if cam.get("angle"):
+        bits.append(f"机位 {cam['angle']}")
+    if cam.get("lens_mm"):
+        bits.append(f"镜头 {cam['lens_mm']}mm")
+    if cam.get("speed") is not None:
+        bits.append(f"速度 {cam['speed']}")
+    return head + "　" + "　".join(bits) + "\n原文：\n" + "\n".join(texts)[:1200]
+
+
+#: 运镜枚举 → 中文说法。给动作导演看的那份提示词是中文的，
+#: 塞 push_in 进去它只会原样抄回来
+_CAMERA_MOVE_CN = {
+    "static": "机位固定",
+    "pan": "横摇",
+    "tilt": "纵摇",
+    "push_in": "推进（缓慢推向主体）",
+    "pull_out": "拉出",
+    "dolly": "移动车",
+    "track": "跟拍",
+    "orbit": "环绕",
+    "handheld": "手持轻微晃动",
+    "crane": "升降",
+    "zoom": "变焦",
+}
 
 
 def generate_sheets(
@@ -387,6 +417,22 @@ _MOTION_DETAIL_FIELDS = (
 )
 
 
+def _en_only(value: Any) -> str:
+    """`_en` 字段带中文就当它没填。
+
+    「英文运动提示词混入中文」这条检查一直在报，但只是报 ——
+    行照样入库，i2v 的门禁只看 motion_prompt_en 非空，
+    于是 `匀速，动作流畅但略显无奈，节奏平稳` 一路送进视频模型。
+    视频模型不认中文，这段节奏约束等于没写过，而它是「动起来像不像人」
+    的关键一条。中文原文另有字段存着，这里丢掉的只是一个填错格子的副本。
+    """
+    text = as_text(value).strip()
+    return "" if not text or _CJK_RE.search(text) else text
+
+
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
 def _motion_issues(data: dict[str, Any]) -> list[str]:
     """运动单的可执行性验收。只用形式化判据，不再调一次模型。"""
     issues: list[str] = []
@@ -493,10 +539,10 @@ def generate_motion(
         row.pacing = as_text(data.get("pacing"))[:128] or None
         deltas = [d for d in (as_text(x) for x in (data.get("deltas") or [])) if d]
         row.deltas_json = deltas or None
-        row.start_frame_en = as_text(data.get("start_frame_en"))[:2000] or None
-        row.end_frame_en = as_text(data.get("end_frame_en"))[:2000] or None
+        row.start_frame_en = _en_only(data.get("start_frame_en"))[:2000] or None
+        row.end_frame_en = _en_only(data.get("end_frame_en"))[:2000] or None
         row.deltas_en_json = [
-            d for d in (as_text(x) for x in (data.get("deltas_en") or [])) if d
+            d for d in (_en_only(x) for x in (data.get("deltas_en") or [])) if d
         ] or None
         labels = {
             "camera_move": "相机", "subject_move": "主体",
@@ -511,9 +557,9 @@ def generate_motion(
         # 视频模型读的是这一条。把主动作、受力、惯性、光影、脸部与
         # 连续性都放进去；只放 camera+subject 会把剩下的自由度全丢给视频模型猜。
         row.motion_prompt_en = ". ".join(
-            as_text(data.get(f"{key}_en")).strip().rstrip(".;")
+            _en_only(data.get(f"{key}_en")).rstrip(".;")
             for key in _MOTION_DETAIL_FIELDS
-            if as_text(data.get(f"{key}_en")).strip()
+            if _en_only(data.get(f"{key}_en"))
         ) or None
 
         issues = _motion_issues(data)
