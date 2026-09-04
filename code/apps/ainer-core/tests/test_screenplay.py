@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from app.pipelines import screenplay as sp
 
 
@@ -217,3 +219,69 @@ class TestShotPlanPrompt:
         assert "必须是一个看得见的物理动作" in src
         assert "脚步声由远及近" in src      # 反例要写进去
         assert "每一镜的变化说明必须互不相同" in src
+
+
+class TestScriptAsides:
+    """剧本正文里不该有模型的思考过程。
+
+    实跑：「Tyler转头看向身旁的Chubbs（即Brad Lee的同伙，此处原文指代混乱，
+    根据上下文Brad Lee是说话者……」—— 起因是绰号没在人物表里说明，
+    模型把 Chubbs 当成了另一个人，然后把这份困惑写进了场记。
+
+    这段话不会停在剧本里：制作单会读走它、写进出图提示词，
+    最后变成画面上一段没人要的东西。而 JSON 解析、字段校验、
+    场次统计全都正常，报表上一片绿。
+    """
+
+    @pytest.mark.parametrize("text", [
+        "Tyler转头看向Chubbs（即Brad Lee的同伙，此处原文指代混乱）",
+        "两人对视。根据上下文，这里应是同一个人。",
+        "他推开门（译者注：原文为窗）",
+    ])
+    def test_asides_are_caught(self, text):
+        from app.pipelines.screenplay import script_asides
+
+        assert script_asides(text)
+
+    @pytest.mark.parametrize("text", [
+        "Tyler 猛地抬手，一巴掌扇在 Thomas Chen 脸上。",
+        "Thomas Chen 低着头，双手死死攥住校服口袋。",
+        "走廊尽头的窗透进光，尘埃在光柱里浮着。",
+    ])
+    def test_normal_stage_directions_pass(self, text):
+        """场记本来就会写括号和状语，不能一见括号就报。"""
+        from app.pipelines.screenplay import script_asides
+
+        assert not script_asides(text)
+
+    def test_build_reports_them(self):
+        import inspect
+
+        from app.pipelines import script_build
+
+        src = inspect.getsource(script_build.build_script)
+        assert "sp.script_asides" in src
+        assert '"asides"' in src
+
+
+class TestCastBrief:
+    """同一个人的几种叫法要一起喂给剧本模型。
+
+    译文里李爽既叫 Brad Lee 也叫 Chubbs（绰号按语域译的），
+    不给人物表，剧本模型就当成两个角色 —— 往后说话人分不清、
+    配音分不到嗓子、分镜不知道镜头该给谁。
+    """
+
+    def test_cast_is_injected_into_the_prompt(self):
+        import inspect
+
+        from app.pipelines import script_build
+
+        assert "cast_brief(db, chapter, transform)" in inspect.getsource(
+            script_build.build_script)
+
+    def test_no_transform_means_no_cast_list(self):
+        """原语言剧本没有译名可列，硬凑一份只会是噪声。"""
+        from app.pipelines.script_build import cast_brief
+
+        assert cast_brief(None, None, None) == ""

@@ -19,6 +19,7 @@ from app.models import (
     TranslationBlock, WorldTransform, utcnow,
 )
 from app.pipelines.base import PipelineError, chat_json, fingerprint, as_text, as_items
+from app.pipelines import screenplay as sp
 from app.pipelines.entity_surfaces import load_entity_surfaces
 
 log = logging.getLogger(__name__)
@@ -91,14 +92,76 @@ SYSTEM_PROMPT = """你是专业的影视改编编剧，把小说章节拆解为�
    供分镜切换机位；不要让一个人物对着静止画面连续说十几秒。"""
 
 
-def _user_prompt(chapter: Chapter, granularity: str, content: str) -> str:
+def cast_brief(
+    db: Session, chapter: Chapter, transform: WorldTransform | None,
+) -> str:
+    """人物表：同一个人的几种叫法列在一行。
+
+    **不给的话模型会把绰号当成另一个人。** 译文里李爽既叫 Brad Lee
+    也叫 Chubbs（那是他的绰号，称呼系统按语域译的），剧本模型看到两个
+    名字就当成两个角色 —— 实跑时它甚至把困惑写进了场记正文：
+    「Tyler转头看向身旁的Chubbs（即Brad Lee的同伙，此处原文指代混乱……」
+    这段话会一路走到制作单和出图提示词里。
+
+    往后每一步都吃这个亏：说话人分不清、配音分不到嗓子、
+    分镜不知道镜头该给谁。
+    """
+    if transform is None:
+        return ""
+    from app.models import EntityAppellation, EntityKind, EntityWorldName, WorldEntity
+
+    ents = {
+        e.id: e for e in db.execute(
+            select(WorldEntity).where(
+                WorldEntity.novel_id == chapter.novel_id,
+                WorldEntity.kind == EntityKind.character,
+            )
+        ).scalars()
+    }
+    if not ents:
+        return ""
+    names = {
+        n.entity_id: n.target_name
+        for n in db.execute(
+            select(EntityWorldName).where(
+                EntityWorldName.transform_id == transform.id)
+        ).scalars() if n.target_name
+    }
+    aka: dict[str, list[str]] = {}
+    for a in db.execute(
+        select(EntityAppellation).where(
+            EntityAppellation.transform_id == transform.id)
+    ).scalars():
+        if not a.target_surface:
+            continue
+        main = names.get(a.entity_id)
+        if main and a.target_surface != main:
+            aka.setdefault(a.entity_id, []).append(a.target_surface)
+
+    lines = []
+    for eid, ent in ents.items():
+        main = names.get(eid)
+        if not main:
+            continue
+        others = sorted(dict.fromkeys(aka.get(eid, [])))
+        lines.append(f"  {main}" + (f"　又叫：{'、'.join(others)}" if others else ""))
+    if not lines:
+        return ""
+    return (
+        "\n\n【人物表】正文里同一个人可能有好几种叫法，"
+        "下面每一行是**同一个人**，不要拆成两个角色：\n" + "\n".join(sorted(lines))
+    )
+
+
+def _user_prompt(chapter: Chapter, granularity: str, content: str,
+                 cast: str = "") -> str:
     hint = {
         "coarse": "场景切得粗一些，一个场景可以包含较长的连续叙述。",
         "medium": "场景粒度适中。",
         "fine": "场景切得细一些，时间或地点稍有变化就分场。",
     }.get(granularity, "场景粒度适中。")
     title = chapter.title or f"第 {chapter.order_no} 章"
-    return f"{hint}\n\n【章节】{title}\n\n【正文】\n{content}"
+    return f"{hint}{cast}\n\n【章节】{title}\n\n【正文】\n{content}"
 
 
 def _active_doc(db: Session, chapter_id: str) -> ScriptDoc | None:
@@ -300,6 +363,7 @@ def build_script(
         raise PipelineError("章节正文为空，无法生成剧本")
 
     novel_id = chapter.novel_id
+    asides: list[dict[str, Any]] = []
     production_text, production_meta = _production_text(
         db, chapter, transform, allow_source=allow_source)
     if not production_text:
@@ -315,7 +379,9 @@ def build_script(
         db,
         [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _user_prompt(chapter, granularity, production_text)},
+            {"role": "user", "content": _user_prompt(
+                chapter, granularity, production_text,
+                cast_brief(db, chapter, transform))},
         ],
         SCRIPT_SCHEMA,
         purpose="script",
@@ -423,6 +489,15 @@ def build_script(
             block_count += 1
             if block.block_type == BlockType.dialogue:
                 dialogue_count += 1
+            # 模型的推理不该留在正文里。这段话不会停在剧本 ——
+            # 制作单会读走它、写进出图提示词，最后变成画面上一段没人要
+            # 的东西，而 JSON 解析、字段校验、场次统计全都正常。
+            found = sp.script_asides(block.source_text or "")
+            if found:
+                asides.append({
+                    "scene": scene.order_no, "seq_no": seq,
+                    "found": found, "text": (block.source_text or "")[:110],
+                })
 
     # 先 flush 再统计。session 是 autoflush=False 的，
     # 在 flush 之前查 script_blocks 只能查到空 —— 块还在 session 里没落库。
@@ -434,6 +509,9 @@ def build_script(
         "blocks": block_count,
         "dialogues": dialogue_count,
         "translatable": _count_translatable(db, doc.id),
+        # 非空说明模型把自己的推理写进了正文，多半是人物表没喂够 ——
+        # 它认不出绰号和本名是同一个人，就会在正文里边写边解释
+        "asides": asides,
     }
     db.flush()
 
