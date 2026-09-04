@@ -318,11 +318,14 @@ class CharacterReferenceResult:
     estimated_cost: float | None = None
     requires_confirm: bool = False
     tasks: list[dict[str, Any]] = field(default_factory=list)
+    #: 上游换过、这一轮要重出的。非空说明有参考图曾经与锚脱节
+    stale: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "submitted": self.submitted, "skipped": self.skipped,
-            "blocked": self.blocked, "estimated_cost": self.estimated_cost,
+            "blocked": self.blocked, "stale": self.stale,
+            "estimated_cost": self.estimated_cost,
             "requires_confirm": self.requires_confirm, "tasks": self.tasks,
         }
 
@@ -675,7 +678,26 @@ def generate_character_references(
             front_item = view_doc.get("front") if isinstance(
                 view_doc.get("front"), dict) else {}
             front_id = str(front_item.get("asset_id") or "")
-            needs_front = "front" in requested and (regenerate or not front_id)
+            # **锚换了，从旧锚派生的参考图就作废。**
+            #
+            # 每张视角图都记着 source_asset_id（它是从哪张图派生的），
+            # 但从来没有人读过它 —— 又一处「存了没用」。
+            # 后果实测过：坏蛋的正面参考 12:06 从旧锚派生，
+            # 12:14 锚被重出（旧锚把亚裔主角画成了白人），
+            # 于是每一期的 identity_ref_asset_id 指向新脸，
+            # 而 views.front 里还是那张白人全身像。
+            # 再往下所有引用这个人的镜头都会拿到两张脸，
+            # 而这一步只会报「skipped: 7」，看着像一切正常。
+            stale_front = bool(
+                front_id and epoch.identity_ref_asset_id
+                and front_item.get("source_asset_id") != epoch.identity_ref_asset_id
+            )
+            if stale_front:
+                result.stale.append(
+                    f"{ent.display_name}／{epoch.display_name}／正面全身："
+                    "身份锚换过了，这张是从旧锚派生的，重出")
+            needs_front = "front" in requested and (
+                regenerate or not front_id or stale_front)
             if needs_front:
                 anchor_url = _asset_url(db, epoch.identity_ref_asset_id)
                 prompt = compose_character_reference_prompt(epoch, profile, "front")
@@ -702,7 +724,16 @@ def generate_character_references(
                 if view == "front":
                     continue
                 current = view_doc.get(view) if isinstance(view_doc.get(view), dict) else {}
-                if current.get("asset_id") and not regenerate:
+                # 派生视角的上游是正面图，同一条判据：正面换了就得重出
+                stale_view = bool(
+                    current.get("asset_id") and front_id
+                    and current.get("source_asset_id") != front_id
+                )
+                if stale_view:
+                    result.stale.append(
+                        f"{ent.display_name}／{epoch.display_name}／"
+                        f"{REFERENCE_VIEW_CN[view]}：正面参考换过了，重出")
+                if current.get("asset_id") and not regenerate and not stale_view:
                     result.skipped += 1
                     continue
                 if not front_url:

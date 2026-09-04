@@ -256,3 +256,49 @@ class TestAnchorsAttachThemselves:
         from app.pipelines.identity import AnchorResult
 
         assert "synced" in AnchorResult().as_dict()
+
+
+class TestStaleReferences:
+    """锚换了，从旧锚派生的参考图就作废。
+
+    每张视角图都记着 source_asset_id（从哪张图派生的），
+    但从来没有人读过它。坏蛋实测：正面参考 12:06 从旧锚派生，
+    12:14 锚被重出（旧锚把亚裔主角画成了白人），于是每一期的
+    identity_ref_asset_id 指向新脸，views.front 里还是那张白人全身像。
+    再往下所有引用这个人的镜头都会拿到两张脸，
+    而这一步只报「skipped: 7」，看着像一切正常。
+    """
+
+    def test_front_is_redone_when_the_anchor_changed(self):
+        import inspect
+
+        from app.pipelines import identity
+
+        src = inspect.getsource(identity.generate_character_references)
+        assert "stale_front" in src
+        assert 'front_item.get("source_asset_id") != epoch.identity_ref_asset_id' in src
+
+    def test_derived_views_follow_the_front(self):
+        """派生视角的上游是正面图，同一条判据。"""
+        import inspect
+
+        from app.pipelines import identity
+
+        src = inspect.getsource(identity.generate_character_references)
+        assert "stale_view" in src
+        assert 'current.get("source_asset_id") != front_id' in src
+
+    def test_stale_is_reported_not_silent(self):
+        """悄悄重出等于悄悄多花一次额度；要说清是上游换了。"""
+        from app.pipelines.identity import CharacterReferenceResult
+
+        assert "stale" in CharacterReferenceResult().as_dict()
+
+    def test_no_anchor_means_no_staleness_claim(self):
+        """还没有锚的时候不能把已有参考图判成过期 —— 那是另一回事。"""
+        import inspect
+
+        from app.pipelines import identity
+
+        src = inspect.getsource(identity.generate_character_references)
+        assert "front_id and epoch.identity_ref_asset_id" in src
