@@ -42,6 +42,20 @@ class Settings(BaseSettings):
     # 单次批量生成预估成本超过此值需前端二次确认（由 API 返回 requires_confirm）
     cost_confirm_threshold: float = 1.0
 
+    # **默认不许调付费模型。**
+    #
+    # 这一条是拿真金白银换来的：路由表里 image.image_to_image 的首选是
+    # qwen-image-edit-max，看着和别的百炼模型没两样，一天跑下来 ¥31.5；
+    # video.image_to_video 的 wan2.7-i2v 同一天 ¥48。
+    # 两者都不在免费额度清单里，而系统里没有任何一处会因此拦一下 ——
+    # 每一步都成功，账单第二天才看得到。
+    #
+    # 关掉之后，标了 billing=paid 的路由一律不发请求，直接按额度耗尽处理，
+    # 于是自动换到下一条免费路由；一条免费的都没有就明确报错，
+    # 让人自己决定要不要花这笔钱。未标 billing 的按付费处置 ——
+    # **不确定就当它要钱**，这个方向上猜错的代价是不对称的。
+    allow_paid_models: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

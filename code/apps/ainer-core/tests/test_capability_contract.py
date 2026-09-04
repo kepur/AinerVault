@@ -452,3 +452,110 @@ class TestFreeQuotaFailover:
 
         src = inspect.getsource(service.submit_task)
         assert "TaskStatus.failed" in src and "_failover(exc.code.value" in src
+
+
+class TestPaidModelsAreBlockedByDefault:
+    """这一条是拿真金白银换来的。
+
+    路由表里 image.image_to_image 的首选是 qwen-image-edit-max，
+    看着和别的百炼模型没两样，一天跑下来 ¥31.5；
+    video.image_to_video 的 wan2.7-i2v 同一天 ¥48。
+    两者都不在免费额度清单里，而系统里没有任何一处会因此拦一下 ——
+    每一步都返回 200，账单第二天才看得到。
+    """
+
+    def _route(self, billing=None, model="m", quota=None):
+        from app.capability.router import ResolvedRoute
+        from app.capability.schemas import Capability
+
+        class Ep:
+            id = "ep1"
+            enabled = True
+            caps_cache_json = None
+
+        dp = {}
+        if billing:
+            dp["billing"] = billing
+        if quota:
+            dp["free_quota"] = quota
+        return ResolvedRoute(endpoint=Ep(), capability=Capability.image_i2i,
+                             model=model, default_params=dp)
+
+    def test_paid_route_is_refused(self):
+        from app.capability.service import route_blocked
+
+        why = route_blocked(None, self._route("paid", "qwen-image-edit-max"))
+        assert why and "付费" in why
+
+    def test_unmarked_route_is_treated_as_paid(self):
+        """**不确定就当它要钱** —— 这个方向上猜错的代价是不对称的。"""
+        from app.capability.service import route_blocked
+
+        assert route_blocked(None, self._route(None, "some-new-model"))
+
+    def test_free_route_passes(self):
+        from app.capability.service import route_blocked
+
+        assert route_blocked(None, self._route("free", "qwen3.8-flash")) is None
+
+    def test_the_gate_is_on_the_primary_route_not_only_failover(self):
+        """只在故障转移里检查等于没检查 —— 付费的 p0 每次都调用成功，
+        永远走不到转移那一支。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "route_blocked(db, route)" in src
+        assert "_swap_route(blocked)" in src
+
+    def test_no_free_route_left_raises_instead_of_spending(self):
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "CORE_ALLOW_PAID_MODELS=true" in src, "报错要说清怎么放行"
+
+
+class TestPerModelQuotaCap:
+    """免费额度也要自己数。
+
+    供应商那边额度用尽才报错，而报错时这一次调用已经发生了 ——
+    批量跑的时候是「撞上去才知道」。路由上配了 free_quota.calls
+    就自己先数一遍，到点直接换下一条。
+    """
+
+    def test_quota_is_counted_per_model_not_per_route(self):
+        """百炼的免费额度挂在模型上，同一个模型配在三条路由里共用一份。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.model_calls_used)
+        assert "GenTask.model == model" in src
+
+    def test_only_successful_calls_count(self):
+        """失败的那些供应商不计费，算进去会让额度提前见底。"""
+        import inspect
+
+        from app.capability import service
+
+        assert "TaskStatus.succeeded" in inspect.getsource(service.model_calls_used)
+
+    def test_cap_blocks_when_reached(self, monkeypatch):
+        from app.capability import service
+
+        monkeypatch.setattr(service, "model_calls_used", lambda db, m: 30)
+        route = TestPaidModelsAreBlockedByDefault()._route(
+            "free", "wan3.0-video", quota={"calls": 30})
+        why = service.route_blocked(None, route)
+        assert why and "30/30" in why
+
+    def test_cap_allows_below_limit(self, monkeypatch):
+        from app.capability import service
+
+        monkeypatch.setattr(service, "model_calls_used", lambda db, m: 29)
+        route = TestPaidModelsAreBlockedByDefault()._route(
+            "free", "wan3.0-video", quota={"calls": 30})
+        assert service.route_blocked(None, route) is None

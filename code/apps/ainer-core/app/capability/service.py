@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ from app.capability.router import (
 from app.capability.schemas import (
     TERMINAL_STATES, Capability, Task, TaskOptions, TaskState,
 )
-from app.config import settings
+from app.config import get_settings, settings
 from app.ids import new_id
 from app.models import Asset, AssetKind, AssetSource, GenTask, TaskStatus, utcnow
 
@@ -63,6 +63,51 @@ def estimate_cost(db: Session, capability: Capability | str, purpose: str, count
     return None if unit is None else round(unit * count, 6)
 
 
+def model_calls_used(db: Session, model: str | None) -> int:
+    """这个模型已经成功调用过多少次。
+
+    按模型数而不是按路由数 —— 百炼的免费额度是挂在模型上的，
+    同一个模型配在三条路由里也共用那一份额度。
+    """
+    if not model:
+        return 0
+    return db.execute(
+        select(func.count()).select_from(GenTask).where(
+            GenTask.model == model,
+            GenTask.status == TaskStatus.succeeded,
+        )
+    ).scalar() or 0
+
+
+def route_blocked(db: Session, route: ResolvedRoute) -> str | None:
+    """这条路由现在能不能用。能用返回 None，不能用返回原因。
+
+    两条判据，都是拿账单换来的：
+
+    **付费的默认不发请求。** 路由表里 image.image_to_image 的首选是
+    qwen-image-edit-max，看着和别的百炼模型没两样，一天跑下来 ¥31.5；
+    video.image_to_video 的 wan2.7-i2v 同一天 ¥48。两者都不在免费额度
+    清单里，而系统里没有任何一处会因此拦一下 —— 每一步都成功，
+    账单第二天才看得到。未标 billing 的按付费处置：
+    **不确定就当它要钱**，这个方向上猜错的代价是不对称的。
+
+    **免费额度也要自己数。** 供应商那边额度用尽才报错，而报错时
+    这一次调用已经发生了；批量跑的时候是「撞上去才知道」。
+    路由上配了 free_quota.calls 就自己先数一遍，到点了直接换下一条。
+    数的是成功次数 —— 失败的那些供应商不计费。
+    """
+    if route.billing != "free" and not get_settings().allow_paid_models:
+        return (f"{route.model} 标为{'付费' if route.billing == 'paid' else '未标注'}，"
+                f"而当前不允许调付费模型（CORE_ALLOW_PAID_MODELS=false）")
+    quota = route.default_params.get("free_quota") or {}
+    cap = quota.get("calls")
+    if isinstance(cap, int) and cap > 0:
+        used = model_calls_used(db, route.model)
+        if used >= cap:
+            return f"{route.model} 的免费额度已用满（{used}/{cap} 次）"
+    return None
+
+
 def submit_task(
     db: Session,
     capability: Capability | str,
@@ -94,6 +139,39 @@ def submit_task(
     pinned = route is not None      # 调用方点名的路由不做自动轮换
     route = route or resolve_one(db, cap, purpose, tier)
 
+    def _swap_route(reason: str) -> None:
+        """首选路由不能用时，就地换成下一条能用的。
+
+        **闸必须挡在首选那一条上。** 只在故障转移里检查等于没检查：
+        image.image_to_image 的 p0 正是付费的 qwen-image-edit-max，
+        它每次都调用成功，永远走不到转移那一支 —— 一天 ¥31.5 就是
+        这么花掉的，而每一步的返回都是 200。
+        """
+        nonlocal route
+        nxt = _next_ok_route(frozenset({route.key}) | _tried)
+        if nxt is None:
+            raise CapabilityError(
+                CapErrorCode.QUOTA_EXCEEDED,
+                f"{reason}；也没有可用的免费路由了。"
+                f"请在 设置 › 能力路由 给这项能力配一条免费模型，"
+                f"或确认要花钱后设 CORE_ALLOW_PAID_MODELS=true。",
+            )
+        log.warning("首选路由不可用（%s），改用 %s", reason, nxt.model)
+        route = nxt
+
+    def _next_ok_route(tried: "frozenset[str]") -> ResolvedRoute | None:
+        """下一条既免费、又还没用满额度的路由。"""
+        seen = set(tried)
+        while True:
+            nxt = next_free_route(db, cap, purpose, tier, tried=frozenset(seen))
+            if nxt is None:
+                return None
+            why = route_blocked(db, nxt)
+            if why is None:
+                return nxt
+            log.info("跳过路由 %s：%s", nxt.model, why)
+            seen.add(nxt.key)
+
     def _failover(exc_code: str, detail: str) -> GenTask | None:
         """某个模型的免费额度用尽时，换下一条免费路由接着跑。
 
@@ -107,7 +185,7 @@ def submit_task(
         """
         if pinned or exc_code != CapErrorCode.QUOTA_EXCEEDED.value:
             return None
-        nxt = next_free_route(db, cap, purpose, tier, tried=_tried | {route.key})
+        nxt = _next_ok_route(_tried | {route.key})
         if nxt is None:
             return None
         log.warning("额度用尽（%s %s），换免费路由 %s 继续",
@@ -118,6 +196,11 @@ def submit_task(
             tier=tier, max_cost=max_cost, force=force,
             _tried=_tried | {route.key},
         )
+
+    if not pinned:
+        blocked = route_blocked(db, route)
+        if blocked:
+            _swap_route(blocked)
 
     merged = {**route.default_params, **payload}
     idem = canonical_idempotency_key(
