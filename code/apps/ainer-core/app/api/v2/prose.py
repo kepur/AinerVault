@@ -144,6 +144,60 @@ def read_prose(chapter_id: str, lang: str,
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/novels/{novel_id}/prose/{lang}")
+def read_novel_prose(
+    novel_id: str, lang: str,
+    with_source: bool = Query(False),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(3, ge=1, le=20),
+    db: Session = Depends(get_db),
+) -> dict:
+    """整本译本，按章连续读。
+
+    **这是给人看的那一页。** 在此之前，译文只能从「译本工作台」
+    一段一段翻 —— 那是干活的地方（分块／注入／审核／锁定），
+    不是读的地方。想通读一遍自己译出来的小说，得先挑章节、
+    再点开工作台、再往下滚过一屏规格与按钮。
+
+    没译完的章节也列出来，只是 paragraphs 为空并带上原因 ——
+    不列的话读者会以为这本书就这么长。
+    """
+    novel = db.get(Novel, novel_id)
+    if novel is None:
+        raise HTTPException(status_code=404, detail="novel not found")
+    chapters = list(
+        db.execute(
+            select(Chapter).where(Chapter.novel_id == novel_id)
+            .order_by(Chapter.order_no)
+        ).scalars()
+    )
+    items = []
+    for c in chapters[offset : offset + limit]:
+        row: dict = {
+            "chapter_id": c.id, "order_no": c.order_no,
+            "title": c.title, "source_words": c.word_count,
+        }
+        try:
+            data = prose_pipe.render_translated(
+                db, c, lang, with_source=with_source)
+        except PipelineError as exc:
+            row.update({"paragraphs": [], "stats": {}, "blocked": str(exc)})
+        else:
+            row.update({
+                "title": data.get("chapter_title") or c.title,
+                "paragraphs": data["paragraphs"], "stats": data["stats"],
+            })
+        items.append(row)
+    done = sum(1 for i in items if i.get("paragraphs"))
+    return {
+        "novel": {"id": novel.id, "title": novel.title, "author": novel.author},
+        "language": lang, "chapters_total": len(chapters),
+        "offset": offset, "limit": limit,
+        "returned": len(items), "with_text": done,
+        "items": items,
+    }
+
+
 @router.get("/chapters/{chapter_id}/prose/{lang}/export")
 def export_prose(chapter_id: str, lang: str,
                  fmt: str = Query("markdown", pattern="^(markdown|text)$"),

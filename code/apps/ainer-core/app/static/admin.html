@@ -270,6 +270,7 @@ tbody tr:hover{background:var(--panel-2)}
       <span class="sub" id="task-badge"></span>
       <button class="btn sm" onclick="App.refresh()">刷新</button>
     </header>
+    <div id="crumbs"></div>
     <div class="content" id="view"></div>
   </main>
 </div>
@@ -343,6 +344,7 @@ const GROUPS = [
   ]},
   {id:"g-trans", name:"译本", pages:[
     {id:"fidelity", ico:"⚖", name:"力度与导读", sub:"存真／折中／移植 · 正文前的世界观导读"},
+    {id:"reader",   ico:"📖", name:"译本阅读", sub:"整本连着读 · 双语对照 · 导出"},
     {id:"prose",    ico:"✍", name:"译本工作台", sub:"分块 → 装置 → 翻译 → 审核 → 回译 → 锁定"},
     {id:"review",   ico:"🔍", name:"文化差异审查", sub:"模型出报表，人裁决"},
   ]},
@@ -3391,6 +3393,141 @@ function goto(page, novelId, chapterId, transformId) {
   State.page = page; State.save(); App.refresh();
 }
 
+//: 下钻页（console/novel/chapter/media）自己带返回按钮；
+//: 左侧菜单进去的那十几个工作台以前一个都没有 —— 从章节工作台点
+//: 「现在该做：译本」跳过去之后，唯一的退路是再点一次左侧菜单，
+//: 而左侧菜单不知道你刚才在看哪一章。这里统一补一条。
+const OWN_CRUMBS = new Set(["console", "novel", "chapter", "media"]);
+let CRUMB_CACHE = {novel: {}, chapter: {}};
+
+async function renderCrumbs() {
+  const el = $("#crumbs");
+  if (!el) return;
+  if (OWN_CRUMBS.has(State.page) || (!State.novelId && !State.chapterId)) {
+    el.innerHTML = ""; return;
+  }
+  // 名字缓存住：面包屑每次切页都渲染，不该每次都打两个请求
+  let nv = CRUMB_CACHE.novel[State.novelId];
+  let ch = CRUMB_CACHE.chapter[State.chapterId];
+  try {
+    if (State.novelId && !nv) {
+      nv = (await api("GET", `/novels/${State.novelId}`)).title || "小说";
+      CRUMB_CACHE.novel[State.novelId] = nv;
+    }
+    if (State.chapterId && !ch) {
+      const c = await api("GET", `/chapters/${State.chapterId}`);
+      ch = c.title || ("第" + c.order_no + "章");
+      CRUMB_CACHE.chapter[State.chapterId] = ch;
+    }
+  } catch { /* 名字取不到就只显示层级，不因此挡住页面 */ }
+  const parts = [`<button class="btn sm" onclick="goto('console')">← 控制台</button>`];
+  if (State.novelId) {
+    parts.push(`<button class="btn sm" onclick="goto('novel')">← ${h(nv || "小说工作台")}</button>`);
+  }
+  if (State.chapterId) {
+    parts.push(`<button class="btn sm" onclick="goto('chapter')">← ${h(ch || "章节工作台")}</button>`);
+  }
+  el.innerHTML = `<div class="row" style="padding:8px 16px 0;gap:6px">${parts.join("")}</div>`;
+}
+
+
+//: 译本**阅读**页。
+//:
+//: 在此之前，译文只能从「译本工作台」一段一段翻 —— 那是干活的地方
+//: （分块／注入／审核／锁定），每一段都裹在规格与按钮里。想通读一遍
+//: 自己译出来的小说，得先挑章节、再点开工作台、再往下滚过一屏控件，
+//: 读完一章还要退回去换下一章。写出来的东西没有一个地方能好好读，
+//: 这本身就是缺了一页。
+const Reader = {
+  bilingual: localStorage.getItem("an.rd.bi") === "1",
+  offset: 0,
+
+  async render(v) {
+    if (!State.novelId) {
+      const novels = await api("GET", "/novels").catch(() => []);
+      const list = Array.isArray(novels) ? novels : (novels.items || []);
+      v.innerHTML = `<div class="card"><h2>📖 译本阅读</h2>
+        <p class="hint">选一本，从第一章连着往下读。</p>
+        <div class="row">${list.map(n =>
+          `<button class="btn" onclick="goto('reader','${n.id}')">${h(n.title)}</button>`
+        ).join("") || `<div class="empty">书架还是空的</div>`}</div></div>`;
+      return;
+    }
+    const lang = State.lang;
+    const d = await api("GET",
+      `/novels/${State.novelId}/prose/${lang}?offset=${this.offset}&limit=3`
+      + (this.bilingual ? "&with_source=true" : ""));
+    const shown = this.offset + d.returned;
+
+    v.innerHTML = `
+      <div class="card">
+        <div class="row" style="align-items:center">
+          <h2 style="margin:0">📖 ${h(d.novel.title)}
+            <span class="sub mono" style="color:var(--muted)">${h(lang)} ·
+              共 ${d.chapters_total} 章</span></h2>
+          <span class="grow"></span>
+          <button class="btn sm ${this.bilingual ? "pri" : ""}"
+            onclick="Reader.toggleBi()">${this.bilingual ? "双语对照 ✓" : "双语对照"}</button>
+          <button class="btn sm" onclick="goto('reader')">换一本</button>
+        </div>
+      </div>
+      ${d.items.map(it => this.chapter(it)).join("")}
+      <div class="card"><div class="row">
+        <button class="btn" ${this.offset ? "" : "disabled"}
+          onclick="Reader.page(-1)">← 上三章</button>
+        <span class="grow" style="text-align:center;color:var(--muted);font-size:12px">
+          第 ${this.offset + 1}–${shown} 章 / 共 ${d.chapters_total}</span>
+        <button class="btn" ${shown < d.chapters_total ? "" : "disabled"}
+          onclick="Reader.page(1)">下三章 →</button>
+      </div></div>`;
+  },
+
+  chapter(it) {
+    // 没译完的章节也列出来 —— 不列的话读者会以为这本书就这么长
+    if (!it.paragraphs.length) {
+      return `<div class="card">
+        <h3>第 ${it.order_no} 章　${h(it.title || "")}</h3>
+        <div class="empty">${h(it.blocked || "这一章还没有译文")}
+          <div style="margin-top:8px">
+            <button class="btn sm" onclick="goto('prose','${State.novelId}','${it.chapter_id}')"
+              >去译本工作台翻这一章 →</button></div></div></div>`;
+    }
+    const st = it.stats || {};
+    return `<div class="card">
+      <div class="row" style="align-items:baseline">
+        <h3 style="margin:0">第 ${it.order_no} 章　${h(it.title || "")}</h3>
+        <span class="grow"></span>
+        <span class="sub mono" style="color:var(--muted)">${
+          st.locked ? st.locked + " 段已锁定 · " : ""}${st.translated || 0}/${st.blocks || 0} 段</span>
+        <button class="btn sm" onclick="goto('chapter','${State.novelId}','${it.chapter_id}')"
+          >章节工作台 →</button>
+      </div>
+      <div style="max-width:46em;margin:14px auto 0;line-height:1.85;font-size:15px">
+        ${it.paragraphs.map(pp => this.para(pp)).join("")}
+      </div></div>`;
+  },
+
+  para(pp) {
+    if (!pp.text) return "";
+    if (pp.type === "heading") {
+      return `<h4 style="margin:22px 0 10px">${h(pp.text)}</h4>`;
+    }
+    // 未锁定的段落左边留一道浅标 —— 读的时候也该看得出哪些还没定稿
+    const bar = pp.locked ? "" : "border-left:2px solid var(--line);padding-left:10px;";
+    const src = (this.bilingual && pp.source)
+      ? `<div style="color:var(--muted);font-size:13px;margin-top:2px">${h(pp.source)}</div>`
+      : "";
+    return `<div style="margin:0 0 14px;${bar}">${h(pp.text)}${src}</div>`;
+  },
+
+  toggleBi() {
+    this.bilingual = !this.bilingual;
+    localStorage.setItem("an.rd.bi", this.bilingual ? "1" : "0");
+    App.refresh();
+  },
+  page(d) { this.offset = Math.max(0, this.offset + d * 3); App.refresh(); },
+};
+
 const Console = {
   async render(v) {
     const d = await api("GET", "/console");
@@ -4135,8 +4272,9 @@ const App = {
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,
                fidelity:FidelityPage,
-               script:Script, prose:Prose, audio:Audio, handoff:Handoff,
+               script:Script, prose:Prose, reader:Reader, audio:Audio, handoff:Handoff,
                tasks:Tasks}[p.id];
+    renderCrumbs();
     try { await R.render(v); }
     catch (e) {
       v.innerHTML = `<div class="card"><h2 style="color:var(--danger)">加载失败</h2>
