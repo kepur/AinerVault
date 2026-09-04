@@ -115,9 +115,27 @@ class TestStageOrdering:
         from app.api.v2 import console
 
         src = inspect.getsource(console.novel_stages)
-        for key in ("chapters", "entities", "transform", "lexicon",
+        for key in ("chapters", "entities", "transform", "names", "lexicon",
                     "epochs", "casting"):
             assert f'"{key}"' in src
+
+    def test_names_are_their_own_stage(self):
+        """建了 transform 不等于定了译名。
+
+        两者并成一档时，面板显示「映射 done」而 entity_world_names 一行都没有，
+        译文里的名字一路走拼音，直到成片才看得出来。
+        """
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console.novel_stages)
+        assert "EntityWorldName" in src, "人名映射一档必须真的去数名字"
+        names = src.index('"names"')
+        assert src.index('"transform"') < names < src.index('"lexicon"'), (
+            "人名要排在映射之后、词表之前 —— 没有目标世界就无从起名，"
+            "而词表里的称呼要引用已定的名字"
+        )
 
 
 class TestAssetLibrary:

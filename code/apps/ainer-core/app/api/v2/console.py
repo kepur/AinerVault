@@ -29,8 +29,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import (
     TRANSLATABLE_TYPES, AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet,
-    DocMode, DocStatus, FrameRole, FrameSpec, Novel, ScriptBlock, ScriptDoc,
-    Shot, ShotMotion, ShotPerformance, ShotPlan, TranslationBlock, VoiceCasting,
+    DocMode, DocStatus, EntityWorldName, FrameRole, FrameSpec, Novel,
+    ScriptBlock, ScriptDoc, Shot, ShotMotion, ShotPerformance, ShotPlan,
+    TranslationBlock, VoiceCasting,
     WorldEntity, WorldLexicon, WorldTransform,
 )
 
@@ -103,6 +104,19 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
         lex_done = _count(db, WorldLexicon, WorldLexicon.transform_id.in_(tf_ids),
                           WorldLexicon.target_term.isnot(None))
 
+    # 人名映射自成一档，不能并进「映射与圈层」。建了 transform 只是
+    # 定了「往哪个世界搬」，没定「谢文东到那边叫什么」。合成一档的时候
+    # 面板显示「映射 done」而 entity_world_names 一行都没有，
+    # 于是译文里的名字一路走拼音，直到成片才看出来。
+    name_total = entities if tf_ids else 0
+    name_done = 0
+    if tf_ids and entities:
+        name_done = db.execute(
+            select(func.count(func.distinct(EntityWorldName.entity_id)))
+            .where(EntityWorldName.transform_id.in_(tf_ids),
+                   EntityWorldName.target_name.isnot(None))
+        ).scalar() or 0
+
     # 素材库：抽出来的刀剑、宗门、场景。**每件都要有参考图** ——
     # 没有参考图的素材等于没抽：下一次画同一把刀，模型还是照着
     # 文字重新捏一把，两镜之间对不上。
@@ -148,6 +162,10 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
         _stage("transform", "映射与圈层", len(transforms), max(len(transforms), 1),
                page="world", hint="源圈层 → 目标圈层，决定译法与画风",
                blocked_by=no_ch),
+        _stage("names", "人名映射", name_done, name_total, page="world",
+               hint="谢文东到了目标世界叫什么 —— 不定就一路走拼音，"
+                    "同族的姓还会各走各的",
+               blocked_by=no_tf or no_ent),
         _stage("lexicon", "名物词表", lex_done, lex_total, page="world",
                hint="直译会破坏世界观真实感的词，在这里定译法",
                blocked_by=no_tf),

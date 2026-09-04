@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -129,7 +130,13 @@ EXTRACT_SYSTEM = """你是小说的世界模型抽离专家。从文本中抽出
 要抽五类：
 
 entities — 需要在全书保持一致的实体
-  character  有名有姓的人物，以及有稳定称呼的角色
+  character  有名有姓的人物，以及有稳定称呼的角色。
+             **凡是在本章开口说过话的，一个都不能漏** ——
+             哪怕只有一句、哪怕是配角。判据很硬：文中出现「X说」「X问」
+             「X道」或引号前后带着这个名字，它就必须进 entities。
+             漏掉的后果不是少一条记录：说话人切分认不出他，
+             他的台词会挂到别人名下或干脆没有说话人，
+             再往后配音分不到嗓子、分镜不知道镜头该给谁。
   location   具体地名，不要抽「屋里」「街上」这类泛指
   prop       有身份的器物，不要抽「一把剑」这类泛指
   faction    门派、家族、组织
@@ -227,6 +234,8 @@ class ExtractResult:
     rule_corrections: list[dict] = field(default_factory=list)
     #: 被判为泛指、未建实体的（「那个人」「一把剑」）
     dropped_generic: list[str] = field(default_factory=list)
+    #: 有台词却在实体表里找不到落点的说话人。非空就是漏抽了人
+    unmatched_speakers: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -238,6 +247,7 @@ class ExtractResult:
             "by_name_type": self.by_name_type, "merged": self.merged,
             "rule_corrections": self.rule_corrections,
             "dropped_generic": self.dropped_generic,
+            "unmatched_speakers": self.unmatched_speakers,
         }
 
 
@@ -318,6 +328,38 @@ def _blocks_text(db: Session, chapter: Chapter, limit: int = 8000) -> tuple[str,
     speakers = sorted({b.speaker_tag for b in blocks if b.speaker_tag})
     text = "\n".join(b.source_text for b in blocks if b.source_text)
     return text[:limit], speakers
+
+
+def unmatched_speakers(
+    speakers: Sequence[str], rows: Iterable["WorldEntity"]
+) -> list[str]:
+    """哪些说话人在实体表里找不到落点 —— 有台词却没被抽成人物。
+
+    提示词里已经写了「开口说过话的一个都不能漏」，但提示词是请求不是保证。
+    漏一个的代价不在少一条记录：说话人切分认不出他，他的台词会挂到
+    别人名下或干脆没有说话人，再往后配音分不到嗓子、分镜不知道镜头给谁 ——
+    而报表上一片绿，因为没有任何一步会失败。
+
+    这里不猜名字。用「X说／X道」正则从原文抓过一轮，24 个候选 21 个是垃圾
+    （「一字一句」「咬牙」「拍拍谢文」）。改成拿现成的 speaker_tag 去对
+    实体表：对不上就报出来给人看，认不认得出是人的事，不是正则的事。
+
+    互相包含就算认出来 —— speaker_tag 是原文称呼，两头都可能带修饰：
+    「高个」对得上「高个少年」，「谢文东挡」也对得上「谢文东」。
+    宁可漏报不要误报，这一栏非空是要人去看的，喊狼喊多了就没人看了。
+    """
+    surfaces = {
+        s for e in rows if e.kind is EntityKind.character
+        for s in [e.display_name, *(e.aliases_json or [])] if s
+    }
+    if not surfaces:
+        return sorted({w.strip() for w in speakers if w and w.strip()})
+    out = {
+        w for who in speakers
+        if (w := (who or "").strip())
+        and not any(s in w or w in s for s in surfaces)
+    }
+    return sorted(out)
 
 
 def extract_entities(
@@ -521,6 +563,7 @@ def extract_entities(
         ).scalars()
     )
     result.total = len(all_rows)
+    result.unmatched_speakers = unmatched_speakers(speakers, all_rows)
     for e in all_rows:
         if e.family_key:
             result.families.setdefault(e.family_key, []).append(e.display_name)

@@ -624,3 +624,66 @@ class TestKnownNameAnchor:
 
         src = inspect.getsource(prose._known_speakers)
         assert "EntityKind.character" in src
+
+
+class TestUnmatchedSpeakers:
+    """有台词却没进实体表的人，必须报出来。
+
+    这一层是抽取提示词的规则搭档：提示词让模型「开口说过话的一个都不能漏」，
+    这里负责在它还是漏了的时候把人喊住 —— 否则一路到成片都没有一步会失败。
+    """
+
+    class Ent:
+        """只需要 kind / display_name / aliases_json 三样。"""
+
+        def __init__(self, name, aliases=(), kind=None):
+            from app.models import EntityKind
+
+            self.kind = kind or EntityKind.character
+            self.display_name = name
+            self.aliases_json = list(aliases)
+
+    def rows(self):
+        return [
+            self.Ent("谢文东", ["东哥", "学生", "小子", "文东"]),
+            self.Ent("李爽", ["矮胖少年", "胖子", "膀子"]),
+            self.Ent("徐娜", ["同桌", "女生"]),
+            self.Ent("高个少年", ["高个"]),
+        ]
+
+    def test_reports_speaker_with_no_entity(self):
+        """坏蛋第二章的真实数据：孙学文有台词，实体表里没有他。"""
+        from app.pipelines.entities import unmatched_speakers
+
+        got = unmatched_speakers(["谢文东", "孙学文喘口气", "李爽"], self.rows())
+        assert got == ["孙学文喘口气"]
+
+    @pytest.mark.parametrize("who", [
+        "谢文东", "东哥", "膀子", "女生", "高个",
+        # 两头都可能带修饰：标签脏（谢文东挡）或标签比实体名短（高个）
+        "谢文东挡", "李爽笑了笑",
+    ])
+    def test_matched_speakers_are_silent(self, who):
+        """认得出的一律不报。喊狼喊多了就没人看这一栏了。"""
+        from app.pipelines.entities import unmatched_speakers
+
+        assert unmatched_speakers([who], self.rows()) == []
+
+    def test_non_character_entities_do_not_match(self):
+        """地点不会说话。拿地点当锚会把漏抽的人吞掉。"""
+        from app.models import EntityKind
+        from app.pipelines.entities import unmatched_speakers
+
+        rows = [self.Ent("J市第二中学", ["二中"], kind=EntityKind.location)]
+        assert unmatched_speakers(["二中"], rows) == ["二中"]
+
+    def test_no_entities_yet_reports_everyone(self):
+        """一个实体都没有的时候，说话人全是线索，不是全部沉默。"""
+        from app.pipelines.entities import unmatched_speakers
+
+        assert unmatched_speakers(["谢文东", "李爽"], []) == ["李爽", "谢文东"]
+
+    def test_blank_tags_are_dropped(self):
+        from app.pipelines.entities import unmatched_speakers
+
+        assert unmatched_speakers(["", "   ", None], self.rows()) == []
