@@ -61,6 +61,16 @@ _DEMONYM = {
 }
 
 
+def _ordinal(n: int) -> str:
+    """1 → 1st，21 → 21st。硬拼 "th" 会写出 21th ——
+    它出现在每一张身份锚与人物参考的提示词里，
+    图像模型对一个不存在的词只能瞎猜年代。
+    """
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
 def era_phrase(profile: WorldProfile) -> str:
     """圈层 → 一句英文的年代族裔。
 
@@ -81,7 +91,7 @@ def era_phrase(profile: WorldProfile) -> str:
             century = mid // 100 + 1
             half = "early" if mid % 100 < 34 else (
                 "mid" if mid % 100 < 67 else "late")
-            era = f"{half} {century}th century"
+            era = f"{half} {_ordinal(century)} century"
     return " ".join(x for x in (era, who) if x)
 
 
