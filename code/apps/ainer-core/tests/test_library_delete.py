@@ -119,6 +119,15 @@ class TestBulkChapterDelete:
         assert "chapter_ids" in f and "from_order" in f and "to_order" in f
 
 
+class TestChapterPatchSafety:
+    def test_title_only_payload_does_not_default_content_to_empty(self):
+        from app.api.v2.library import ChapterIn
+
+        body = ChapterIn(title="少年热血 第二章 成长")
+        assert body.title == "少年热血 第二章 成长"
+        assert body.content is None
+
+
 class TestOrphanPurge:
     """级联只在删除那一刻生效，对历史遗留的孤儿无能为力。
 

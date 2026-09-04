@@ -146,6 +146,19 @@ class AssetEpoch(Base, StdMixin):
     ref_asset_ids: Mapped[list | None] = mapped_column(JSONB)
     #: 明确指向作为同一性锚点的那张脸/形参考。跨期共用
     identity_ref_asset_id: Mapped[str | None] = mapped_column(String(32))
+    #: 人物参考集，而不是一袋无语义的 ref_asset_ids：
+    #: {
+    #:   "elements": {"identity": {"cn","en"},
+    #:                "silhouette": {"cn","en"},
+    #:                "wardrobe": {"cn","en"}},
+    #:   "views": {"front": {"asset_id",...},
+    #:             "three_quarter_left": {...}, "profile_left": {...}}
+    #: }
+    #:
+    #: 三要素回答「这个人由什么组成」，三视角回答「这一镜该引用哪张」。
+    #: 不能继续只存一个扁平列表 —— 分镜面对侧脸时从列表里取第一张正脸，
+    #: 参考图虽然“接上了”，姿态约束却仍然是错的。
+    reference_set_json: Mapped[dict | None] = mapped_column(JSONB)
 
     status: Mapped[ReviewStatus] = mapped_column(
         default=ReviewStatus.candidate, nullable=False

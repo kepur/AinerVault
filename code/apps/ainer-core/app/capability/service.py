@@ -322,6 +322,28 @@ def _attach_to_ref(
                     [*(variant.ref_asset_ids or []), *(a.id for a in assets)]
                 ))
                 variant.ref_asset_ids = merged
+        elif ref_kind in {
+            "character_ref_front",
+            "character_ref_3q_left",
+            "character_ref_profile_left",
+        }:
+            from app.models import AssetEpoch
+            from app.pipelines.identity import REF_KIND_TO_VIEW
+
+            epoch = db.get(AssetEpoch, ref_id)
+            if epoch is not None:
+                doc = dict(epoch.reference_set_json or {})
+                views = dict(doc.get("views") or {})
+                view = REF_KIND_TO_VIEW[ref_kind]
+                current = dict(views.get(view) or {})
+                current.update({
+                    "asset_id": assets[0].id,
+                    "gen_task_id": task.id,
+                    "status": "ready",
+                })
+                views[view] = current
+                doc["views"] = views
+                epoch.reference_set_json = doc
         elif ref_kind == "frame_spec":
             from app.models import FrameSpec, SpecStatus
 

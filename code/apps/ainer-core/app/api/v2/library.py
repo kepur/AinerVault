@@ -59,7 +59,9 @@ class NovelOut(BaseModel):
 
 class ChapterIn(BaseModel):
     title: str | None = None
-    content: str = ""
+    # PATCH 只改标题时不能把正文默认为空串。之前这个默认值让
+    # {"title": "..."} 也命中 update_chapter 的正文更新分支，整章会被清空。
+    content: str | None = None
     order_no: int | None = None
 
 
@@ -604,9 +606,10 @@ def novel_progress(novel_id: str, db: Session = Depends(get_db)) -> dict:
 def create_chapter(novel_id: str, body: ChapterIn, db: Session = Depends(get_db)) -> dict:
     _get_novel(db, novel_id)
     order = body.order_no if body.order_no is not None else _next_order(db, novel_id)
+    content = body.content or ""
     c = Chapter(
         id=new_id("ch"), novel_id=novel_id, order_no=order,
-        title=body.title, content=body.content, word_count=count_words(body.content),
+        title=body.title, content=content, word_count=count_words(content),
     )
     db.add(c)
     db.flush()

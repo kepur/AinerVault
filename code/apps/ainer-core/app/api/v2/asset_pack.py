@@ -632,6 +632,7 @@ def list_entity_epochs(novel_id: str, profile_id: str = Query(...),
                     "from_chapter_order": r.from_chapter_order,
                     "to_chapter_order": r.to_chapter_order,
                     "trigger": r.trigger, "variant": r.variant_json or {},
+                    "reference_set": r.reference_set_json or {},
                     "prompt": r.visual_prompt or compose_epoch_prompt(r, "character"),
                     "rationale": r.rationale,
                     "status": r.status.value, "locked": r.locked,
@@ -713,3 +714,109 @@ def get_identity_anchors(novel_id: str, profile_id: str = Query(...),
     from app.pipelines import identity
 
     return identity.anchor_status(db, novel_id, profile_id)
+
+
+# ── 人物三要素 + 三视角参考集 ────────────────────────────────────────────────
+
+class CharacterReferenceIn(BaseModel):
+    entity_ids: list[str] = Field(default_factory=list)
+    views: list[str] = Field(default_factory=list)
+    regenerate: bool = False
+    confirm_cost: bool = False
+
+
+@router.post("/novels/{novel_id}/character-references:generate")
+def generate_character_references(
+    novel_id: str, profile_id: str = Query(...),
+    body: CharacterReferenceIn | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """身份锚 → 正面完整人物 → 两张转角图；每一期独立一套衣着。"""
+    from app.pipelines import identity
+
+    profile = db.get(WorldProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="world profile not found")
+    body = body or CharacterReferenceIn()
+    try:
+        return identity.generate_character_references(
+            db, novel_id, profile,
+            entity_ids=body.entity_ids or None,
+            views=body.views or None,
+            regenerate=body.regenerate,
+            confirm_cost=body.confirm_cost,
+        ).as_dict()
+    except PipelineError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/novels/{novel_id}/character-references")
+def get_character_references(
+    novel_id: str, profile_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.pipelines import identity
+
+    return identity.character_reference_status(db, novel_id, profile_id)
+
+
+_ASSET_GROUPS = (
+    ("world", "基础世界素材", (
+        AssetKindSpec.style, AssetKindSpec.location, AssetKindSpec.ambience)),
+    ("character", "人物参考", ()),
+    ("object", "服装道具与生物", (
+        AssetKindSpec.costume, AssetKindSpec.prop, AssetKindSpec.creature)),
+    ("performance", "表演动作", (
+        AssetKindSpec.expression, AssetKindSpec.action)),
+    ("sound", "声音资产", (
+        AssetKindSpec.voice, AssetKindSpec.sfx, AssetKindSpec.bgm,
+        AssetKindSpec.room_tone)),
+)
+
+
+@router.get("/novels/{novel_id}/asset-taxonomy")
+def asset_taxonomy(
+    novel_id: str, profile_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """把素材按生产职责分类，并给出有规格/有参考产物的真实数量。"""
+    from app.pipelines import identity
+
+    rows = list(db.execute(
+        select(AssetSpec, AssetVariant)
+        .outerjoin(
+            AssetVariant,
+            (AssetVariant.asset_spec_id == AssetSpec.id)
+            & (AssetVariant.world_profile_id == profile_id),
+        )
+        .where(AssetSpec.novel_id == novel_id)
+    ).all())
+    chars = identity.character_reference_status(db, novel_id, profile_id)
+    groups = []
+    for key, label, kinds in _ASSET_GROUPS:
+        if key == "character":
+            total = chars["epoch_sets"]
+            ready = chars["complete_sets"]
+            details = [{
+                "kind": "character_reference", "total": total, "ready": ready,
+            }]
+        else:
+            details = []
+            for kind in kinds:
+                subset = [(s, v) for s, v in rows if s.kind == kind]
+                details.append({
+                    "kind": kind.value,
+                    "total": len(subset),
+                    "ready": len([
+                        1 for _s, v in subset
+                        if v is not None and not (v.missing_fields or [])
+                        and bool(v.ref_asset_ids)
+                    ]),
+                })
+            total = sum(i["total"] for i in details)
+            ready = sum(i["ready"] for i in details)
+        groups.append({
+            "key": key, "label": label, "total": total,
+            "ready": ready, "details": details,
+        })
+    return {"groups": groups, "character_references": chars}

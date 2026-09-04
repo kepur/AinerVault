@@ -43,7 +43,7 @@ from app.models import (
     INVARIANT_FIELDS, Asset, AssetEpoch, EntityKind, GenTask, TaskStatus,
     WorldEntity, WorldProfile,
 )
-from app.pipelines.base import PipelineError
+from app.pipelines.base import PipelineError, checkpoint
 from app.pipelines.entity_epochs import AGE_EN_KEY, EN_KEY
 
 log = logging.getLogger(__name__)
@@ -98,6 +98,129 @@ ANCHOR_NEGATIVE = (
     "strong shadows, motion, action pose, text, watermark, multiple people"
 )
 
+#: 一套参考集只做三张，而不是九宫格拼贴。每张图单独生成、单独引用，
+#: 下游才能按镜头朝向选择；拼成一张图会让模型不知道该抄哪一个人。
+CHARACTER_REFERENCE_VIEWS = (
+    "front", "three_quarter_left", "profile_left",
+)
+REFERENCE_VIEW_CN = {
+    "front": "正面全身",
+    "three_quarter_left": "左前四分之三",
+    "profile_left": "左侧面",
+}
+REFERENCE_REF_KINDS = {
+    "front": "character_ref_front",
+    "three_quarter_left": "character_ref_3q_left",
+    "profile_left": "character_ref_profile_left",
+}
+REF_KIND_TO_VIEW = {v: k for k, v in REFERENCE_REF_KINDS.items()}
+CHARACTER_REFERENCE_NEGATIVE = (
+    "different person, changed facial identity, changed body proportions, "
+    "changed hairstyle, changed wardrobe, changed accessories, action pose, "
+    "dramatic perspective, dramatic lighting, cropped feet, collage, split screen, "
+    "multiple views, multiple people, text, labels, watermark"
+)
+
+_IDENTITY_CN = ("sex", "face_shape", "features", "eye_color", "skin_tone", "scars")
+_SILHOUETTE_CN = ("build", "height", "age_look", "bearing")
+_WARDROBE_CN = ("hair", "facial_hair", "garments", "accessories", "carried", "condition")
+
+
+def _fields_text(data: dict[str, Any], fields: Sequence[str]) -> str:
+    return "；".join(str(data.get(k) or "").strip() for k in fields
+                     if str(data.get(k) or "").strip())
+
+
+def reference_elements(epoch: AssetEpoch) -> dict[str, dict[str, str]]:
+    """把时期字段整理成可审核的三要素，中英各一份。
+
+    旧数据只有两条英文权威：invariant._en 与 variant._en。没有凭空拆词；
+    `identity` 保留前者，`wardrobe` 保留后者，silhouette 的英文在旧数据中
+    只能诚实标成复用不变项与年龄。下一次重划时期仍可无损升级结构。
+    """
+    inv = dict(epoch.invariant_json or {})
+    var = dict(epoch.variant_json or {})
+    inv_en = str(inv.get(EN_KEY) or "").strip()
+    var_en = str(var.get(EN_KEY) or "").strip()
+    age_en = str(var.get(AGE_EN_KEY) or "").strip()
+    return {
+        "identity": {
+            "cn": _fields_text(inv, _IDENTITY_CN),
+            "en": inv_en,
+        },
+        "silhouette": {
+            "cn": _fields_text({**inv, **var}, _SILHOUETTE_CN),
+            "en": ", ".join(dict.fromkeys(x for x in (age_en, inv_en) if x)),
+        },
+        "wardrobe": {
+            "cn": _fields_text(var, _WARDROBE_CN),
+            "en": var_en,
+        },
+    }
+
+
+def compose_character_reference_prompt(
+    epoch: AssetEpoch, profile: WorldProfile | None, view: str,
+) -> str:
+    """三视角提示词。
+
+    正面图从素颜身份锚扩成这一时期的完整人物，因此只补身体、发型、衣着；
+    两张转角图则只说“转到这个角度”，不重新描述人物。这沿用了
+    Higgsfield 的关键纪律：参考图负责静态身份，i2v/i2i 提示只写变化。
+    """
+    if view not in CHARACTER_REFERENCE_VIEWS:
+        raise ValueError(f"unknown character reference view: {view}")
+    if view != "front":
+        angle = {
+            "three_quarter_left": "a left three-quarter view (about 45 degrees)",
+            "profile_left": "a strict left profile view (about 90 degrees)",
+        }[view]
+        return (
+            f"Rotate the exact same character from the input reference to {angle}. "
+            "Preserve the exact facial identity, body proportions, apparent age, "
+            "hairstyle, wardrobe, accessories, footwear, materials and colors. "
+            "Neutral relaxed standing pose, arms naturally separated from the torso, "
+            "full body from head to feet, eye-level 85mm reference photography, "
+            "even soft neutral lighting, plain mid-grey seamless background, sharp detail."
+        )
+
+    var = dict(epoch.variant_json or {})
+    wardrobe = str(var.get(EN_KEY) or "").strip()
+    age = str(var.get(AGE_EN_KEY) or "").strip()
+    era = era_phrase(profile) if profile is not None else ""
+    specifics = ", ".join(dict.fromkeys(x for x in (age, era, wardrobe) if x))
+    if not specifics:
+        return ""
+    return (
+        "Create a full-body front-view character model reference of the exact same "
+        "person shown in the input identity portrait. Preserve the exact facial identity. "
+        f"Apply only this period-specific body, hair and wardrobe design: {specifics}. "
+        "Neutral relaxed standing pose, arms naturally separated from the torso, "
+        "full body from head to feet, eye-level 85mm reference photography, "
+        "even soft neutral lighting, plain mid-grey seamless background, sharp material detail."
+    )
+
+
+def preferred_reference_view(facing: str | None) -> str:
+    """镜头朝向 → 参考集里的具体一张。右侧面允许镜像使用左侧面。"""
+    return {
+        "to_camera": "front",
+        "three_quarter": "three_quarter_left",
+        "profile_left": "profile_left",
+        "profile_right": "profile_left",
+        "away": "three_quarter_left",
+    }.get(str(facing or ""), "three_quarter_left")
+
+
+def character_reference_asset_id(epoch: AssetEpoch, facing: str | None) -> str | None:
+    views = dict((epoch.reference_set_json or {}).get("views") or {})
+    preferred = preferred_reference_view(facing)
+    for key in (preferred, "three_quarter_left", "front", "profile_left"):
+        item = views.get(key)
+        if isinstance(item, dict) and item.get("asset_id"):
+            return str(item["asset_id"])
+    return None
+
 
 @dataclass
 class AnchorResult:
@@ -118,6 +241,23 @@ class AnchorResult:
             "estimated_cost": self.estimated_cost,
             "requires_confirm": self.requires_confirm,
             "tasks": self.tasks,
+        }
+
+
+@dataclass
+class CharacterReferenceResult:
+    submitted: int = 0
+    skipped: int = 0
+    blocked: list[str] = field(default_factory=list)
+    estimated_cost: float | None = None
+    requires_confirm: bool = False
+    tasks: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "submitted": self.submitted, "skipped": self.skipped,
+            "blocked": self.blocked, "estimated_cost": self.estimated_cost,
+            "requires_confirm": self.requires_confirm, "tasks": self.tasks,
         }
 
 
@@ -394,4 +534,206 @@ def anchor_status(
         "entities": len(items),
         "with_anchor": len([i for i in items if i["anchor_asset_id"]]),
         "items": items, "issues": issues,
+    }
+
+
+def _asset_url(db: Session, asset_id: str | None) -> str | None:
+    if not asset_id:
+        return None
+    return db.execute(
+        select(Asset.url).where(Asset.id == asset_id)
+    ).scalars().first()
+
+
+def _reference_doc(epoch: AssetEpoch) -> dict[str, Any]:
+    current = dict(epoch.reference_set_json or {})
+    current["elements"] = reference_elements(epoch)
+    current["views"] = dict(current.get("views") or {})
+    return current
+
+
+def generate_character_references(
+    db: Session, novel_id: str, profile: WorldProfile, *,
+    entity_ids: Sequence[str] | None = None,
+    views: Sequence[str] | None = None,
+    regenerate: bool = False,
+    confirm_cost: bool = False,
+    cost_threshold: float = 1.0,
+) -> CharacterReferenceResult:
+    """从脸锚顺序派生每一期的三视角人物参考。
+
+    一次调用只推进一个依赖层：没有正面图时先做正面；正面落地后再做两个
+    转角。不能在同一批里让侧面引用一个尚未产生的 URL。
+    """
+    requested = tuple(dict.fromkeys(views or CHARACTER_REFERENCE_VIEWS))
+    bad = [v for v in requested if v not in CHARACTER_REFERENCE_VIEWS]
+    if bad:
+        raise PipelineError(f"未知人物参考视角：{'、'.join(bad)}")
+
+    q = select(WorldEntity).where(
+        WorldEntity.novel_id == novel_id,
+        WorldEntity.kind == EntityKind.character,
+    )
+    if entity_ids:
+        q = q.where(WorldEntity.id.in_(list(entity_ids)))
+    entities = list(db.execute(q).scalars())
+    if not entities:
+        raise PipelineError("这本书还没有人物实体")
+
+    result = CharacterReferenceResult()
+    pending: list[tuple[WorldEntity, AssetEpoch, str, str, str]] = []
+    for ent in entities:
+        epochs = epochs_of(db, ent.id, profile.id)
+        if not epochs:
+            result.blocked.append(f"{ent.display_name}：还没有人物时期")
+            continue
+        for epoch in epochs:
+            ref_doc = _reference_doc(epoch)
+            view_doc = ref_doc["views"]
+            epoch.reference_set_json = ref_doc
+
+            # 正面是这一期身体/服装的权威；任何派生视角都必须从它出发。
+            front_item = view_doc.get("front") if isinstance(
+                view_doc.get("front"), dict) else {}
+            front_id = str(front_item.get("asset_id") or "")
+            needs_front = "front" in requested and (regenerate or not front_id)
+            if needs_front:
+                anchor_url = _asset_url(db, epoch.identity_ref_asset_id)
+                prompt = compose_character_reference_prompt(epoch, profile, "front")
+                if not anchor_url:
+                    result.blocked.append(
+                        f"{ent.display_name}／{epoch.display_name}：先生成身份锚，再扩成正面全身参考")
+                elif not prompt:
+                    result.blocked.append(
+                        f"{ent.display_name}／{epoch.display_name}：缺英文时期外观，不能交给图像模型猜")
+                else:
+                    pending.append((ent, epoch, "front", anchor_url, prompt))
+                # 这一轮即使有旧 front，重出时也不能让侧面继续从旧版派生。
+                for view in requested:
+                    if view != "front":
+                        result.blocked.append(
+                            f"{ent.display_name}／{epoch.display_name}／{REFERENCE_VIEW_CN[view]}："
+                            "等待本轮正面参考落地后再派生")
+                continue
+
+            if "front" in requested and front_id:
+                result.skipped += 1
+            front_url = _asset_url(db, front_id)
+            for view in requested:
+                if view == "front":
+                    continue
+                current = view_doc.get(view) if isinstance(view_doc.get(view), dict) else {}
+                if current.get("asset_id") and not regenerate:
+                    result.skipped += 1
+                    continue
+                if not front_url:
+                    result.blocked.append(
+                        f"{ent.display_name}／{epoch.display_name}／{REFERENCE_VIEW_CN[view]}："
+                        "正面全身参考还没落地")
+                    continue
+                pending.append((
+                    ent, epoch, view, front_url,
+                    compose_character_reference_prompt(epoch, profile, view),
+                ))
+
+    if not pending:
+        db.flush()
+        return result
+    est = estimate_cost(
+        db, Capability.image_i2i, "character_reference", len(pending))
+    result.estimated_cost = est
+    if est is not None and est > cost_threshold and not confirm_cost:
+        result.requires_confirm = True
+        return result
+
+    for ent, epoch, view, source_url, prompt in pending:
+        task = submit_task(
+            db, Capability.image_i2i,
+            {
+                "image": {"url": source_url},
+                "prompt": prompt,
+                "negative_prompt": CHARACTER_REFERENCE_NEGATIVE,
+                "strength": 0.68 if view == "front" else 0.42,
+                "width": 1024, "height": 1536,
+                "params": {"seed": None},
+            },
+            purpose="character_reference",
+            ref_kind=REFERENCE_REF_KINDS[view], ref_id=epoch.id,
+            novel_id=novel_id, force=regenerate, max_cost=0.0,
+        )
+        # 同步方言会在 submit_task 内立刻把 asset_id 回挂；从更新后的对象再取，
+        # 不能用调用前的旧字典覆盖掉回挂结果。
+        ref_doc = _reference_doc(epoch)
+        current = dict(ref_doc["views"].get(view) or {})
+        current.update({
+            "prompt_en": prompt,
+            "source_asset_id": (epoch.identity_ref_asset_id if view == "front"
+                                else ref_doc["views"].get("front", {}).get("asset_id")),
+            "gen_task_id": task.id,
+            "status": task.status.value,
+        })
+        ref_doc["views"][view] = current
+        epoch.reference_set_json = ref_doc
+        result.submitted += 1
+        result.tasks.append({
+            "entity": ent.display_name, "entity_id": ent.id,
+            "epoch": epoch.epoch_key, "epoch_id": epoch.id,
+            "view": view, "gen_task_id": task.id, "status": task.status.value,
+        })
+        checkpoint(db)
+    db.flush()
+    return result
+
+
+def character_reference_status(
+    db: Session, novel_id: str, profile_id: str,
+) -> dict[str, Any]:
+    entities = {
+        e.id: e for e in db.execute(
+            select(WorldEntity).where(
+                WorldEntity.novel_id == novel_id,
+                WorldEntity.kind == EntityKind.character,
+            )
+        ).scalars()
+    }
+    items: list[dict[str, Any]] = []
+    complete = 0
+    epoch_total = 0
+    for eid, ent in entities.items():
+        epoch_items = []
+        for epoch in epochs_of(db, eid, profile_id):
+            epoch_total += 1
+            doc = _reference_doc(epoch)
+            views_out: dict[str, Any] = {}
+            ready = 0
+            for view in CHARACTER_REFERENCE_VIEWS:
+                v = dict(doc["views"].get(view) or {})
+                aid = str(v.get("asset_id") or "") or None
+                url = _asset_url(db, aid)
+                if url:
+                    ready += 1
+                views_out[view] = {
+                    **v, "label": REFERENCE_VIEW_CN[view],
+                    "asset_id": aid, "url": url,
+                }
+            is_complete = ready == len(CHARACTER_REFERENCE_VIEWS)
+            complete += int(is_complete)
+            epoch_items.append({
+                "epoch_id": epoch.id, "epoch_key": epoch.epoch_key,
+                "display_name": epoch.display_name,
+                "elements": doc["elements"], "views": views_out,
+                "ready_views": ready, "complete": is_complete,
+            })
+        if epoch_items:
+            items.append({
+                "entity_id": eid, "name": ent.display_name,
+                "epochs": epoch_items,
+                "complete": all(e["complete"] for e in epoch_items),
+            })
+    items.sort(key=lambda x: x["name"])
+    return {
+        "views_required": list(CHARACTER_REFERENCE_VIEWS),
+        "epoch_sets": epoch_total, "complete_sets": complete,
+        "items": items,
+        "not_checked": ([] if epoch_total else ["还没有人物时期，无法建立三要素与三视角参考集"]),
     }

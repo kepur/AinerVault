@@ -44,6 +44,9 @@ class ComposeResult:
     bound: int = 0
     missing_assets: list[str] = field(default_factory=list)
     missing_entity_visual: list[str] = field(default_factory=list)
+    #: 人物有文字外观但还没有完整三视角。没有参考集仍允许预览 prompt，
+    #: 但首帧生成会硬拦，避免再生产“每镜换一张脸”的废片。
+    missing_character_references: list[dict[str, Any]] = field(default_factory=list)
     #: 提示词里还留着的中文片段。**图像模型不认中文** ——
     #: 喂中文出来的是汉字纹样不是画面。哪条产线还欠英文渲染，看这里
     untranslated: list[dict[str, Any]] = field(default_factory=list)
@@ -55,6 +58,7 @@ class ComposeResult:
             "shots": self.shots, "bound": self.bound,
             "missing_assets": self.missing_assets,
             "missing_entity_visual": self.missing_entity_visual,
+            "missing_character_references": self.missing_character_references,
             "untranslated": self.untranslated,
             "missing_production": self.missing_production,
         }
@@ -139,7 +143,8 @@ def _asset_urls(db: Session, ids: Sequence[str]) -> list[str]:
 
 
 def _entity_look(
-    db: Session, entity: WorldEntity, profile_id: str, chapter_order: int | None
+    db: Session, entity: WorldEntity, profile_id: str, chapter_order: int | None,
+    facing: str | None = None,
 ) -> tuple[str, list[str]]:
     """人物外观。有时期数据时以时期为准，否则回落到基础视觉 + 成长状态。
 
@@ -175,9 +180,15 @@ def _entity_look(
         text = text or compose_epoch_prompt(
             epoch, "character", has_anchor=bool(anchor))
         refs = list(epoch.ref_asset_ids or [])
+        # 身份锚负责脸，三视角参考负责这一时期的身体/发型/衣着和准确朝向。
+        # 两者不是二选一；只留锚会回到灰底头肩像，只留全身参考又会弱化脸。
+        from app.pipelines.identity import character_reference_asset_id
+        view_ref = character_reference_asset_id(epoch, facing)
         if anchor and anchor not in refs:
             # 锚排最前：每个人物只取一张参考图，锚必须是那一张
             refs.insert(0, anchor)
+        if view_ref and view_ref not in refs:
+            refs.insert(1 if anchor else 0, view_ref)
         if text:
             return text.strip(), refs
 
@@ -214,6 +225,18 @@ def _entity_look(
             refs.extend(state.ref_asset_ids or [])
 
     return ", ".join(p for p in parts if p), refs
+
+
+def _facing_for(db: Session, shot_id: str, entity_id: str) -> str | None:
+    from app.models import ShotPerformance
+
+    row = db.execute(
+        select(ShotPerformance.facing).where(
+            ShotPerformance.shot_id == shot_id,
+            ShotPerformance.entity_id == entity_id,
+        )
+    ).scalars().first()
+    return row.value if row is not None else None
 
 
 #: 站位 → 英文提示词。九宫格而非坐标 —— 坐标在不同画幅下没有意义。
@@ -483,18 +506,26 @@ def compose_frame_prompt(
         entity = db.get(WorldEntity, eid)
         if entity is None:
             continue
-        look, look_refs = _entity_look(db, entity, profile.id, chapter_order)
+        look, look_refs = _entity_look(
+            db, entity, profile.id, chapter_order,
+            _facing_for(db, shot.id, entity.id),
+        )
         if look:
             positive.append(look)
-        for url in _asset_urls(db, look_refs)[:1]:
+        for index, url in enumerate(_asset_urls(db, look_refs)[:2]):
             # **标明这是身份锚。** 服装素材的参考图也用 role="character"
             #（那是对的：衣服要贴在人身上），于是「谁当 i2i 的底图」
             # 就只由 refs 的拼装顺序决定 —— 人物段恰好排在服装段前面。
             # 那是个巧合，不是约束：以后谁调一下两段的顺序，
             # 底图就会从「这个人的脸」变成「一件衣服」，
             # 而出来的图仍然是一张合理的图，没人会发现。
-            refs.append({"ref": {"url": url}, "role": "character", "weight": 0.8,
-                         "identity": True, "tag": entity.canonical_key})
+            refs.append({
+                "ref": {"url": url}, "role": "character",
+                "weight": 0.8 if index == 0 else 0.68,
+                "identity": index == 0,
+                "tag": (entity.canonical_key if index == 0
+                        else f"{entity.canonical_key}.view"),
+            })
 
     # ── 4 服装与道具 ──
     for key in asset_keys:
@@ -658,6 +689,28 @@ def bind_and_compose(
             merged = dict(params)
             merged["reference_images"] = refs
             merged["production_revision"] = revision
+            # 完整参考集是生成闸门，不是提示性徽章。一个镜头即使只用正脸，
+            # 后续反打/侧移也一定会需要转角图；临到那时再独立生成，衣服和体型
+            # 已经漂了。先把人物基础素材做完，再允许烧图像额度。
+            missing_refs: list[str] = []
+            from app.pipelines.identity import CHARACTER_REFERENCE_VIEWS
+            for eid in frame.entity_ids_json or []:
+                entity = db.get(WorldEntity, eid)
+                if entity is None:
+                    continue
+                epoch = resolve_epoch(db, eid, profile.id, chapter_order)
+                views = ((epoch.reference_set_json or {}).get("views") or {}) \
+                    if epoch is not None else {}
+                if any(not isinstance(views.get(view), dict)
+                       or not views[view].get("asset_id")
+                       for view in CHARACTER_REFERENCE_VIEWS):
+                    missing_refs.append(entity.display_name)
+            merged["missing_character_references"] = list(dict.fromkeys(missing_refs))
+            if missing_refs:
+                result.missing_character_references.append({
+                    "shot": shot.order_no, "role": frame.role.value,
+                    "entities": list(dict.fromkeys(missing_refs)),
+                })
             frame.params_json = merged
 
             cjk = cjk_segments(pos)
@@ -682,7 +735,10 @@ def bind_and_compose(
                 entity = db.get(WorldEntity, eid)
                 if entity is None:
                     continue
-                look, _ = _entity_look(db, entity, profile.id, chapter_order)
+                look, _ = _entity_look(
+                    db, entity, profile.id, chapter_order,
+                    _facing_for(db, shot.id, entity.id),
+                )
                 if not look and entity.display_name not in result.missing_entity_visual:
                     result.missing_entity_visual.append(entity.display_name)
 
@@ -781,6 +837,12 @@ def generate_first_frames(
             result.blocked.append(
                 f"镜头 {shot.order_no} 的制作单或运动已变更，请先重新「绑定素材并拼 prompt」"
             )
+            continue
+        missing_refs = list(
+            (frame.params_json or {}).get("missing_character_references") or [])
+        if missing_refs:
+            result.blocked.append(
+                f"镜头 {shot.order_no} 缺人物三视角参考：{'、'.join(missing_refs)}")
             continue
         pending.append((frame, shot))
     if not pending:
