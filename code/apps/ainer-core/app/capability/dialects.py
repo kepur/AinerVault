@@ -39,8 +39,10 @@ DIALECT_CAPABILITY = "capability"
 DIALECT_OPENAI = "openai"
 DIALECT_CLOUDFLARE = "cloudflare"
 DIALECT_DASHSCOPE = "dashscope"
+#: 本地 AUTOMATIC1111 WebUI。第一个跑在自己显卡上的方言 —— 出图不花钱
+DIALECT_SD = "sd_webui"
 DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE,
-            DIALECT_DASHSCOPE)
+            DIALECT_DASHSCOPE, DIALECT_SD)
 
 #: openai 方言能承接的能力。图像/音频不在此列 —— 走这条方言的服务只有文本。
 OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
@@ -616,7 +618,8 @@ def openai_catalog(transport: httpx.Client, base_url: str, headers: dict[str, st
 #   契约下游（参考图、i2i、交付清单）认的只有 URL。
 
 #: 同步方言：没有任务队列，submit 也得当场跑完
-SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE)
+SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE,
+                      DIALECT_SD)
 
 #: **每个模型只吃自己 schema 里的字段，多传一个就整个请求 400。**
 #: flux-1-schnell 只认 prompt 与 steps —— 传 width/height/seed/negative_prompt
@@ -1716,3 +1719,196 @@ def dashscope_voices(*, language: str | None = None,
         if not want or want == g
     ]
     return out
+
+
+# ── sd_webui 方言（本地 AUTOMATIC1111）────────────────────────────────────────
+#
+# **这是第一个真正在本地 GPU 上跑的方言。** 别的方言都是把请求转发到别人的
+# 机器上，按次计费；这一条跑在自己的显卡上，出多少张都不花钱。
+# 存在的理由很直接：出图是整条产线里最贵的一项 —— 一天 ¥31.5 的 i2i、
+# ¥48 的视频，而剧本、译本、配音加起来不到一块钱。
+#
+# 能力只接图像两项。A1111 没有文本与音频，硬接会得到 404 而不是清晰的报错。
+
+#: A1111 的采样器名字与别家不同，且拼错会 400。这几个是各版本都有的
+_SD_SAMPLER_DEFAULT = "DPM++ 2M"
+#: 步数与 CFG 的缺省。写实模型通常要更多步，动漫模型 20~28 步足够；
+#: 真要调就在路由的 default_params 里配，不改代码
+_SD_STEPS_DEFAULT = 28
+_SD_CFG_DEFAULT = 7.0
+
+
+def _sd_b64(transport: httpx.Client, ref: Any, timeout: float) -> str | None:
+    """AssetRefIn → **裸 base64**（不带 data: 前缀）。
+
+    A1111 的 init_images 与 ControlNet 的 image 都收裸 base64。
+    带上 data: 前缀在部分版本上会被当成损坏的图直接 500，
+    而报错信息只说「cannot identify image file」—— 查不到是前缀的事。
+    """
+    url = _ds_data_url(transport, ref, timeout)
+    return url.split(",", 1)[1] if url and "," in url else None
+
+
+def _sd_refs(transport: httpx.Client, payload: dict[str, Any],
+             timeout: float) -> list[dict[str, Any]]:
+    """参考图 → ControlNet reference_only 单元。
+
+    **reference_only 不需要 ControlNet 模型文件**（实测：模型列表为空
+    也能跑通，model 传 "None" 即可）。它是这台机器上现成可用的、
+    唯一的身份一致性手段 —— openpose / ip-adapter 那些都要先下模型文件。
+
+    只取身份锚那一张。ControlNet 每多挂一个单元就多一份显存与时间，
+    而参考图里除了人还有画风、场景、服装 —— 全挂上去，
+    模型会把场景参考的构图也一起抄过来。
+    """
+    refs = payload.get("reference_images") or []
+    picked = None
+    for r in refs:
+        if not isinstance(r, dict):
+            continue
+        if r.get("identity") or r.get("role") == "character":
+            picked = r
+            break
+    if picked is None:
+        return []
+    b64 = _sd_b64(transport, picked.get("ref"), timeout)
+    if not b64:
+        return []
+    return [{
+        "image": b64,
+        "module": "reference_only",
+        "model": "None",
+        "weight": float(picked.get("weight") or 0.8),
+        "guidance_start": 0.0,
+        "guidance_end": 1.0,
+        "enabled": True,
+    }]
+
+
+def _sd_body(transport: httpx.Client, payload: dict[str, Any], model: str | None,
+             *, capability: Capability, timeout: float,
+             warnings: list[str]) -> tuple[str, dict[str, Any]]:
+    """契约的图像入参 → A1111 的 txt2img / img2img 形状。"""
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "prompt 为空")
+    params = payload.get("params") or {}
+    body: dict[str, Any] = {
+        "prompt": prompt,
+        "negative_prompt": str(payload.get("negative_prompt") or ""),
+        "width": int(payload.get("width") or 1024),
+        "height": int(payload.get("height") or 1024),
+        "steps": int(params.get("steps") or _SD_STEPS_DEFAULT),
+        "cfg_scale": float(params.get("cfg_scale") or _SD_CFG_DEFAULT),
+        "sampler_name": str(params.get("sampler") or _SD_SAMPLER_DEFAULT),
+        "batch_size": 1,
+        "n_iter": 1,
+        "send_images": True,
+        "save_images": False,
+    }
+    seed = params.get("seed")
+    body["seed"] = int(seed) if seed is not None else -1
+    if model:
+        # 不还原 —— 每次调用后切回原模型会触发一次重新加载，
+        # 一批三十张就是三十次几秒的加载，而下一张八成还用同一个模型
+        body["override_settings"] = {"sd_model_checkpoint": model}
+        body["override_settings_restore_afterwards"] = False
+
+    units = _sd_refs(transport, payload, timeout)
+    if units:
+        body["alwayson_scripts"] = {"controlnet": {"args": units}}
+
+    if capability is Capability.image_t2i:
+        return "txt2img", body
+
+    init = _sd_b64(transport, payload.get("image"), timeout)
+    if not init:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST,
+                              "image_to_image 需要 image，且要取得到图片内容")
+    body["init_images"] = [init]
+    # strength 是「改多少」，denoising_strength 同义。给了就用，没给取 0.6：
+    # 太低几乎不动，太高等于重画一张，两头都不是 i2i 想要的
+    body["denoising_strength"] = float(payload.get("strength") or 0.6)
+    return "img2img", body
+
+
+def sd_invoke(
+    transport: httpx.Client, base_url: str, headers: dict[str, str], *,
+    capability: Capability, payload: dict[str, Any], model: str | None,
+    timeout: float, task_id: str,
+) -> Task:
+    """跑一次本地 A1111，产物落盘后按契约的 Task 形态返回。"""
+    from app.capability.mediastore import store_b64
+
+    if capability not in (Capability.image_t2i, Capability.image_i2i):
+        raise CapabilityError(
+            CapErrorCode.CAPABILITY_UNSUPPORTED,
+            f"{capability.value} 不能走 sd_webui 方言 —— A1111 只有图像两项。"
+            f"文本与音频请指向别的端点。",
+        )
+    warnings: list[str] = []
+    route, body = _sd_body(transport, payload, model, capability=capability,
+                           timeout=timeout, warnings=warnings)
+    url = f"{base_url.rstrip('/')}/sdapi/v1/{route}"
+    started = time.time()
+    try:
+        resp = transport.post(url, json=body, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
+                              f"本地 SD 超时: {exc}") from exc
+    except httpx.HTTPError as exc:
+        # 本地服务最常见的失败是「没开机」或「IP 变了」，
+        # 说清楚是连不上而不是模型的问题
+        raise CapabilityError(
+            CapErrorCode.TRANSPORT_ERROR,
+            f"连不上本地 SD（{base_url}）：{exc}。请确认 WebUI 在跑，"
+            f"且带着 --api 与 --listen 启动。") from exc
+    if resp.status_code >= 400:
+        detail = resp.text[:300]
+        code = (CapErrorCode.INVALID_REQUEST if resp.status_code < 500
+                else CapErrorCode.UPSTREAM_ERROR)
+        raise CapabilityError(code, f"SD {resp.status_code}: {detail}")
+
+    data = resp.json()
+    raw = data.get("images") or []
+    if not raw:
+        raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                              f"SD 响应里没有图片：{str(data)[:200]}")
+    # **只取第一张。** 挂了 ControlNet 之后返回里会多出预处理图
+    #（reference 的那张灰度图），照单全收会把它也当成产物存下来，
+    # 于是资源库里每张人物图旁边多一张没人要的中间图
+    images = [store_b64(raw[0], mime="image/png")]
+    return Task(
+        task_id=task_id, status=TaskState.succeeded,
+        capability=capability.value, model=model, provider="sd-webui",
+        output={"images": images},
+        # 本地跑不花钱 —— cost 恒为 0，别让它混进成本统计里去
+        usage=Usage(cost=0.0, units={"images": 1.0},
+                    duration_ms=int((time.time() - started) * 1000)),
+        warnings=warnings or None,
+    )
+
+
+def sd_health(transport: httpx.Client, base_url: str,
+              headers: dict[str, str], timeout: float) -> HealthResult:
+    """A1111 没有健康端点，用模型列表代替 —— 它同时验证了 --api 开着。"""
+    try:
+        resp = transport.get(f"{base_url.rstrip('/')}/sdapi/v1/sd-models",
+                             headers=headers, timeout=timeout)
+        ok = resp.status_code < 400
+    except httpx.HTTPError:
+        ok = False
+    return HealthResult(ok=ok, version=f"sd-webui-dialect/{CONTRACT_VERSION}",
+                        contract_version=CONTRACT_VERSION)
+
+
+def sd_models(transport: httpx.Client, base_url: str, headers: dict[str, str],
+              timeout: float) -> list[dict[str, Any]]:
+    """这台机器上装了哪些 checkpoint。路由要填的 model 就是 model_name。"""
+    resp = transport.get(f"{base_url.rstrip('/')}/sdapi/v1/sd-models",
+                         headers=headers, timeout=timeout)
+    if resp.status_code >= 400:
+        raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                              f"取模型列表失败 {resp.status_code}")
+    return [{"name": m.get("model_name"), "title": m.get("title")}
+            for m in resp.json()]
