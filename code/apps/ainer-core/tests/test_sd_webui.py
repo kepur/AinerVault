@@ -175,3 +175,66 @@ class TestOutput:
 
         src = inspect.getsource(dialects.sd_invoke)
         assert "连不上本地 SD" in src and "--api" in src
+
+
+class TestPromptStyle:
+    """要切换的不是**语言**，是**句式**。
+
+    实跑发给本地 SD 的提示词本来就是全英文的：
+      "Create a full-body front-view character model reference of the exact
+       same person shown in the input identity portrait. Preserve the exact
+       facial identity. Apply only this period-specific body, hair and
+       wardrobe design: man in his forties, American, ..."
+
+    百炼的 qwen-image 是指令跟随模型，读得懂这一套；SD1.5 系的动漫底模
+    不跟随指令，只认逗号标签 —— 那半句话在它眼里是噪声，把真正描述
+    五官衣着的词稀释掉，出来的脸就糊。anything-v5 人脸崩的根因在这里。
+    """
+
+    def test_instruction_sentences_are_dropped(self):
+        from app.capability.dialects import sd_tagify
+
+        got = sd_tagify(
+            "Create a full-body reference of the exact same person. "
+            "Preserve the exact facial identity. short neat hair, grey slacks")
+        assert "Create" not in got and "Preserve" not in got
+        assert "short neat hair" in got and "grey slacks" in got
+
+    def test_colon_keeps_only_the_content(self):
+        """「hair and wardrobe design: man in his forties」只留后半 ——
+        不切的话前半会作为标签留下，而且让后半躲过去重。"""
+        from app.capability.dialects import sd_tagify
+
+        got = sd_tagify("Apply only this design: man in his forties, "
+                        "American, man in his forties, short hair")
+        assert "wardrobe" not in got and "design" not in got
+        assert got.lower().count("man in his forties") == 1
+
+    def test_pure_tags_pass_through(self):
+        """已经是标签的不要动 —— 这一层只负责把指令句拆成标签。"""
+        from app.capability.dialects import sd_tagify
+
+        tags = "1boy, solo, short hair, school uniform"
+        assert sd_tagify(tags) == tags
+
+    def test_empty_stays_empty(self):
+        from app.capability.dialects import sd_tagify
+
+        assert sd_tagify("") == ""
+        assert sd_tagify(None) == ""
+
+    def test_all_instruction_falls_back_to_original(self):
+        """拆不出标签时原样返回 —— 宁可发一条指令式提示词，也不要发空的。"""
+        from app.capability.dialects import sd_tagify
+
+        only = "Create an image. Preserve the identity."
+        assert sd_tagify(only) == only
+
+    def test_style_is_opt_in_per_route(self):
+        """默认 instruction，不改老行为 —— 百炼那条线还要靠它。"""
+        import inspect
+
+        from app.capability import dialects
+
+        src = inspect.getsource(dialects._sd_body)
+        assert 'prompt_style' in src and '"tags"' in src

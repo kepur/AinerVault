@@ -1738,6 +1738,62 @@ _SD_STEPS_DEFAULT = 28
 _SD_CFG_DEFAULT = 7.0
 
 
+
+#: 指令句的开头。SD1.5 系底模不跟随指令，这些词只会稀释真正描述外观的部分
+_SD_VERB = re.compile(
+    r"^(create|generate|make|render|draw|produce|reframe|rotate|preserve|"
+    r"apply|keep|maintain|show|depict|change|transform|turn)\b", re.I)
+#: 指令句里常见的自指短语。整段丢掉 —— 它们说的是「怎么做」，不是「画什么」
+_SD_META = (
+    "the exact same person", "the same character", "input reference",
+    "input identity portrait", "reference photography", "reference sheet",
+    "period-specific", "only this",
+)
+
+
+def sd_tagify(prompt: str, *, limit: int = 60) -> str:
+    """指令句式的提示词 → 标签式。
+
+    **这不是翻译，是换句式。** 百炼的 qwen-image 是指令跟随模型，
+    "Create a full-body front-view reference of the exact same person…"
+    它读得懂；SD1.5 系的动漫底模不跟随指令，只认逗号分隔的标签，
+    那半句话在它眼里是一串噪声，把真正描述五官衣着的词稀释掉 ——
+    出来的脸就糊。实跑里 anything-v5 的人脸崩，根因在这里，不在语言：
+    提示词本来就已经是全英文的。
+
+    做三件事：
+      丢掉指令句     以 Create/Preserve/Apply 开头，或含自指短语的整段
+      去重           "man in his forties" 在同一条里出现两次是常事
+      截断           SD1.5 的 CLIP 一次只吃 77 token，堆到末尾的标签没有权重
+
+    保守：拆不出标签时原样返回。宁可发一条指令式提示词，
+    也不要发一条空的。
+    """
+    body = (prompt or "").strip()
+    if not body:
+        return ""
+    # 句号也当分隔符 —— 指令式提示词是句子，标签式要的是短语
+    parts = [x.strip() for x in re.split(r"[,.;]\s*", body) if x.strip()]
+    out: list[str] = []
+    for p in parts:
+        # 冒号前是指令、冒号后才是内容：
+        # 「hair and wardrobe design: man in his forties」只留后半。
+        # 不切的话前半会作为标签留下来，而且让后半躲过去重 ——
+        # 实跑里 "man in his forties" 就这样出现了两次。
+        if ":" in p:
+            p = p.rsplit(":", 1)[1].strip()
+        if not p:
+            continue
+        low = p.lower()
+        if _SD_VERB.match(p) or any(m in low for m in _SD_META):
+            continue
+        if low in {x.lower() for x in out}:
+            continue
+        out.append(p)
+    if not out:
+        return body
+    return ", ".join(out[:limit])
+
 def _sd_b64(transport: httpx.Client, ref: Any, timeout: float) -> str | None:
     """AssetRefIn → **裸 base64**（不带 data: 前缀）。
 
@@ -1793,6 +1849,11 @@ def _sd_body(transport: httpx.Client, payload: dict[str, Any], model: str | None
     if not prompt:
         raise CapabilityError(CapErrorCode.INVALID_REQUEST, "prompt 为空")
     params = payload.get("params") or {}
+    # 句式由路由配（default_params.prompt_style）。
+    # instruction＝原样发（qwen-image 这类指令跟随模型）；
+    # tags＝转成逗号标签（SD1.5 系底模）。默认 instruction —— 不改老行为
+    if str(params.get("prompt_style") or "").lower() == "tags":
+        prompt = sd_tagify(prompt)
     body: dict[str, Any] = {
         "prompt": prompt,
         "negative_prompt": str(payload.get("negative_prompt") or ""),
