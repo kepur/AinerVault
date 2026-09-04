@@ -316,3 +316,80 @@ class TestCastBrief:
         src = inspect.getsource(script_build.cast_brief)
         assert "a.source_surface == ent.display_name" in src
         assert "_is_common_address" in src, "「that whelp」不是这个人的另一个名字"
+
+
+class TestActionBeats:
+    """一个 action 块只写一个节拍 —— 一个节拍＝一个 3–5 秒的镜头。
+
+    实跑里模型给出的块长这样：
+      「清晨5:30，闹钟响起。Thomas Chen起床复习功课，吃完早餐后向母亲要了
+        十美元。步行五分钟到达学校。」
+    四个节拍、两个地点、半小时。分镜看到的是**一个块**，于是只出一个镜，
+    首尾帧之间跨了半小时 —— 出图模型只能自己编中间发生了什么，
+    首帧还在卧室，尾帧已经在校门口，人物衣着光线全会漂。
+    """
+
+    def test_the_real_case_is_split(self):
+        got = sp.split_action(
+            "清晨5:30，闹钟响起。Thomas Chen起床复习功课，"
+            "吃完早餐后向母亲要了十美元。步行五分钟到达学校。")
+        assert len(got) >= 3
+        assert any("闹钟" in b for b in got)
+        assert any("学校" in b for b in got), "地点转移必须单独成拍"
+
+    def test_a_single_picture_is_not_split(self):
+        """长描写不算多节拍 —— 切开会把一个镜头拆成三个静止帧。"""
+        one = "走廊尽头的窗透进光，尘埃在光柱里浮着，地板反着冷白的反光。"
+        assert sp.split_action(one) == [one]
+        assert sp.action_is_overloaded(one)[0] is False
+
+    def test_only_true_fragments_merge_back(self):
+        """只并没有主体的拟声残片。
+
+        **拆细是可逆的，塞粗是不可逆的** —— 分镜那一步可以把相邻的块
+        并进同一个镜头，却几乎不会把一个块拆成两个。所以宁可多切一刀
+        让分镜去合。「他愣住。」是一个合法的反应镜头，不该被并掉；
+        「啪。」没有主体，才是残片。
+        """
+        assert len(sp.split_action("Tyler抬手扇了他一巴掌。啪。")) == 1
+        assert len(sp.split_action("Tyler抬手扇了他一巴掌。他愣住。")) == 2
+
+    def test_a_real_short_beat_survives(self):
+        """**6 而不是 12。** 第一版阈值 12，把「步行五分钟到达学校。」
+        （10 字）当碎片并了回去 —— 而那是一次地点转移。"""
+        got = sp.split_action(
+            "他吃完早餐，向母亲要了十美元。步行五分钟到达学校。")
+        assert len(got) == 2
+
+    def test_empty_and_single_are_safe(self):
+        assert sp.split_action("") == []
+        assert sp.split_action("他推门进去。") == ["他推门进去。"]
+
+    def test_only_action_blocks_are_split(self):
+        """对白拆两半就成了两个人在说；narration 本来就不进画面。"""
+        from app.pipelines.script_build import _one_beat_blocks
+
+        raw = [
+            {"type": "dialogue", "text": "Hey, kid. Hand it over. Now."},
+            {"type": "narration", "text": "那是九十年代。天很冷。风很大。"},
+            {"type": "action", "text": "他推开门。走进走廊。灯光刺眼。"},
+        ]
+        out = _one_beat_blocks(raw)
+        assert sum(1 for b in out if b["type"] == "dialogue") == 1
+        assert sum(1 for b in out if b["type"] == "narration") == 1
+        assert sum(1 for b in out if b["type"] == "action") >= 2
+
+    def test_split_blocks_keep_their_other_fields(self):
+        from app.pipelines.script_build import _one_beat_blocks
+
+        out = _one_beat_blocks([
+            {"type": "action", "text": "他推开门。走进走廊。灯光刺眼。",
+             "speaker": None, "beat": "b1"}])
+        assert all(b.get("beat") == "b1" for b in out)
+
+    def test_the_prompt_says_it_too(self):
+        """规则层是保证，提示词是让模型一次做对。"""
+        from app.pipelines.script_build import SYSTEM_PROMPT
+
+        assert "一个 action 块只写一个节拍" in SYSTEM_PROMPT
+        assert "固定机位" in SYSTEM_PROMPT

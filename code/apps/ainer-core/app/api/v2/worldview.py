@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -938,4 +939,131 @@ def get_source_worlds(transform_id: str, db: Session = Depends(get_db)) -> dict:
         ],
         "unassigned": unassigned[:10],
         "issues": issues,
+    }
+
+
+# ── 出品类型（rendition）─────────────────────────────────────────────────────
+#
+# 一部小说可以出好几版：写实版、动漫版、水墨版。它们**共用**剧本、译名、
+# 名物词表、说话人与配音表 —— 那些是「这个故事讲什么」；
+# 不同的只有画面 —— 「这一版长什么样」。
+#
+# 隔离单位现成就有：所有视觉表都按 world_profile_id 分区
+#   asset_variants       素材的世界观变体与参考图
+#   asset_epochs         人物时期 · 身份锚 · 三视角参考集
+#   entity_world_visual  人物外观
+#   meme_renderings      梗的呈现
+# 所以「换一版」＝「换一个目标视觉档案」，两套素材天然并存、互不覆盖。
+#
+# 档案的 visual_json.rendition 里写着这一版是什么：
+#   {"code": "anime", "label": "动漫版", "note": "本地 SD 出图，不花额度"}
+# 没写这一栏的档案不算一个「出品类型」，只是普通的世界观档案。
+
+
+def _rendition_of(profile: WorldProfile) -> dict[str, Any]:
+    """档案上的出品类型标记。没标的按「默认」算，仍可选中。"""
+    tag = ((profile.visual_json or {}).get("rendition") or {})
+    return {
+        "code": str(tag.get("code") or "default"),
+        "label": str(tag.get("label") or profile.display_name),
+        "note": str(tag.get("note") or ""),
+    }
+
+
+@router.get("/novels/{novel_id}/renditions")
+def list_renditions(novel_id: str, db: Session = Depends(get_db)) -> dict:
+    """这部小说能出哪几种，现在在出哪一种，各自做了多少。
+
+    候选＝当前目标档案本身，加上所有**从它派生**的档案。
+    不列全库的目标档案 —— 那会把别的书的风格线也摆上来，
+    而它们的年代地域根本对不上这本书。
+    """
+    from app.models import AssetEpoch, AssetVariant, AssetSpec
+
+    tf = db.execute(
+        select(WorldTransform).where(
+            WorldTransform.novel_id == novel_id,
+            WorldTransform.status == TransformStatus.active,
+        )
+    ).scalars().first()
+    if tf is None:
+        raise HTTPException(status_code=404, detail="这本书还没有 active 映射")
+
+    current = db.get(WorldProfile, tf.target_profile_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="映射指向的目标档案不存在")
+    # 同一族：当前档案 + 它的派生 + 它的父与父的其他派生
+    root = current.parent_id or current.id
+    family = list(db.execute(
+        select(WorldProfile).where(
+            or_(WorldProfile.id == root, WorldProfile.parent_id == root)
+        )
+    ).scalars())
+    if current.id not in {p.id for p in family}:
+        family.append(current)
+
+    spec_ids = select(AssetSpec.id).where(AssetSpec.novel_id == novel_id)
+    ent_ids = select(WorldEntity.id).where(WorldEntity.novel_id == novel_id)
+    items = []
+    for p in sorted(family, key=lambda x: x.display_name):
+        variants = db.execute(
+            select(func.count()).select_from(AssetVariant).where(
+                AssetVariant.asset_spec_id.in_(spec_ids),
+                AssetVariant.world_profile_id == p.id)
+        ).scalar() or 0
+        with_ref = db.execute(
+            select(func.count()).select_from(AssetVariant).where(
+                AssetVariant.asset_spec_id.in_(spec_ids),
+                AssetVariant.world_profile_id == p.id,
+                AssetVariant.ref_asset_ids.isnot(None))
+        ).scalar() or 0
+        anchors = db.execute(
+            select(func.count(func.distinct(AssetEpoch.entity_id))).where(
+                AssetEpoch.entity_id.in_(ent_ids),
+                AssetEpoch.world_profile_id == p.id,
+                AssetEpoch.identity_ref_asset_id.isnot(None))
+        ).scalar() or 0
+        items.append({
+            "profile_id": p.id, "display_name": p.display_name,
+            "active": p.id == tf.target_profile_id,
+            **_rendition_of(p),
+            "assets": variants, "assets_with_ref": with_ref, "anchors": anchors,
+            # 一版「做过了」的判据是素材有参考图 —— 只有文字描述的不算
+            "built": bool(with_ref and anchors),
+        })
+    return {"novel_id": novel_id, "transform_id": tf.id,
+            "active_profile_id": tf.target_profile_id, "items": items}
+
+
+@router.post("/novels/{novel_id}/renditions/{profile_id}:select")
+def select_rendition(novel_id: str, profile_id: str,
+                     db: Session = Depends(get_db)) -> dict:
+    """切到另一种出品类型。
+
+    **只改映射指向的目标档案，什么都不删。** 剧本、译名、词表挂在
+    transform 上，两版共用；素材按 world_profile_id 分区，各留各的。
+    切回来时上一版的素材原样还在 —— 这正是分两个档案而不是「重跑一遍」
+    的意义：出过的图不该因为换个风格就作废。
+    """
+    tf = db.execute(
+        select(WorldTransform).where(
+            WorldTransform.novel_id == novel_id,
+            WorldTransform.status == TransformStatus.active,
+        )
+    ).scalars().first()
+    if tf is None:
+        raise HTTPException(status_code=404, detail="这本书还没有 active 映射")
+    target = db.get(WorldProfile, profile_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="目标档案不存在")
+
+    was = tf.target_profile_id
+    tf.target_profile_id = profile_id
+    db.flush()
+    return {
+        "novel_id": novel_id, "transform_id": tf.id,
+        "from_profile_id": was, "to_profile_id": profile_id,
+        **_rendition_of(target),
+        # 分镜产物记着当时用的是哪个映射，换档案之后已出的帧要重拼才对得上
+        "note": "已切换。已出的首尾帧仍属上一版，重新绑定拼装后才会引用这一版的素材。",
     }

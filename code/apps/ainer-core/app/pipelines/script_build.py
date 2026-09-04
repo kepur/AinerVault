@@ -82,6 +82,20 @@ SYSTEM_PROMPT = """你是专业的影视改编编剧，把小说章节拆解为�
    - scene_break  分场分隔
 3. dialogue 的 text 只放话语本身，不要包含「他说」「李白道」这类引导语；
    引导语若含动作信息，另起一个 action 块。
+
+   **一个 action 块只写一个节拍。** 一个节拍＝一个 3–5 秒的镜头。
+   判据：这一段能不能用**一个固定机位**从头拍到尾。换地方、隔时间、
+   换动作主体，都要另起一块。
+     ✗ 「清晨5:30，闹钟响起。他起床复习功课，吃完早餐后向母亲要了十美元。
+        步行五分钟到达学校。」—— 四个节拍、两个地点、半小时
+     ✓ 「清晨5:30，闹钟在床头柜上震响。」
+     ✓ 「他坐起身，抓过桌上的课本翻开。」
+     ✓ 「餐桌旁，他向母亲摊开手掌。」
+     ✓ 「校门口，他快步穿过人群。」
+   塞成一块的后果不是「不够细」：首尾帧之间跨了半小时和两个地点，
+   出图模型只能自己编中间发生了什么 —— 首帧还在卧室，尾帧已经在校门口，
+   人物、衣着、光线全会漂。
+   长描写不算多节拍：「窗透进光，尘埃在光柱里浮着」是一个画面，写在一块里。
 4. 保持输入的锁定版本顺序，不增删情节，不改写措辞。text 使用输入原句。
 5. speaker 使用输入文本中出现的称呼原样填写，不要改回另一个语言或世界观的名字。
 6. 只可以补出把小说叙述改成可拍摄动作所必需的最小过程；不得新增人物、动机、
@@ -364,6 +378,38 @@ def count_human_edits(db: Session, chapter_id: str) -> int:
     return len(scenes) + len(blocks)
 
 
+def _one_beat_blocks(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """场记块按节拍拆开 —— **一个节拍一个镜头**。
+
+    模型给出的 action 块经常一段塞四个节拍：
+
+      「清晨5:30，闹钟响起。Thomas Chen起床复习功课，吃完早餐后向母亲要了
+        十美元。步行五分钟到达学校。」
+
+    分镜看到的是**一个块**，于是只出一个镜，首尾帧之间跨了半小时和两个
+    地点。模型只能自己编中间发生了什么，编出来的就是漂移：
+    首帧还在卧室，尾帧已经在校门口。
+
+    只拆 action。对白不能拆 —— 一句话拆两半就成了两个人在说；
+    narration 也不拆，它本来就不进画面。
+
+    提示词里也写了「一个块一个节拍」，但那是请求；这里是保证。
+    """
+    out: list[dict[str, Any]] = []
+    for b in raw:
+        text = as_text(b.get("text"))
+        if str(b.get("type") or "") != "action" or not text:
+            out.append(b)
+            continue
+        beats = sp.split_action(text)
+        if len(beats) <= 1:
+            out.append(b)
+            continue
+        for beat in beats:
+            out.append({**b, "text": beat})
+    return out
+
+
 def build_script(
     db: Session,
     chapter: Chapter,
@@ -476,7 +522,7 @@ def build_script(
         db.add(scene)
         db.flush()
 
-        for b_raw in as_items(s_raw, "blocks"):
+        for b_raw in _one_beat_blocks(as_items(s_raw, "blocks")):
             seq += 1
             text = as_text(b_raw.get("text"))
             if not text:
