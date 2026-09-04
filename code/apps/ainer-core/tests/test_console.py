@@ -282,3 +282,33 @@ class TestMediaLibrary:
 
         assert _USE_CN["audiobook_final"] == "有声书成品"
         assert _USE_CN["final_cut"] == "章节成片／审片"
+
+
+class TestPeopleOnlyStages:
+    """脸参考与嗓子只属于人物 —— 地点道具没有脸，也不会说话。
+
+    把它们算进分母，这两档就永远停在 7/8：面板上一条永远做不完的
+    进度条，而人会一直去找那「缺的一个」。坏蛋实测就是这样，
+    第八个是「J市第二中学」。
+    """
+
+    def test_anchor_and_casting_count_characters_only(self):
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console.novel_stages)
+        assert "EntityKind.character" in src
+        for stage in ('"epochs"', '"casting"'):
+            line = [ln for ln in src.split("\n") if stage in ln][0]
+            assert "people" in line, f"{stage} 的分母要只数人"
+
+    def test_other_stages_still_count_every_entity(self):
+        """世界模型本身该数全部实体 —— 地点道具也是世界模型的一部分。"""
+        import inspect
+
+        from app.api.v2 import console
+
+        src = inspect.getsource(console.novel_stages)
+        line = [ln for ln in src.split("\n") if '"entities"' in ln][0]
+        assert "entities" in line and "people" not in line

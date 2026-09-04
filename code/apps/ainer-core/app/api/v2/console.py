@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import (
     TRANSLATABLE_TYPES, AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet,
-    DocMode, DocStatus, EntityWorldName, FrameRole, FrameSpec, Novel,
+    DocMode, DocStatus, EntityKind, EntityWorldName, FrameRole, FrameSpec, Novel,
     ScriptBlock, ScriptDoc, Shot, ShotMotion, ShotPerformance, ShotPlan,
     TranslationBlock, VoiceCasting,
     WorldEntity, WorldLexicon, WorldTransform,
@@ -132,10 +132,18 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
                    AssetVariant.ref_asset_ids.isnot(None))
         ).scalar() or 0
 
+    # **分母只数人。** 脸参考与嗓子都只属于人物 —— 地点道具没有脸，
+    # 也不会说话。把它们算进分母，这两档就永远停在 7/8，
+    # 面板上是一条永远做不完的进度条，而人会一直去找那「缺的一个」。
+    people = _count(db, WorldEntity, WorldEntity.novel_id == novel_id,
+                    WorldEntity.kind == EntityKind.character)
     anchors = 0
     castings = 0
-    if entities:
-        ent_ids = select(WorldEntity.id).where(WorldEntity.novel_id == novel_id)
+    if people:
+        ent_ids = select(WorldEntity.id).where(
+            WorldEntity.novel_id == novel_id,
+            WorldEntity.kind == EntityKind.character,
+        )
         from app.models import AssetEpoch
 
         anchors = db.execute(
@@ -173,10 +181,10 @@ def novel_stages(db: Session, novel_id: str) -> list[dict[str, Any]]:
                hint="刀剑 宗门 服装 场景 —— 抽一次，全书复用。"
                     "有参考图的才叫备好：没有的话下一镜还是重新捏一把",
                blocked_by=no_ch),
-        _stage("epochs", "人物时期与身份锚", anchors, entities, page="epochs",
+        _stage("epochs", "人物时期与身份锚", anchors, people, page="epochs",
                hint="脸跨期不变，衣着兵器随期变；锚是保脸的底图",
                blocked_by=no_ent),
-        _stage("casting", "配音表", castings, entities + 1, page="casting",
+        _stage("casting", "配音表", castings, people + 1, page="casting",
                hint="整本一起配，撞声才检得出来", blocked_by=no_ent),
     ]
 
