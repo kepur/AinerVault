@@ -350,6 +350,7 @@ const GROUPS = [
   ]},
   {id:"g-media", name:"成品", pages:[
     {id:"script",   ico:"🎬", name:"剧本转换", sub:"场景 · 时间 · 天气 · 氛围 · 对白"},
+    {id:"storyboard",ico:"🎞", name:"分镜全景", sub:"一镜一行 · 台词 提示词 首尾帧 配音"},
     {id:"staging",  ico:"🎭", name:"分镜调度", sub:"站位 · 朝向 · 视线 · 表情 · 动作"},
     {id:"crew",     ico:"🎥", name:"制作单", sub:"摄影 · 灯光 · 美术 · 声音 · 剪辑 · 场记"},
     {id:"casting",  ico:"🎙", name:"配音表", sub:"音色绑定 · 撞声 · 时期演化"},
@@ -3528,6 +3529,147 @@ const Reader = {
   page(d) { this.offset = Math.max(0, this.offset + d * 3); App.refresh(); },
 };
 
+//: 分镜全景 —— **一镜一行，五样东西在一处**。
+//:
+//: 这一页原来不存在，而它才是人真正要看的。同一个镜头的五样东西散在
+//: 五个页面上：译文在「译本阅读」、分镜在「剧本转换」、素材提示词在
+//: 「提示词台账」、首尾帧在「手动模式」、声音在「有声书」。
+//: 想确认「第 12 镜为什么画成这样」，得开五个页面各找一遍，
+//: 而且它们互相之间没有链接 —— 找得到的人只有写这套东西的人。
+const Storyboard = {
+  open: {},          // 展开了提示词的镜号
+  page: 0,
+  SIZE: 20,          // 一屏二十镜。143 镜一次全渲染会卡住浏览器
+
+  async render(v) {
+    if (!State.chapterId) {
+      v.innerHTML = `<div class="card"><div class="empty">
+        请先从控制台打开一个章节</div></div>`; return;
+    }
+    const d = await api("GET", `/chapters/${State.chapterId}/storyboard`);
+    if (!d.shots.length) {
+      v.innerHTML = `<div class="card"><h2>🎞 分镜全景</h2>
+        <div class="empty">${h(d.not_ready || "这一章还没有分镜")}
+          <div style="margin-top:8px">
+            <button class="btn sm" onclick="goto('chapter')">回章节工作台 →</button>
+          </div></div></div>`; return;
+    }
+    const from = this.page * this.SIZE, to = Math.min(from + this.SIZE, d.shots.length);
+    const mins = Math.round(d.total_duration_ms / 600) / 100;
+
+    v.innerHTML = `
+      <div class="card"><div class="row" style="align-items:center">
+        <h2 style="margin:0">🎞 ${h(d.chapter.title || "第" + d.chapter.order_no + "章")}
+          <span class="sub mono" style="color:var(--muted)">${d.total} 镜 ·
+            ${mins} 分钟 · 首帧 ${d.with_first_frame}/${d.total}</span></h2>
+        <span class="grow"></span>
+        <button class="btn sm" onclick="goto('chapter')">章节工作台</button>
+        <button class="btn sm" onclick="goto('reader')">译本</button>
+      </div></div>
+      ${d.shots.slice(from, to).map(s => this.shot(s)).join("")}
+      <div class="card"><div class="row">
+        <button class="btn" ${this.page ? "" : "disabled"}
+          onclick="Storyboard.flip(-1)">← 前 ${this.SIZE} 镜</button>
+        <span class="grow" style="text-align:center;color:var(--muted);font-size:12px">
+          第 ${from + 1}–${to} 镜 / 共 ${d.total}</span>
+        <button class="btn" ${to < d.shots.length ? "" : "disabled"}
+          onclick="Storyboard.flip(1)">后 ${this.SIZE} 镜 →</button>
+      </div></div>`;
+  },
+
+  shot(s) {
+    const open = this.open[s.order_no];
+    const secs = ((s.duration_ms || 0) / 1000).toFixed(1);
+    // 超过 5 秒标出来 —— 一个镜头停五秒以上，观众会觉得画面卡住
+    const longish = (s.duration_ms || 0) > 5000;
+    const cam = [s.shot_size, (s.camera || {}).move, (s.camera || {}).angle]
+      .filter(Boolean).map(x => String(x).replace(/_/g, " ")).join(" · ");
+
+    return `<div class="card">
+      <div class="row" style="align-items:baseline;gap:8px">
+        <b style="font-size:15px">镜 ${s.order_no}</b>
+        <span class="tag ${longish ? "t-warn" : "t-ok"}">${secs}s</span>
+        <span class="mono" style="color:var(--muted);font-size:12px">${h(cam)}</span>
+        <span class="grow"></span>
+        <span class="sub" style="color:var(--muted)">${h(s.scene || "")}</span>
+      </div>
+      <div style="margin:6px 0 10px">${h(s.description || "")}</div>
+
+      <div class="row" style="gap:10px;align-items:flex-start">
+        ${this.frame(s.first, "首帧")}
+        ${this.frame(s.last, "尾帧")}
+        ${s.video_url ? `<div style="flex:1;min-width:200px">
+          <div class="sub" style="color:var(--muted);margin-bottom:4px">成片</div>
+          <video controls preload="metadata" src="${s.video_url}"
+            style="width:100%;background:#000;border-radius:4px"></video></div>` : ""}
+      </div>
+
+      ${s.lines.length ? `<div style="margin-top:10px">
+        ${s.lines.map(l => l.type === "dialogue"
+          ? `<div style="margin:3px 0"><span class="tag t-ok">${h(l.speaker || "?")}</span>
+               <span style="margin-left:6px">${h(l.text || "")}</span></div>`
+          : `<div style="margin:3px 0;color:var(--muted);font-size:13px">${h(l.text || "")}</div>`
+        ).join("")}</div>` : ""}
+
+      ${s.audio.length ? `<div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
+        ${s.audio.map(a => `<div style="min-width:220px;flex:1">
+          <div class="sub" style="color:var(--muted);font-size:12px">
+            ${h(a.kind)} ${a.speaker ? "· " + h(a.speaker) : ""}
+            ${a.voice_id ? `<span class="mono">${h(a.voice_id)}</span>` : ""}</div>
+          ${a.url ? `<audio controls preload="none" src="${a.url}"
+             style="width:100%;height:30px"></audio>`
+            : `<div class="eff">还没配音</div>`}</div>`).join("")}
+      </div>` : ""}
+
+      <div class="row" style="margin-top:8px">
+        <button class="btn sm" onclick="Storyboard.toggle(${s.order_no})">
+          ${open ? "收起提示词" : "看提示词"}</button>
+      </div>
+      ${open ? this.prompts(s) : ""}
+    </div>`;
+  },
+
+  frame(f, label) {
+    if (!f) return `<div style="flex:1;min-width:200px">
+      <div class="sub" style="color:var(--muted);margin-bottom:4px">${label}</div>
+      <div class="eff">还没有这一帧的规格</div></div>`;
+    return `<div style="flex:1;min-width:200px">
+      <div class="sub" style="color:var(--muted);margin-bottom:4px">${label}
+        <span class="mono">${h(f.status)}</span>
+        ${f.refs ? `<span class="tag t-mute">${f.refs} 张参考</span>` : ""}</div>
+      ${f.url ? `<img src="${f.url}" style="width:100%;border-radius:4px;display:block">`
+        : `<div class="eff">还没出图</div>`}
+      ${f.entities.length ? `<div class="sub" style="color:var(--muted);margin-top:4px">
+        ${f.entities.map(h).join("、")}</div>` : ""}
+    </div>`;
+  },
+
+  prompts(s) {
+    const box = (title, text) => text
+      ? `<div style="margin-top:8px">
+           <div class="sub" style="color:var(--muted)">${title}</div>
+           <div class="log" style="white-space:pre-wrap;max-height:200px">${h(text)}</div>
+         </div>` : "";
+    return `<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:4px">
+      ${box("首帧 · 正向", s.first && s.first.prompt)}
+      ${box("首帧 · 负向", s.first && s.first.negative_prompt)}
+      ${box("尾帧 · 相对首帧改什么", s.last && (s.last.derive_instruction || s.last.prompt))}
+      ${box("物理运动（送视频模型）", s.motion && s.motion.prompt_en)}
+      ${s.motion && s.motion.deltas.length ? `<div style="margin-top:8px">
+        <div class="sub" style="color:var(--muted)">首尾可见差异</div>
+        ${s.motion.deltas.map(x => `<div style="font-size:13px">· ${h(x)}</div>`).join("")}
+      </div>` : ""}
+      ${s.first && s.first.asset_keys.length ? `<div style="margin-top:8px">
+        <div class="sub" style="color:var(--muted)">引用素材</div>
+        <div>${s.first.asset_keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}</div>
+      </div>` : ""}
+    </div>`;
+  },
+
+  toggle(n) { this.open[n] = !this.open[n]; App.refresh(); },
+  flip(d) { this.page = Math.max(0, this.page + d); this.open = {}; App.refresh(); },
+};
+
 const Console = {
   async render(v) {
     const d = await api("GET", "/console");
@@ -4272,7 +4414,8 @@ const App = {
                culture:Culture, review:Review, staging:Staging, prompts:Prompts,
                crew:Crew, casting:Casting, epochs:Epochs,
                fidelity:FidelityPage,
-               script:Script, prose:Prose, reader:Reader, audio:Audio, handoff:Handoff,
+               script:Script, prose:Prose, reader:Reader, storyboard:Storyboard,
+               audio:Audio, handoff:Handoff,
                tasks:Tasks}[p.id];
     renderCrumbs();
     try { await R.render(v); }

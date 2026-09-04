@@ -30,8 +30,8 @@ from app.db import get_db
 from app.models import (
     TRANSLATABLE_TYPES, AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet,
     DocMode, DocStatus, EntityKind, EntityWorldName, FrameRole, FrameSpec, Novel,
-    ScriptBlock, ScriptDoc, Shot, ShotMotion, ShotPerformance, ShotPlan,
-    TranslationBlock, VoiceCasting,
+    Asset, ScriptBlock, ScriptDoc, Scene, Shot, ShotMotion, ShotPerformance,
+    ShotPlan, TranslationBlock, VoiceCasting,
     WorldEntity, WorldLexicon, WorldTransform,
 )
 
@@ -773,4 +773,140 @@ def novel_media(novel_id: str, use: str | None = Query(None),
         "total": total, "offset": offset, "limit": limit,
         "total_bytes": sum(bytes_by_use.values()),
         "items": page,
+    }
+
+
+# ── 分镜全景 ─────────────────────────────────────────────────────────────────
+
+@router.get("/chapters/{chapter_id}/storyboard")
+def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
+    """一镜一行：译文、提示词、首尾帧、运动、配音全在一处。
+
+    **这一页原来不存在，而它才是人真正要看的东西。**
+    同一个镜头的五样东西散在五个页面上：译文在「译本阅读」、
+    分镜在「剧本转换」、素材提示词在「提示词台账」、首尾帧在「手动模式」、
+    声音在「有声书」。想确认「第 12 镜为什么画成这样」，
+    得开五个页面各找一遍，而且它们互相之间没有链接。
+    找得到的人只有写这套东西的人。
+
+    这里按**镜头**组织，不按数据表组织 —— 一行就是一个镜头的全部：
+    它念的是哪句译文、给模型的提示词是什么、出来的首尾帧长什么样、
+    中间怎么动、谁在说话。对不上的时候一眼看得出是哪一层错了。
+    """
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+
+    doc = db.execute(
+        select(ScriptDoc).where(
+            ScriptDoc.chapter_id == chapter_id,
+            ScriptDoc.doc_mode == DocMode.screenplay,
+            ScriptDoc.status == DocStatus.active,
+        )
+    ).scalars().first()
+    if doc is None:
+        return {"chapter": {"id": chapter.id, "title": chapter.title},
+                "plan": None, "shots": [], "not_ready": "这一章还没有目标世界剧本"}
+
+    plan = db.execute(
+        select(ShotPlan).where(ShotPlan.script_doc_id == doc.id)
+        .order_by(ShotPlan.version.desc())
+    ).scalars().first()
+    if plan is None:
+        return {"chapter": {"id": chapter.id, "title": chapter.title},
+                "plan": None, "shots": [], "not_ready": "这一章还没有分镜"}
+
+    shots = list(db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
+    ).scalars())
+    sids = [s.id for s in shots]
+
+    blocks = {b.id: b for b in db.execute(
+        select(ScriptBlock).where(ScriptBlock.script_doc_id == doc.id)).scalars()}
+    scenes = {s.id: s for s in db.execute(
+        select(Scene).where(Scene.script_doc_id == doc.id)).scalars()}
+
+    frames: dict[str, dict[str, FrameSpec]] = {}
+    for f in db.execute(select(FrameSpec).where(FrameSpec.shot_id.in_(sids or [""]))).scalars():
+        frames.setdefault(f.shot_id, {})[f.role.value] = f
+    motions = {m.shot_id: m for m in db.execute(
+        select(ShotMotion).where(ShotMotion.shot_id.in_(sids or [""]))).scalars()}
+    audios: dict[str, list[AudioSpec]] = {}
+    for a in db.execute(select(AudioSpec).where(AudioSpec.shot_id.in_(sids or [""]))).scalars():
+        audios.setdefault(a.shot_id, []).append(a)
+
+    asset_ids = {f.asset_id for d in frames.values() for f in d.values() if f.asset_id}
+    asset_ids |= {a.asset_id for lst in audios.values() for a in lst if a.asset_id}
+    assets = {a.id: a for a in db.execute(
+        select(Asset).where(Asset.id.in_(list(asset_ids) or [""]))).scalars()}
+    ents = {e.id: e for e in db.execute(
+        select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)).scalars()}
+
+    def _frame(f: FrameSpec | None) -> dict[str, Any] | None:
+        if f is None:
+            return None
+        asset = assets.get(f.asset_id or "")
+        return {
+            "role": f.role.value,
+            "url": asset.url if asset else None,
+            # 提示词是**合成结果**，人要能逐条回看它由哪几层拼成
+            "prompt": f.prompt, "negative_prompt": f.negative_prompt,
+            "derive_instruction": f.derive_instruction,
+            "status": f.status.value,
+            "entities": [ents[e].display_name for e in (f.entity_ids_json or [])
+                         if e in ents],
+            "asset_keys": (f.params_json or {}).get("asset_keys") or [],
+            "refs": len(f.ref_asset_ids or []),
+        }
+
+    out = []
+    for s in shots:
+        pair = frames.get(s.id, {})
+        m = motions.get(s.id)
+        sc = scenes.get(s.scene_id or "")
+        lines = []
+        for bid in (s.block_ids_json or []):
+            b = blocks.get(bid)
+            if b is None:
+                continue
+            lines.append({
+                "type": b.block_type.value,
+                "speaker": b.speaker_tag,
+                "text": b.source_text,
+            })
+        out.append({
+            "order_no": s.order_no, "shot_id": s.id,
+            "scene": sc.title if sc else None,
+            "shot_size": s.shot_size, "camera": s.camera_json or {},
+            "duration_ms": s.duration_ms,
+            "description": s.description,
+            # 这一镜念的是哪几句 —— 画面对不上台词时先看这里
+            "lines": lines,
+            "first": _frame(pair.get("first")),
+            "last": _frame(pair.get("last")),
+            "motion": ({"camera_move": m.camera_move, "subject_move": m.subject_move,
+                        "prompt_en": m.motion_prompt_en,
+                        "deltas": m.deltas_en_json or []} if m else None),
+            "video_url": (assets.get(s.video_asset_id).url
+                          if s.video_asset_id and s.video_asset_id in assets else None),
+            "audio": [{
+                "kind": a.kind.value,
+                "speaker": ents[a.entity_id].display_name
+                           if a.entity_id in ents else None,
+                "text": a.text,
+                "voice_id": (a.params_json or {}).get("voice_id"),
+                "url": assets.get(a.asset_id).url if a.asset_id in assets else None,
+                "duration_ms": a.duration_ms,
+            } for a in sorted(audios.get(s.id, []), key=lambda x: x.kind.value)],
+        })
+
+    ready = sum(1 for s in out if s["first"] and s["first"]["url"])
+    return {
+        "chapter": {"id": chapter.id, "title": chapter.title,
+                    "order_no": chapter.order_no},
+        "plan": {"id": plan.id, "version": plan.version,
+                 "director": plan.director_profile_id},
+        "shots": out,
+        "total": len(out), "with_first_frame": ready,
+        "total_duration_ms": sum(s["duration_ms"] or 0 for s in out),
     }
