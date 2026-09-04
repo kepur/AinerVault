@@ -266,14 +266,26 @@ def compile_audio(
             # 数据上看每一条都「已生成」，播出来还是上一版。
             # 实跑撞到的正是这个：台词拆干净了，视频里念的仍是整段
             # （包括「老周把碗放在栏杆上」），而看规格文本完全正确。
-            if row is not None and (row.text or "") != text and row.asset_id:
+            # 文本变了、或者当初用的音色不是现在配的那把，都要作废。
+            #
+            # **只认文本变化是不够的。** 换了配音表（重新绑定音色、
+            # 从付费档切到免费档）之后文本一个字没动，于是旧音频照旧被沿用 ——
+            # 界面上「已生成 13 条」，播出来还是上一轮那把嗓子，
+            # 而那把嗓子可能正是刚被换掉的付费模型。
+            want_voice = str((params or {}).get("voice_id") or "")
+            had_voice = str((row.params_json or {}).get("voice_id") or "") if row else ""
+            voice_changed = bool(row and row.asset_id and want_voice != had_voice)
+            if row is not None and row.asset_id and (
+                    (row.text or "") != text or voice_changed):
                 row.asset_id = None
                 row.duration_ms = None
                 row.timestamps_json = None
                 row.status = SpecStatus.pending
                 result.stale_audio.append({
                     "shot": shot.order_no, "kind": kind.value,
-                    "was": (row.text or "")[:60], "now": text[:60],
+                    "why": "音色换了" if voice_changed else "文本变了",
+                    "was": (had_voice or (row.text or ""))[:60],
+                    "now": (want_voice or text)[:60],
                 })
             if row is None:
                 row = AudioSpec(

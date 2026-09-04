@@ -15,7 +15,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ids import new_id
@@ -133,6 +133,9 @@ class ShotPlanResult:
     size_distribution: dict[str, int] = field(default_factory=dict)
     move_distribution: dict[str, int] = field(default_factory=dict)
     uncovered_blocks: list[str] = field(default_factory=list)
+    #: 上一版分镜上已生成、这一版用不上的画面。**要报出来** ——
+    #: 那是已经花掉的钱，而重编译不会有任何别的迹象说它作废了
+    orphaned_assets: dict[str, Any] = field(default_factory=dict)
     #: 变化说明看不见、已被换成中性说法的镜头。**要报出来** ——
     #: 这个数字等于「有几镜的首尾帧不会有实质差别」，
     #: 而那正是成片看起来像幻灯片的直接原因
@@ -147,6 +150,7 @@ class ShotPlanResult:
             "move_distribution": self.move_distribution,
             "uncovered_blocks": self.uncovered_blocks,
             "static_derives": self.static_derives,
+            "orphaned_assets": self.orphaned_assets,
         }
 
 
@@ -217,6 +221,44 @@ def _estimate_ms(
         total += _text_duration_ms(trans.get(b.id) or b.source_text or "", is_cjk)
     return total
 
+
+
+def _previous_assets(db: Session, script_doc_id: str) -> dict[str, Any]:
+    """上一版分镜上已经生成的画面有多少。
+
+    只数不动 —— 判断「旧图还对不对得上新镜」需要看切分怎么变的，
+    那不是这里能定的。这里只负责让人知道有这么一笔。
+    """
+    from app.models import FrameRole, FrameSpec
+
+    prev = db.execute(
+        select(ShotPlan).where(ShotPlan.script_doc_id == script_doc_id)
+        .order_by(ShotPlan.version.desc()).limit(1)
+    ).scalars().first()
+    if prev is None:
+        return {"total": 0}
+    sids = [s for (s,) in db.execute(
+        select(Shot.id).where(Shot.shot_plan_id == prev.id)).all()]
+    if not sids:
+        return {"total": 0}
+    frames = list(db.execute(
+        select(FrameSpec).where(FrameSpec.shot_id.in_(sids),
+                                FrameSpec.asset_id.isnot(None))).scalars())
+    videos = db.execute(
+        select(func.count()).select_from(Shot)
+        .where(Shot.shot_plan_id == prev.id, Shot.video_asset_id.isnot(None))
+    ).scalar() or 0
+    first = sum(1 for f in frames if f.role == FrameRole.first)
+    last = sum(1 for f in frames if f.role == FrameRole.last)
+    total = first + last + videos
+    return {
+        "total": total, "from_version": prev.version, "from_plan": prev.id,
+        "first_frames": first, "last_frames": last, "videos": videos,
+        "why": (f"v{prev.version} 上已生成 {first} 张首帧、{last} 张尾帧、"
+                f"{videos} 支视频，新版用不上 —— 镜头切分变了，"
+                f"旧图未必对得上新镜，所以不自动迁移。"
+                f"要沿用就回到 v{prev.version}，要重出就是这笔钱重花一遍"),
+    }
 
 def build_shot_plan(
     db: Session,
@@ -300,6 +342,17 @@ def build_shot_plan(
         ).scalar() or 0
     ) + 1
 
+    # **重编译会把上一版已经生成的画面全部孤儿化。**
+    #
+    # 新版的 Shot / FrameSpec 都是新行，旧版那些图和视频还挂在旧 shot 上 ——
+    # 库里在、资源库里看得到，但新时间线一张都用不上。
+    # 实跑撞过一次：v4 有 30 张首帧、28 张尾帧、12 支 i2v，
+    # 我在 v6 上渲染，出来 34 镜全黑，而全程没有任何一处提示。
+    #
+    # 不自动迁移 —— 镜头切分变了，旧图未必还对得上新镜。
+    # 但**必须报出来**：那是一笔已经花掉的钱，人得知道它作废了。
+    prev_cost = _previous_assets(db, script_doc.id)
+
     plan = ShotPlan(
         id=new_id("sp"), script_doc_id=script_doc.id, version=version,
         status=DocStatus.draft, target_language_code=target_language,
@@ -324,6 +377,8 @@ def build_shot_plan(
     entities = entity_index.by_surface
 
     result = ShotPlanResult(shot_plan_id=plan.id, version=version)
+    if prev_cost["total"]:
+        result.orphaned_assets = prev_cost
     covered: set[str] = set()
     order_no = 0
 
