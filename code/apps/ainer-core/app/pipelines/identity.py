@@ -92,7 +92,19 @@ def era_phrase(profile: WorldProfile) -> str:
             half = "early" if mid % 100 < 34 else (
                 "mid" if mid % 100 < 67 else "late")
             era = f"{half} {_ordinal(century)} century"
-    return " ".join(x for x in (era, who) if x)
+    # **国籍不是人种。**
+    #
+    # 原来拼出来是 "early 21st century American man"，而人物不变项里
+    # 明明写着 monolid eyes、East Asian。模型把 American 读成了白人，
+    # 于是坏蛋的主角出成一个白人少年，而他的译名是 Thomas Chen ——
+    # 脸与名字对不上，且这一步是**所有**下游画面的底图。
+    #
+    # 改成写「所在地」而不是「哪国人」：年代与地域仍然影响发型、
+    # 穿着、气质，而长相由不变项自己说了算。
+    if not who:
+        return era
+    article = "an" if who[0] in "AEIOU" else "a"
+    return f"set in {article} {who} city{f', {era}' if era else ''}"
 
 
 #: 锚图的构图。**固定不变** —— 锚之间的差别只该来自这个人本身，
@@ -353,8 +365,11 @@ def compose_anchor_prompt(epoch: AssetEpoch,
     # 重复对模型无害，但读起来像没校对过 —— 而这段提示词是要给人看的
     if noun and re.search(rf"\b{noun}\b", age, re.I):
         noun = ""
-    lead = " ".join(x for x in (era, noun) if x)
-    parts = [p for p in (age, lead, en) if p]
+    # 年代地域**排在人之后**。它说的是故事发生在哪，不是这个人是哪国人 ——
+    # 贴在性别词前面就成了「late 19th century Russian man」，
+    # 模型把地域读成人种，于是不变项里写着 monolid eyes 的少年
+    # 出成了一个白人。人先说完，再说他站在什么年代的什么城市。
+    parts = [p for p in (age, noun, en, era) if p]
     return ", ".join(parts) + ", " + ANCHOR_FRAMING
 
 

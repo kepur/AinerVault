@@ -24,20 +24,41 @@ class _Epoch:
 
 
 class TestEraPhrase:
-    """「帝俄晚期」在提示词里必须写成 late 19th century Russian ——
-    图像模型不认中文，也不认 ru_imperial 这种内部代码。"""
+    """「帝俄晚期」在提示词里必须写成年代 + 地域 ——
+    图像模型不认中文，也不认 ru_imperial 这种内部代码。
+
+    但**国籍不是人种**。原来拼的是 "early 21st century American man"，
+    而人物不变项里明明写着 monolid eyes、East Asian；模型把 American
+    读成白人，坏蛋的主角出成一个白人少年，而他的译名是 Thomas Chen。
+    这一步是所有下游画面的底图，错在这里全片跟着错。
+    改成写「故事发生在哪」，长相交给不变项自己说。
+    """
 
     @pytest.mark.parametrize("axes,expect", [
-        ({"region": "RU", "era_span": [1855, 1917]}, "late 19th century Russian"),
-        ({"region": "GB", "era_span": [1837, 1901]}, "late 19th century British"),
-        ({"region": "JP", "era_span": [1926, 1989]}, "mid 20th century Japanese"),
-        ({"region": "US", "era_span": [1920, 1929]}, "early 20th century American"),
+        ({"region": "RU", "era_span": [1855, 1917]},
+         "set in a Russian city, late 19th century"),
+        ({"region": "GB", "era_span": [1837, 1901]},
+         "set in a British city, late 19th century"),
+        ({"region": "JP", "era_span": [1926, 1989]},
+         "set in a Japanese city, mid 20th century"),
+        ({"region": "US", "era_span": [1920, 1929]},
+         "set in an American city, early 20th century"),
     ])
     def test_reads_axes(self, axes, expect):
         assert era_phrase(_Profile(axes)) == expect
 
+    @pytest.mark.parametrize("axes", [
+        {"region": "RU", "era_span": [1855, 1917]},
+        {"region": "US", "era_span": [1990, 2030]},
+    ])
+    def test_the_demonym_never_describes_the_person(self, axes):
+        """不能出现 "American man"／"Russian woman" 这种写法。"""
+        got = era_phrase(_Profile(axes))
+        assert " man" not in got and " woman" not in got
+        assert "set in" in got
+
     def test_missing_pieces_degrade_gracefully(self):
-        assert era_phrase(_Profile({"region": "RU"})) == "Russian"
+        assert era_phrase(_Profile({"region": "RU"})) == "set in a Russian city"
         assert era_phrase(_Profile({"era_span": [1855, 1917]})) \
             == "late 19th century"
         assert era_phrase(_Profile({})) == ""
@@ -56,8 +77,11 @@ class TestAnchorPrompt:
             _Epoch({"sex": "male", "_en": "square face, thick brows"}),
             _Profile({"region": "RU", "era_span": [1855, 1917]}),
         )
-        assert p.startswith("late 19th century Russian man, ")
+        assert p.startswith("man, ")
         assert "square face, thick brows" in p
+        # 年代地域排在人之后，且不描述这个人是哪国人
+        assert "set in a Russian city, late 19th century" in p
+        assert "Russian man" not in p
         assert p.endswith(ANCHOR_FRAMING)
 
     def test_no_english_means_no_prompt(self):
@@ -113,7 +137,8 @@ class TestAgeFallback:
             _Epoch({"sex": "male", "_en": "square face"},
                    {AGE_EN_KEY: "early sixties"}),
             _Profile({"region": "RU", "era_span": [1855, 1917]}))
-        assert p.startswith("early sixties, late 19th century Russian man")
+        assert p.startswith("early sixties, man, square face")
+        assert "set in a Russian city" in p
 
 
 def test_sex_noun_is_dropped_when_the_age_phrase_already_has_it():
@@ -124,8 +149,9 @@ def test_sex_noun_is_dropped_when_the_age_phrase_already_has_it():
         _Epoch({"sex": "male", "_en": "square face"},
                {AGE_EN_KEY: "man in his late fifties"}),
         _Profile({"region": "RU", "era_span": [1855, 1917]}))
-    assert p.startswith("man in his late fifties, late 19th century Russian, ")
+    assert p.startswith("man in his late fifties, square face, ")
     assert "Russian man" not in p
+    assert "set in a Russian city" in p
 
 
 def test_sex_noun_survives_when_the_age_phrase_lacks_it():
@@ -134,7 +160,8 @@ def test_sex_noun_survives_when_the_age_phrase_lacks_it():
         _Epoch({"sex": "male", "_en": "square face"},
                {AGE_EN_KEY: "elderly, deeply lined"}),
         _Profile({"region": "RU", "era_span": [1855, 1917]}))
-    assert "late 19th century Russian man" in p
+    assert p.startswith("elderly, deeply lined, man, ")
+    assert "Russian man" not in p
 
 
 class TestBustReference:
