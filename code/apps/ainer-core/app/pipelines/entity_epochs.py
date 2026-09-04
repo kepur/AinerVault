@@ -429,7 +429,7 @@ def mine_entity_epochs(
                 [{"role": "system", "content": _system(cap_chapters, total)},
                  {"role": "user", "content": user}],
                 EPOCH_SCHEMA, purpose="asset_variant", novel_id=novel_id,
-                ref_kind="entity_epoch", ref_id=ent.id, max_tokens=12288,
+                ref_kind="entity_epoch", ref_id=ent.id, max_tokens=6144,  # 时期档案字段多但每项都是短语
             )
         except PipelineError as exc:
             result.failed.append(f"{ent.display_name}：{exc}")

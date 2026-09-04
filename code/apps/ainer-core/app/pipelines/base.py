@@ -148,13 +148,27 @@ def chat_json(
     purpose: str = "*",
     tier: str | None = None,
     temperature: float = 0.3,
-    max_tokens: int = 8192,
+    max_tokens: int = 3072,
     novel_id: str | None = None,
     chapter_id: str | None = None,
     ref_kind: str | None = None,
     ref_id: str | None = None,
 ) -> tuple[dict[str, Any], GenTask]:
     """走 text.chat 的 json_schema 模式取结构化结果。
+
+    ## max_tokens 是**成本**不是保险
+
+    默认从 8192 降到 3072。实测：同一次抽取，产出都是 77 字符，
+    max_tokens=2048 用 5.2 秒，max_tokens=8192 用 22.8 秒 ——
+    **这个模型按预算分配算力，不按实际产出**。
+    「留足预算免得被截断」在这里是纯粹的浪费：四倍预算换来四倍延迟，
+    而截断本来就有专门的重试机制（`_run_chat` 撞 length 会抬预算重来）。
+
+    过大的预算不只是慢：它会把请求推过端点超时，
+    报出来是「上游超时」—— 指向网络，实际是自己要多了。
+    《坏蛋》第二章的实体抽取因此连超三次，每次都白等三分钟。
+
+    要更大预算的调用应当显式传，并且明白自己在买什么。
 
     tier 不传时按 purpose 取默认档 —— 调用方声明这是什么活，
     该用多强的模型交给路由决定，改档位不必碰 pipeline 代码。

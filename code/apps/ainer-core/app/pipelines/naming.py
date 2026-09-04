@@ -453,7 +453,7 @@ def _name_one_batch(
         ],
         NAME_SCHEMA,
         purpose="naming",
-        max_tokens=16384,
+        max_tokens=6144,  # 一批八个成员、每人带备选与称呼，六千足够；一万六换不来更好的名字，只换来四倍延迟
         novel_id=transform.novel_id,
         ref_kind="naming",
         ref_id=transform.id,

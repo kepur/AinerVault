@@ -391,6 +391,20 @@ def _known_speakers(db: Session, novel_id: str) -> list[str]:
 
     只收人物 —— 地点与道具不会说话，混进来会让「三娘客栈」
     这类地名被当成说话人。
+
+    ## 实体表会漏人，而这一层修不了
+
+    《坏蛋》第二章的孙学文在原文里出现 12 次、有台词，
+    实体抽取却没抽到他 —— 于是「孙学文喘口气」这个脏标签留在那里。
+
+    试过用「X说：」的句式从原文反捞候选名，**行不通**：
+    一次捞出 24 个，其中 21 个是「一字一句」「咬牙」「拍拍谢文」
+    这类从句子中间切出来的碎片；按出现频次过滤能清掉垃圾，
+    但真名也一起没了 —— 正则捞到的是「孙学文喘」而不是「孙学文」，
+    它自己就带着要切掉的那个后缀。
+
+    **修的位置在实体抽取，不在这里**：有台词的角色本来就该被抽成实体。
+    这一层只做锚定，锚不到就退回语法两刀（宁可漏不要错）。
     """
     from app.models import EntityKind, WorldEntity
 
@@ -402,6 +416,7 @@ def _known_speakers(db: Session, novel_id: str) -> list[str]:
         out.add(e.display_name)
         out.update(str(a) for a in (e.aliases_json or []) if a)
     return sorted((x.strip() for x in out if x and x.strip()), key=len, reverse=True)
+
 
 def build_prose(
     db: Session, chapter: Chapter, *, activate: bool = True, force: bool = False

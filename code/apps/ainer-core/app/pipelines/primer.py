@@ -264,7 +264,7 @@ def generate_primer(
         [{"role": "system", "content": PRIMER_SYSTEM % (MAX_WORDS, MIN_WORDS)},
          {"role": "user", "content": user}],
         PRIMER_SCHEMA, purpose="devices", novel_id=transform.novel_id,
-        ref_kind="world_primer", ref_id=transform.id, max_tokens=8192,
+        ref_kind="world_primer", ref_id=transform.id, max_tokens=6144,  # 导读是唯一真要长输出的（四节 400 词）
     )
 
     sections = []

@@ -3482,9 +3482,10 @@ const NovelDesk = {
     const kinds = Object.entries(d.entities_by_kind || {});
     v.innerHTML = `
       <div class="card">
-        <h2><a href="#" onclick="goto('console');return false"
-            style="color:var(--muted);font-weight:400">控制台</a>
-          <span style="color:var(--muted)"> › </span>${h(d.novel.title)}
+        <div class="row" style="margin-bottom:6px">
+          <button class="btn" onclick="goto('console')">← 控制台</button>
+        </div>
+        <h2>📖 ${h(d.novel.title)}
           <span class="sub mono" style="color:var(--muted)">${ch.total} 章</span></h2>
         <p class="hint">这一层是<b>整本共享</b>的东西。改这里会影响所有章节 ——
           这正是它放在这一层的原因。</p>
@@ -3556,12 +3557,13 @@ const ChapterDesk = {
     const nx = d.next;
     v.innerHTML = `
       <div class="card">
-        <h2><a href="#" onclick="goto('console');return false"
-            style="color:var(--muted);font-weight:400">控制台</a>
-          <span style="color:var(--muted)"> › </span>
-          <a href="#" onclick="goto('novel','${d.novel ? d.novel.id : ""}');return false"
-            style="color:var(--muted);font-weight:400">${h(d.novel ? d.novel.title : "")}</a>
-          <span style="color:var(--muted)"> › </span>${h(d.title || "第" + d.order_no + "章")}
+        <div class="row" style="margin-bottom:6px">
+          <button class="btn" onclick="goto('console')">← 控制台</button>
+          <button class="btn" onclick="goto('novel','${d.novel ? d.novel.id : ""}')"
+            >← ${h(d.novel ? d.novel.title : "小说")}</button>
+          <button class="btn" onclick="goto('media','${d.novel ? d.novel.id : ""}')">🗂 资源库</button>
+        </div>
+        <h2>📄 ${h(d.title || "第" + d.order_no + "章")}
           <span class="sub mono" style="color:var(--muted)">${d.words || 0} 字 ·
             ${d.done_stages}/${d.total_stages} 步</span></h2>
         <p class="hint">十步按<b>真实的依赖</b>排：已锁定译本 → 目标世界剧本 → 分镜 →
@@ -3652,36 +3654,50 @@ const MediaLib = {
     this.data = d;
     const mb = n => (n/1048576).toFixed(1) + " MB";
 
+    // **空和坏在界面上长得一样。** 一本还没出过图的书打开资源库，
+    // 看到的是一个空页面 —— 人分不出是「还没做」还是「页面挂了」。
+    // 所以空的时候要说清楚是哪一种，并给出下一步。
+    const blank = d.total === 0;
     v.innerHTML = `
       <div class="card">
-        <h2><a href="#" onclick="goto('novel','${d.novel.id}');return false"
-            style="color:var(--muted);font-weight:400">${h(d.novel.title)}</a>
-          <span style="color:var(--muted)"> › </span>资源库
-          <span class="sub mono" style="color:var(--muted)">${d.total} 个 · ${mb(d.total_bytes)}</span></h2>
-        <p class="hint">这本书生成过的全部文件。<b>每个都带着「用在哪」</b> ——
-          三十张灰蒙蒙的夜戏截图摆在一起，光看图分不出哪张是镜 7 的尾帧。<br>
-          「未被引用」多半是重出时被替换掉的旧产物：占着磁盘，
-          混在缩略图里还会让人以为这一镜有两张图。</p>
-        <div class="row" style="flex-wrap:wrap">
-          <button class="btn ${this.use?"":"pri"}" onclick="MediaLib.filter('')"
-            >全部 <span class="mono">${d.total}</span></button>
-          ${d.groups.map(g=>`<button class="btn ${this.use===g.use?"pri":""}"
-            onclick="MediaLib.filter('${g.use}')">${h(g.name)}
-            <span class="mono" style="opacity:.7">${g.count}</span></button>`).join("")}
+        <div class="row" style="margin-bottom:6px">
+          <button class="btn" onclick="goto('console')">← 控制台</button>
+          <button class="btn" onclick="goto('novel','${d.novel.id}')">← ${h(d.novel.title)}</button>
         </div>
+        <h2>🗂 ${h(d.novel.title)} · 资源库
+          <span class="sub mono" style="color:var(--muted)">${d.total} 个 · ${mb(d.total_bytes)}</span></h2>
+        ${blank ? `<p class="hint">这本书<b>还没有生成过任何图片、音频或视频</b> ——
+            不是页面出错。资源库只收「已经生成的产物」，
+            而这本书目前只有文字（章节、实体、译本块）。<br>
+            画面从「章节工作台 → 首帧」开始出，声音从「配音表 → 生成配音」开始出。</p>
+          <div class="row">
+            <button class="btn pri" onclick="goto('novel','${d.novel.id}')">去小说工作台看下一步</button>
+          </div>`
+        : `<p class="hint">这本书生成过的全部文件。<b>每个都带着「用在哪」</b> ——
+            三十张灰蒙蒙的夜戏截图摆在一起，光看图分不出哪张是镜 7 的尾帧。<br>
+            「未被引用」多半是重出时被替换掉的旧产物：占着磁盘，
+            混在缩略图里还会让人以为这一镜有两张图。</p>
+          <div class="row" style="flex-wrap:wrap">
+            <button class="btn ${this.use?"":"pri"}" onclick="MediaLib.filter('')"
+              >全部 <span class="mono">${d.total}</span></button>
+            ${d.groups.map(g=>`<button class="btn ${this.use===g.use?"pri":""}"
+              onclick="MediaLib.filter('${g.use}')">${h(g.name)}
+              <span class="mono" style="opacity:.7">${g.count}</span></button>`).join("")}
+          </div>`}
       </div>
 
-      <div class="card">
+      ${blank ? "" : `<div class="card">
         ${d.items.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px">
           ${d.items.map(i=>this.tile(i)).join("")}</div>`
-          : `<div class="empty">这一类还没有文件</div>`}
+          : `<div class="empty">这一类还没有文件 —
+              <a href="#" onclick="MediaLib.filter('');return false">看全部</a></div>`}
         ${d.total > d.limit ? `<div class="row" style="margin-top:10px">
           <button class="btn" ${d.offset?"":"disabled"} onclick="MediaLib.page(-1)">上一页</button>
           <span class="sub mono" style="color:var(--muted)">${
             d.offset+1}–${Math.min(d.offset+d.limit, d.total)} / ${d.total}</span>
           <button class="btn" ${d.offset+d.limit<d.total?"":"disabled"}
             onclick="MediaLib.page(1)">下一页</button></div>` : ""}
-      </div>`;
+      </div>`}`;
   },
 
   tile(i) {
