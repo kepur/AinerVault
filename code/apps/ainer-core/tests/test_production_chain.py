@@ -190,3 +190,40 @@ class TestShotPlanBatching:
 
         src = inspect.getsource(shot_plan.build_shot_plan)
         assert "_chunk_scene(scene_blocks, count)" in src
+
+
+class TestSpeakerMustBeOnScreen:
+    """对白镜头的出场人物里必须有说话人。
+
+    entity_names 是模型的判断，而这一镜覆盖的对白块上写着 speaker_tag ——
+    那是上一步定下来的事实，不是判断。坏蛋实跑里镜 2 的台词是
+    Tyler Kao 说的（speaker_tag 写得清清楚楚），模型却把出场人物填成了
+    Brad Lee，于是首帧提示词描述的是另一个人 —— 画面里张嘴的那张脸是错的，
+    而台词、配音、时间轴全都对。这种错只有把画面和台词摆在一起才看得出来。
+    """
+
+    def test_rule_exists_and_prefers_the_fact(self):
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan.build_shot_plan)
+        assert "b.speaker_entity_id" in src
+        assert "BlockType.dialogue" in src
+
+    def test_correction_is_reported_not_silent(self):
+        """悄悄补上等于把一处模型错误藏起来 ——
+        这个数字等于「有几镜的画面里张嘴的是另一张脸」。"""
+        from app.pipelines.shot_plan import ShotPlanResult
+
+        assert "speaker_added" in ShotPlanResult().as_dict()
+
+    def test_only_dialogue_blocks_pull_a_speaker_in(self):
+        """场记块没有说话人 —— 拿它的 speaker_tag 去补会把空值塞进出场人物。"""
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan.build_shot_plan)
+        gate = src[src.index("for b in shot_blocks:"):][:400]
+        assert "is not BlockType.dialogue" in gate and "continue" in gate

@@ -140,6 +140,10 @@ class ShotPlanResult:
     #: 这个数字等于「有几镜的首尾帧不会有实质差别」，
     #: 而那正是成片看起来像幻灯片的直接原因
     static_derives: list[dict] = field(default_factory=list)
+    #: 模型漏填、按对白说话人补进去的出场人物。**要报出来** ——
+    #: 这个数字等于「有几镜的画面里张嘴的是另一张脸」，
+    #: 而台词、配音、时间轴全都对，只有把画面和台词摆在一起才看得出来
+    speaker_added: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +154,7 @@ class ShotPlanResult:
             "move_distribution": self.move_distribution,
             "uncovered_blocks": self.uncovered_blocks,
             "static_derives": self.static_derives,
+            "speaker_added": self.speaker_added,
             "orphaned_assets": self.orphaned_assets,
         }
 
@@ -420,6 +425,27 @@ def build_shot_plan(
 
             names = [str(n) for n in (item.get("entity_names") or [])]
             entity_ids = [entities[n].id for n in names if n in entities]
+            # **说话人必须在场。**
+            #
+            # entity_names 是模型的判断，而这一镜覆盖的对白块上写着
+            # speaker_tag —— 那是上一步定下来的事实，不是判断。
+            # 两者冲突时以事实为准：坏蛋实跑里镜 2 的台词是 Tyler Kao 说的
+            #（speaker_tag 写得清清楚楚），模型却把出场人物填成了 Brad Lee，
+            # 于是首帧提示词描述的是另一个人 —— 画面里张嘴的那张脸是错的，
+            # 而台词、配音、时间轴全都对。这种错只有把画面和台词摆在一起
+            # 才看得出来，报表上一片正常。
+            for b in shot_blocks:
+                if b.block_type is not BlockType.dialogue:
+                    continue
+                who = b.speaker_entity_id or (
+                    entities[b.speaker_tag].id
+                    if b.speaker_tag in entities else None)
+                if who and who not in entity_ids:
+                    entity_ids.append(who)
+                    result.speaker_added.append({
+                        "shot": order_no, "speaker": b.speaker_tag,
+                        "why": "台词的说话人不在模型给的出场人物里，已补上",
+                    })
             asset_keys = [str(k) for k in (item.get("asset_keys") or [])]
             shared = {"asset_keys": asset_keys, "shot_size": size,
                       "seed": (seed + order_no) % (2**31)}
