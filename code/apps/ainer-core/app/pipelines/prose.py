@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -121,8 +121,32 @@ _NARRATIVE_ADVERBS = (
 )
 
 
-def trim_speaker(who: str) -> str | None:
+def anchor_speaker(who: str, known: Sequence[str]) -> str | None:
+    """已知人名做锚：从这一串里找出最长的一个已知称呼。
+
+    **这比任何语法规则都可靠。** 纯语法切分处理不了
+    「谢文东挡」（三字名 + 单动词）、「谢文东木然」（名 + 状态词）、
+    「见谢文东光」（引导动词 + 名 + 副词）—— 它们在语法上都成立，
+    只有「知道这本书里有个人叫谢文东」才判得出来。
+
+    实体表本来就有这份名单，只是这一层原来拿不到它。
+
+    取最长匹配：「李爽」与「李爽爽」并存时，短的那个会先命中。
+    找不到返回 None，交回给语法那两刀 —— 名单不全是常态
+    （新角色第一次出场时实体表里还没有他）。
+    """
+    raw = (who or "").strip()
+    if not raw or not known:
+        return None
+    hit = [k for k in known if k and k in raw]
+    return max(hit, key=len) if hit else None
+
+
+def trim_speaker(who: str, known: Sequence[str] | None = None) -> str | None:
     """把「李格非从里屋走出」裁成「李格非」，裁不干净就返回 None。
+
+    给了 known（本书已知的人物称呼）时先用它锚定 —— 语法规则处理不了
+    「谢文东挡」这类三字名后接单动词的情况。
 
     两刀：先按动词切，再按助词/副词切。两刀之后仍不像称呼就放弃 ——
     **宁可没有说话人，也不要一个错的**。缺失可以由后面的
@@ -133,6 +157,10 @@ def trim_speaker(who: str) -> str | None:
     raw = (who or "").strip().strip("「」『』“”\"')( ")
     if not raw:
         return None
+
+    anchored = anchor_speaker(raw, known or ())
+    if anchored:
+        return anchored
 
     # **只看第一个分句。** 冒号前有多个分句时，说话人可能在任何一句：
     #   「总镖头把镖单推过来，指节在桌上敲了两下」  在第一句
@@ -309,10 +337,16 @@ def _extract_quoted(text: str) -> list[str]:
     return out
 
 
-def classify_paragraph(para: str) -> tuple[BlockType, str, str | None]:
+def classify_paragraph(
+    para: str, known: Sequence[str] | None = None,
+) -> tuple[BlockType, str, str | None]:
     """判定段落类型，返回 (类型, 文本, 说话人)。
 
     只做规则判定 —— 这一层的目标是快和稳，语义理解留给译本审核。
+
+    known 是本书已抽出的人物称呼。**给了它，说话人的准确率完全不同一个量级**：
+    纯语法切分处理不了「谢文东挡」「谢文东木然」「见谢文东光」，
+    而知道有个人叫谢文东就一眼判得出。
     """
     text = para.strip()
     if not text:
@@ -335,12 +369,12 @@ def classify_paragraph(para: str) -> tuple[BlockType, str, str | None]:
         rest = m.group("rest").lstrip()
         if rest and rest[0] in {q for pair in _QUOTE_PAIRS for q in pair}:
             prefix_dialogue = True
-            speaker = trim_speaker(m.group("who"))
+            speaker = trim_speaker(m.group("who"), known)
 
     if speaker is None:
         m2 = _SPEAKER_SUFFIX.search(text)
         if m2:
-            speaker = trim_speaker(m2.group("who"))
+            speaker = trim_speaker(m2.group("who"), known)
 
     # 用引号位置而非占比判定：句首引号是对白，句中引号是叙述里的引用。
     # 占比判不准 ——「『打尖。』她解下长剑」引号只占三成，却是对白；
@@ -350,6 +384,24 @@ def classify_paragraph(para: str) -> tuple[BlockType, str, str | None]:
     # 叙述段落没有说话人 —— 段中的引用不是谁在讲话
     return BlockType.narration, text, None
 
+
+
+def _known_speakers(db: Session, novel_id: str) -> list[str]:
+    """本书人物的全部称呼（正名 + 别名）。
+
+    只收人物 —— 地点与道具不会说话，混进来会让「三娘客栈」
+    这类地名被当成说话人。
+    """
+    from app.models import EntityKind, WorldEntity
+
+    out: set[str] = set()
+    for e in db.execute(
+        select(WorldEntity).where(WorldEntity.novel_id == novel_id,
+                                  WorldEntity.kind == EntityKind.character)
+    ).scalars():
+        out.add(e.display_name)
+        out.update(str(a) for a in (e.aliases_json or []) if a)
+    return sorted((x.strip() for x in out if x and x.strip()), key=len, reverse=True)
 
 def build_prose(
     db: Session, chapter: Chapter, *, activate: bool = True, force: bool = False
@@ -373,6 +425,13 @@ def build_prose(
             script_doc_id=prev.id, version=prev.version, reused=True, **counts
         )
 
+    # **本书已抽出的人物称呼，拿来给说话人切分做锚。**
+    # 纯语法规则判不出「谢文东挡」是「谢文东」+ 动词 ——
+    # 那需要知道这本书里有个人叫谢文东，而实体表里正好有。
+    # 实体还没抽时是空的，退回纯语法那两刀（漏一个可以后面补，
+    # 错一个会一路污染音色分配与对话指向）。
+    known_names = _known_speakers(db, chapter.novel_id)
+
     version = int(
         db.execute(
             select(ScriptDoc.version).where(ScriptDoc.chapter_id == chapter.id)
@@ -395,7 +454,7 @@ def build_prose(
     seen_speakers: list[str] = []
 
     for para in re.split(r"\n\s*\n|\n", content):
-        block_type, text, speaker = classify_paragraph(para)
+        block_type, text, speaker = classify_paragraph(para, known_names)
         if not text:
             continue
         seq += 1

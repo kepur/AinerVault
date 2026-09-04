@@ -307,7 +307,12 @@ class TestTimeoutFloors:
         text = timeout_for(Capability.text_chat, 300_000, 60)
         image = timeout_for(Capability.image_t2i, 300_000, 60)
         video = timeout_for(Capability.video_i2v, 300_000, 60)
-        assert text == 60
+        # 文本也要抬 —— 「文本很快」是个错觉：一句闲聊快，
+        # 而剧本编译一次吐三十段结构化 JSON，60 秒必然超时，
+        # 报出来却是「上游超时」，指向网络而不是预算不够。
+        assert text > 60
+        # 但比图像短：文本是流式返回的，卡住往往是上游真坏了；
+        # 图像一次性出结果，慢是常态。
         assert image > text
         assert video > image
 

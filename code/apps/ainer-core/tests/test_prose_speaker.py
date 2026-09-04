@@ -568,3 +568,59 @@ class TestAppellationRerun:
 
         src = inspect.getsource(naming._apply_appellations)
         assert "prev.transform_id is None and r.transform_id" in src
+
+
+class TestKnownNameAnchor:
+    """纯语法切分处理不了「谢文东挡」这类三字名 + 单动词。
+
+    实跑「坏蛋」第一章切出来的说话人标签：
+        谢文东挡   谢文东木然   见谢文东光   膀子‘恩
+    这些在语法上全都成立，规则层面无从否定 ——
+    只有「知道这本书里有个人叫谢文东」才判得出来。
+    而错的说话人会一路污染实体抽取、音色分配与对话指向，沿途不报错。
+    """
+
+    KNOWN = ["谢文东", "李爽", "徐娜", "膀子", "胖子"]
+
+    def test_name_plus_verb(self):
+        from app.pipelines.prose import trim_speaker
+
+        assert trim_speaker("谢文东挡", self.KNOWN) == "谢文东"
+
+    def test_name_plus_state_word(self):
+        from app.pipelines.prose import trim_speaker
+
+        assert trim_speaker("谢文东木然", self.KNOWN) == "谢文东"
+
+    def test_leading_verb_plus_name(self):
+        from app.pipelines.prose import trim_speaker
+
+        assert trim_speaker("见谢文东光", self.KNOWN) == "谢文东"
+
+    def test_longest_match_wins(self):
+        """「李爽」与「李爽爽」并存时，短的那个会先命中。"""
+        from app.pipelines.prose import anchor_speaker
+
+        assert anchor_speaker("李爽爽笑了", ["李爽", "李爽爽"]) == "李爽爽"
+
+    def test_unknown_falls_back_to_grammar(self):
+        """名单不全是常态 —— 新角色第一次出场时实体表里还没有他。
+        这时退回纯语法那两刀：漏一个可以由 speakers:resolve 补，
+        错一个会一路传下去。"""
+        from app.pipelines.prose import anchor_speaker
+
+        assert anchor_speaker("孙学文喘口气", self.KNOWN) is None
+
+    def test_empty_known_list_is_harmless(self):
+        from app.pipelines.prose import trim_speaker
+
+        assert trim_speaker("李格非从里屋走出", []) == "李格非"
+
+    def test_only_characters_are_anchors(self):
+        """地点与道具不会说话，混进名单会让「三娘客栈」被当成说话人。"""
+        import inspect
+
+        from app.pipelines import prose
+
+        src = inspect.getsource(prose._known_speakers)
+        assert "EntityKind.character" in src
