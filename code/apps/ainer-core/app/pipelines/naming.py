@@ -236,13 +236,25 @@ def known_sex(db: Session, entity: WorldEntity) -> str | None:
 
     两个来源都查，视觉侧优先 —— 它是画面的依据，与看到的脸必须一致。
     """
-    from app.models import EntityWorldVisual, VoiceCasting
+    from app.models import AssetEpoch, EntityWorldVisual, VoiceCasting
     from app.worldview.voice import VoiceSpec, to_tts_params
 
     vis = db.execute(
         select(EntityWorldVisual).where(EntityWorldVisual.entity_id == entity.id)
     ).scalars().first()
     sex = str(((vis.invariant_json or {}) if vis else {}).get("sex") or "").lower()
+    if sex in _SEX_CN:
+        return sex
+
+    # 人物时期的不变项里也记着性别，而且它往往是**最先有**的那一份 ——
+    # 时期开采跑在命名之前，配音表与视觉档案都在之后。
+    # 不读这里的话，第一次命名永远拿不到性别：坏蛋整本七个人
+    # 全部落进 unknown_sex，于是女生徐娜被起了个男名。
+    epoch = db.execute(
+        select(AssetEpoch).where(AssetEpoch.entity_id == entity.id)
+        .order_by(AssetEpoch.from_chapter_order)
+    ).scalars().first()
+    sex = str(((epoch.invariant_json or {}) if epoch else {}).get("sex") or "").lower()
     if sex in _SEX_CN:
         return sex
 

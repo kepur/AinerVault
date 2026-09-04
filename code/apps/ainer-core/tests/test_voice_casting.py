@@ -473,3 +473,27 @@ class TestNoVoiceNoAudio:
 
         spec = AudioSpec(entity_id=None, text="Hand over all your money")
         assert _spec_speaker(FakeDb(), spec).startswith("Hand over")
+
+
+class TestKnownSexSources:
+    """性别是**事实**，不该让模型从汉字猜 —— 但前提是查得到。
+
+    三个来源里，人物时期是最先有的那一份：时期开采跑在命名之前，
+    配音表与视觉档案都在之后。不读它的话第一次命名永远拿不到性别，
+    坏蛋整本七个人全部落进 unknown_sex，女生徐娜被起了个男名。
+    """
+
+    def test_asset_epoch_is_one_of_the_sources(self):
+        import inspect
+
+        from app.pipelines import naming
+
+        src = inspect.getsource(naming.known_sex)
+        assert "AssetEpoch" in src
+        # 按**查询**出现的顺序判，不按 import 行 —— import 是按字母排的
+        order = [q for q in ("select(EntityWorldVisual", "select(AssetEpoch",
+                             "select(VoiceCasting") if q in src]
+        assert order == ["select(EntityWorldVisual", "select(AssetEpoch",
+                         "select(VoiceCasting"], (
+            "视觉档案优先 —— 它是画面的依据，与看到的脸必须一致；"
+            "时期次之；配音表最后")
