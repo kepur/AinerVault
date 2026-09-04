@@ -383,11 +383,13 @@ def build_shot_plan(
     order_no = 0
 
     for scene, scene_blocks, _dur, count in scene_plan:
-        raw_shots = _ask_llm_for_shots(
-            db, script_doc, scene, scene_blocks, count, director,
-            transform=transform, entity_catalog=entity_index.catalog(),
-            version=version,
-        )
+        raw_shots = []
+        for part, part_count in _chunk_scene(scene_blocks, count):
+            raw_shots.extend(_ask_llm_for_shots(
+                db, script_doc, scene, part, part_count, director,
+                transform=transform, entity_catalog=entity_index.catalog(),
+                version=version,
+            ))
         valid_ids = {b.id for b in scene_blocks}
         for item in raw_shots:
             order_no += 1
@@ -490,6 +492,51 @@ def build_shot_plan(
 
     db.flush()
     return result
+
+
+#: 一次调用最多要几个镜头。
+#:
+#: 每个镜头要吐 description + first_frame + last_frame + 可见差异 + 出场人物
+#: + 素材键，四五百 token 起步。一场三十多个镜头就是一万五以上，
+#: 而截断重试把预算抬到 8192 之后仍然两轮都截断 ——
+#: 报出来是「输出太多」，根因是**这一层从来没在场内分过批**。
+#:
+#: 上游把场记按节拍拆细之后这个坑才浮出来：块从 91 变成 113，
+#: 镜头数跟着涨，一次性生成就再也装不下。
+#: 拆细是对的（首尾帧之间跨半小时会漂），代价是这里必须分批。
+_SHOTS_PER_CALL = 10
+
+
+def _chunk_scene(
+    blocks: list["ScriptBlock"], count: int,
+) -> list[tuple[list["ScriptBlock"], int]]:
+    """把一场切成几批，每批不超过 _SHOTS_PER_CALL 个镜头。
+
+    按**块**切而不是按镜头切 —— 镜头是模型待会儿才划的，这里还不知道
+    它会怎么划。块边界天然安全：一个镜头只会覆盖相邻的块，
+    不会跨到另一批去。
+
+    批次内的目标镜头数按块数比例分，余数给前面几批 ——
+    前面通常是建场镜，切得密一点更合理。
+    """
+    if count <= _SHOTS_PER_CALL or len(blocks) <= 1:
+        return [(blocks, count)]
+    n = -(-count // _SHOTS_PER_CALL)          # 向上取整
+    n = min(n, len(blocks))
+    per_block = -(-len(blocks) // n)
+    out: list[tuple[list["ScriptBlock"], int]] = []
+    base, extra = divmod(count, n)
+    for i in range(n):
+        part = blocks[i * per_block : (i + 1) * per_block]
+        if not part:
+            break
+        out.append((part, base + (1 if i < extra else 0)))
+    # 块没分完（per_block 取整导致）就并进最后一批，绝不能丢块
+    used = sum(len(b) for b, _ in out)
+    if used < len(blocks):
+        last_blocks, last_count = out[-1]
+        out[-1] = (last_blocks + blocks[used:], last_count)
+    return out
 
 
 def _ask_llm_for_shots(

@@ -130,3 +130,63 @@ class TestScreenplayProjectionGuard:
         assert "allow_source" in inspect.signature(
             script_build.build_script).parameters
         assert "allow_source" in inspect.getsource(script_build._production_text)
+
+
+class TestShotPlanBatching:
+    """分镜要在场内分批，否则一场三十多个镜头一次吐不完。
+
+    每个镜头要吐 description + first_frame + last_frame + 可见差异
+    + 出场人物 + 素材键，四五百 token 起步。截断重试把预算抬到 8192
+    之后仍然两轮都截断，报出来是「输出太多」——
+    根因是这一层从来没在场内分过批。
+
+    上游把场记按节拍拆细之后这个坑才浮出来：块从 91 变成 113，
+    镜头数跟着涨，一次性生成再也装不下。拆细是对的
+    （首尾帧之间跨半小时会漂），代价是这里必须分批。
+    """
+
+    def _blocks(self, n):
+        return [f"b{i}" for i in range(n)]
+
+    def test_small_scene_is_one_call(self):
+        from app.pipelines.shot_plan import _chunk_scene
+
+        assert len(_chunk_scene(self._blocks(6), 5)) == 1
+
+    def test_large_scene_is_split(self):
+        from app.pipelines.shot_plan import _SHOTS_PER_CALL, _chunk_scene
+
+        parts = _chunk_scene(self._blocks(33), 34)
+        assert len(parts) > 1
+        assert all(c <= _SHOTS_PER_CALL for _b, c in parts)
+
+    def test_no_block_is_lost(self):
+        """丢块就是丢剧情 —— 而它不会报错，只会让那几句话没有画面。"""
+        from app.pipelines.shot_plan import _chunk_scene
+
+        for n, count in ((33, 34), (7, 25), (100, 41), (1, 9)):
+            parts = _chunk_scene(self._blocks(n), count)
+            assert sum(len(b) for b, _c in parts) == n, (n, count)
+
+    def test_shot_budget_is_preserved(self):
+        from app.pipelines.shot_plan import _chunk_scene
+
+        for n, count in ((33, 34), (50, 27), (12, 11)):
+            parts = _chunk_scene(self._blocks(n), count)
+            assert sum(c for _b, c in parts) == count, (n, count)
+
+    def test_never_more_batches_than_blocks(self):
+        """块比镜头少时不能切出空批 —— 空批会让模型凭空造镜头。"""
+        from app.pipelines.shot_plan import _chunk_scene
+
+        parts = _chunk_scene(self._blocks(3), 30)
+        assert len(parts) <= 3
+        assert all(b for b, _c in parts)
+
+    def test_generation_uses_the_chunker(self):
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan.build_shot_plan)
+        assert "_chunk_scene(scene_blocks, count)" in src
