@@ -297,10 +297,16 @@ def translation_junk(text: str) -> list[str]:
 
 #: 模型把自己的推理写进正文时的痕迹。这些词只出现在「解释」里，
 #: 不会出现在场记或台词里
-_ASIDE_MARKS = (
+#: 中文标记按子串找 —— 中文没有词边界，「此处原文」不会嵌在别的词里。
+_ASIDE_MARKS_CN = (
     "此处原文", "根据上下文", "原文指代", "疑似", "推测", "译者注",
-    "注：", "（注", "此处存疑", "原文如此", "sic", "TN:", "translator's note",
+    "注：", "（注", "此处存疑", "原文如此",
 )
+#: 拉丁标记必须按**整词**找。裸子串匹配把 "sic" 匹到了 "Are you sick?" ——
+#: 一句完全正常的台词被报成模型旁注。这一栏非空是要人去看的，
+#: 喊狼喊多了就没人看了。
+_ASIDE_MARKS_EN = re.compile(
+    r"\b(sic|TN|translator['’]s note)\b", re.I)
 
 
 def script_asides(text: str) -> list[str]:
@@ -319,7 +325,9 @@ def script_asides(text: str) -> list[str]:
     与 translation_junk 同一条纪律：解析成功不等于内容干净。
     """
     body = text or ""
-    return sorted({m for m in _ASIDE_MARKS if m in body})
+    out = {m for m in _ASIDE_MARKS_CN if m in body}
+    out |= {m.group(0) for m in _ASIDE_MARKS_EN.finditer(body)}
+    return sorted(out)
 
 # ── 首尾帧之间必须有「看得见的变化」 ──────────────────────────────────────────
 #

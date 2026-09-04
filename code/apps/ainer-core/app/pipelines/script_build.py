@@ -127,12 +127,28 @@ def cast_brief(
                 EntityWorldName.transform_id == transform.id)
         ).scalars() if n.target_name
     }
+    from app.pipelines.entities import _is_common_address
+
     aka: dict[str, list[str]] = {}
     for a in db.execute(
         select(EntityAppellation).where(
             EntityAppellation.transform_id == transform.id)
     ).scalars():
         if not a.target_surface:
+            continue
+        ent = ents.get(a.entity_id)
+        if ent is None:
+            continue
+        # **全名那条不算别名。** 抽取会给本名也登记一条 formal_full 称呼，
+        # 字面与 display_name 一样；它与人名映射是同一件事的两份副本，
+        # 而改译名时只改了映射那份。于是人物表里出现
+        # 「Thomas Chen 又叫 Thomas Ashford」—— 一个正文里根本不存在的
+        # 名字，模型收到只会更糊涂。全名的权威是人名映射，
+        # 这与占位符那一层用的是同一条规则。
+        if a.source_surface == ent.display_name:
+            continue
+        # 通称也不算。「that whelp」是骂人的说法，不是这个人的另一个名字
+        if _is_common_address(a.source_surface or ""):
             continue
         main = names.get(a.entity_id)
         if main and a.target_surface != main:

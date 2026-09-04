@@ -247,12 +247,28 @@ class TestScriptAsides:
         "Tyler 猛地抬手，一巴掌扇在 Thomas Chen 脸上。",
         "Thomas Chen 低着头，双手死死攥住校服口袋。",
         "走廊尽头的窗透进光，尘埃在光柱里浮着。",
+        # 拉丁标记必须按整词找 —— 裸子串把 "sic" 匹进了 "sick"，
+        # 一句完全正常的台词被报成模型旁注。实跑撞到过：
+        # "Tommy, what's wrong? Are you sick?"
+        "Tommy, what's wrong? Are you sick?",
+        "the music stopped",
+        "a basic mistake",
     ])
-    def test_normal_stage_directions_pass(self, text):
-        """场记本来就会写括号和状语，不能一见括号就报。"""
+    def test_normal_lines_pass(self, text):
+        """场记本来就会写括号和状语，台词里也会出现 sick/music。
+        这一栏非空是要人去看的，喊狼喊多了就没人看了。"""
         from app.pipelines.screenplay import script_asides
 
         assert not script_asides(text)
+
+    @pytest.mark.parametrize("text,mark", [
+        ("原文如此 [sic]", "sic"),
+        ("TN: 原文为窗", "TN"),
+    ])
+    def test_real_latin_markers_still_caught(self, text, mark):
+        from app.pipelines.screenplay import script_asides
+
+        assert mark in script_asides(text)
 
     def test_build_reports_them(self):
         import inspect
@@ -285,3 +301,18 @@ class TestCastBrief:
         from app.pipelines.script_build import cast_brief
 
         assert cast_brief(None, None, None) == ""
+
+    def test_stale_full_name_is_not_listed_as_an_alias(self):
+        """抽取会给本名也登记一条 formal_full 称呼，字面与 display_name 一样。
+
+        它与人名映射是同一件事的两份副本，而改译名时只改了映射那份。
+        于是人物表里出现「Thomas Chen 又叫 Thomas Ashford」——
+        一个正文里根本不存在的名字，模型收到只会更糊涂。
+        """
+        import inspect
+
+        from app.pipelines import script_build
+
+        src = inspect.getsource(script_build.cast_brief)
+        assert "a.source_surface == ent.display_name" in src
+        assert "_is_common_address" in src, "「that whelp」不是这个人的另一个名字"
