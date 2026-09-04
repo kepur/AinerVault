@@ -282,6 +282,8 @@ class AnchorResult:
     estimated_cost: float | None = None
     requires_confirm: bool = False
     tasks: list[dict[str, Any]] = field(default_factory=list)
+    #: 出完立刻挂回各期的结果。为空表示这一轮没提交任何锚
+    synced: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -292,6 +294,7 @@ class AnchorResult:
             "estimated_cost": self.estimated_cost,
             "requires_confirm": self.requires_confirm,
             "tasks": self.tasks,
+            "synced": self.synced,
         }
 
 
@@ -479,6 +482,16 @@ def generate_anchors(
             "status": task.status.value, "prompt": prompt,
         })
     db.flush()
+    # **出完就挂上。**
+    #
+    # 「generate 提交、sync 挂回」这套两段式是为异步供应商准备的，
+    # 而同步方言（百炼出图是同步的）在 submit_task 返回时图就已经在库里。
+    # 于是漏跑一次 sync 的代价是：七张锚图全都有，
+    # 每一期的 identity_ref_asset_id 仍然是空 —— 下一步「扩成正面全身参考」
+    # 七个人全部报「先生成身份锚」，而锚明明就在那儿。
+    # sync 幂等，同步路径上多跑一次不花钱。
+    if result.submitted:
+        result.synced = sync_anchors(db, novel_id, profile)
     return result
 
 

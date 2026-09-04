@@ -196,3 +196,36 @@ class TestBustReference:
 
         src = inspect.getsource(frame_compose.compose_frame_prompt)
         assert "shot_size" in src.split("_entity_look(")[1][:220]
+
+
+class TestAnchorsAttachThemselves:
+    """出完就挂上，不要求人再跑一次 sync。
+
+    「generate 提交、sync 挂回」这套两段式是为异步供应商准备的，
+    而同步方言（百炼出图是同步的）在 submit_task 返回时图就已经在库里。
+    漏跑一次 sync 的代价：七张锚图全都有，每一期的
+    identity_ref_asset_id 仍然是空 —— 下一步「扩成正面全身参考」
+    七个人全部报「先生成身份锚」，而锚明明就在那儿。
+    """
+
+    def test_generate_calls_sync(self):
+        import inspect
+
+        from app.pipelines import identity
+
+        src = inspect.getsource(identity.generate_anchors)
+        assert "sync_anchors(db, novel_id, profile)" in src
+
+    def test_sync_only_runs_when_something_was_submitted(self):
+        """一次都没提交时不必空跑，也不该在结果里报一份假的同步数。"""
+        import inspect
+
+        from app.pipelines import identity
+
+        src = inspect.getsource(identity.generate_anchors)
+        assert "if result.submitted:" in src
+
+    def test_result_reports_what_got_attached(self):
+        from app.pipelines.identity import AnchorResult
+
+        assert "synced" in AnchorResult().as_dict()
