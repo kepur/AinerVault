@@ -156,6 +156,15 @@ class _Caller:
         self.timeout = timeout
         self.tokens = {"input": 0, "output": 0, "total": 0}
         self.calls = 0
+        #: 直接并进请求体的厂商参数。**由路由配置传下来，代码不猜。**
+        #: 存在的理由是 enable_thinking：qwen3 系默认开思考，
+        #: 一次命名调用里 6350 个输出 token 有 6100 是思考过程 ——
+        #: 于是每次都撞满 max_tokens、每次都超时，而报出来是「上游超时」，
+        #: 看着像网络问题。关掉之后同一个请求 18.4 秒变 8.6 秒。
+        #: 不写死在方言里：这是 DashScope 的字段，
+        #: 同一段 openai 兼容代码还要发给 groq / mistral / openrouter，
+        #: 它们收到不认识的字段会整个请求拒掉。
+        self.extra_body: dict[str, Any] = {}
 
     def __call__(self, messages: list[dict[str, str]], *, temperature: float,
                  max_tokens: int, json_mode: bool) -> str:
@@ -238,6 +247,7 @@ class _Caller:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
+            **self.extra_body,
         }
         if json_mode:
             # 兼容层统一用 json_object：json_schema 各家支持度参差，
@@ -376,6 +386,9 @@ def _run_chat(call: _Caller, payload: dict[str, Any]) -> dict[str, Any]:
         raise CapabilityError(CapErrorCode.INVALID_REQUEST, "messages 为空")
     temperature = float(payload.get("temperature", 0.7))
     max_tokens = int(payload.get("max_tokens", 8192))
+    # 路由上配的厂商私有参数（capability_routes.default_params.extra_body）。
+    # merge 在 service.submit_task 里做，到这里已经是这次调用的最终值。
+    call.extra_body = dict(payload.get("extra_body") or {})
     rf = payload.get("response_format") or {}
     schema = rf.get("schema") if rf.get("type") == "json_schema" else None
     want_json = bool(schema) or rf.get("type") == "json_object"
@@ -433,6 +446,10 @@ def _run_translate(call: _Caller, payload: dict[str, Any]) -> dict[str, Any]:
     segments = list(payload.get("segments") or [])
     if not segments:
         return {"segments": []}
+    # 翻译走的是同一个 _Caller，厂商私有参数也得接上 ——
+    # 只接 chat 的话，翻译这一步仍然带着思考跑，
+    # 而翻译恰恰是整本书里调用次数最多的一步
+    call.extra_body = dict(payload.get("extra_body") or {})
 
     head = [_TRANSLATE_RULES, f"源语言：{payload.get('source_language')}　"
                               f"目标语言：{payload.get('target_language')}"]

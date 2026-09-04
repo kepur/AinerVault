@@ -588,3 +588,64 @@ class TestFreeTierVoices:
         from app.capability import dialects
 
         assert "不接受表演指示" in inspect.getsource(dialects._sambert_invoke)
+
+
+class TestVendorExtraBody:
+    """厂商私有参数走路由配置，不写死在方言里。
+
+    起因是 qwen3 系默认开思考：一次命名调用 6350 个输出 token 里
+    6100 是思考过程，于是每次都撞满 max_tokens、每次都超时，
+    而报出来是「上游超时」，看着像网络问题。实测同一个请求
+    enable_thinking=false 之后 18.4 秒变 8.6 秒、输出 1550 变 619。
+
+    但 enable_thinking 是 DashScope 的字段，同一段 openai 兼容代码
+    还要发给 groq / mistral / openrouter —— 它们收到不认识的字段
+    会把整个请求拒掉。所以只能按路由配，代码里不设默认值。
+    """
+
+    def _caller(self, captured, payload_extra=None):
+        from app.capability.dialects import _Caller, _run_chat
+
+        class FakeResp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "choices": [{"message": {"content": '{"ok":1}'},
+                                 "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                              "total_tokens": 2},
+                }
+
+        class FakeTransport:
+            def post(self, url, *, json, headers, timeout):
+                captured.append(json)
+                return FakeResp()
+
+        call = _Caller(FakeTransport(), "https://x/v1", {}, "m", 10.0)
+        payload = {"messages": [{"role": "user", "content": "hi"}]}
+        payload.update(payload_extra or {})
+        _run_chat(call, payload)
+
+    def test_extra_body_is_merged_into_the_request(self):
+        captured: list[dict] = []
+        self._caller(captured, {"extra_body": {"enable_thinking": False}})
+        assert captured[0]["enable_thinking"] is False
+
+    def test_nothing_extra_by_default(self):
+        """没配就一个字段都不加 —— 别家收到不认识的字段会整个请求拒掉。"""
+        captured: list[dict] = []
+        self._caller(captured)
+        assert set(captured[0]) <= {
+            "model", "messages", "temperature", "max_tokens", "stream",
+            "response_format",
+        }
+
+    def test_translate_gets_it_too(self):
+        """翻译是全书调用次数最多的一步，漏接它等于没接。"""
+        import inspect
+
+        from app.capability import dialects
+
+        assert "extra_body" in inspect.getsource(dialects._run_translate)
