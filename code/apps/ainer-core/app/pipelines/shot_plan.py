@@ -406,12 +406,20 @@ def build_shot_plan(
             covered.update(block_ids)
             shot_blocks = [b for b in scene_blocks if b.id in block_ids]
             span = _estimate_ms(db, shot_blocks, target_language, tf_id) or avg_shot_ms
-            slices = _coverage_slices(span)
+            # 打斗镜切得密，对话镜可以长 —— 判据看这一镜的描述与原文
+            action = sp.is_action_beat(
+                item.get("description"),
+                *[b.source_text for b in shot_blocks],
+            )
+            slices = _coverage_slices(
+                span, cap=sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
             if len(slices) > 1:
                 result.split_for_length.append({
                     "from_shot": order_no + 1, "span_ms": span,
                     "into": len(slices),
-                    "why": f"{span / 1000:.0f} 秒装不进一个镜头，切成 "
+                    "action": action,
+                    "why": f"{span / 1000:.0f} 秒超过"
+                           f"{'动态' if action else '静态'}上限，切成 "
                            f"{len(slices)} 个机位覆盖同一段",
                 })
             # 下面这一层就是「同一段内容的第 n 个机位」。
@@ -560,11 +568,18 @@ _SHOT_MIN_MS = 1200
 def _coverage_slices(dur: int, *, cap: int = _SHOT_MAX_MS) -> list[int]:
     """一镜太长就切成几个机位，返回每个机位的时长。
 
+    **上限按内容分档，不是一刀切。** 对话只有嘴唇在动，八秒一个镜头
+    完全够，五秒切一刀反而是把同一个画面切成两半 —— 观众看到的是
+    同一张脸接同一张脸。而打斗的信息密度完全不同：一次出击、一次格挡、
+    一次踉跄各自都该是一个镜头，两秒就得切。
+    档位由 screenplay.STATIC_MAX_MS / ACTION_MAX_MS 定，调用方按
+    is_action_beat 选。
+
     **切的是机位，不是内容。** 一句十五秒的台词没法缩短，能做的是
     换角度覆盖它：说话人正面、听者反应、手部特写。这是剪辑里
     「coverage」本来的意思，不是把台词砍掉。
 
-    平均分而不是「切满五秒再留个零头」—— 后者会留下一个一秒的尾巴，
+    平均分而不是「切满上限再留个零头」—— 后者会留下一个一秒的尾巴，
     剪在一起像卡了一下。
     """
     if dur <= cap:

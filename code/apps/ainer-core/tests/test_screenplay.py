@@ -393,3 +393,44 @@ class TestActionBeats:
 
         assert "一个 action 块只写一个节拍" in SYSTEM_PROMPT
         assert "固定机位" in SYSTEM_PROMPT
+
+
+class TestDurationTiers:
+    """上限按内容分档，不是一刀切。
+
+    用户原话：「谈话可以拉长到 5-8s 一个镜头，只是人物嘴唇动，
+    没有大幅度运镜，所以不需要分镜很多；但是一旦出现快速打斗场面
+    可能 1-2s 就要一个分镜」。
+
+    一刀切 5 秒的后果两头都错：对话镜被切成两半（同一张脸接同一张脸，
+    反而更像卡带），打斗镜又切得不够（一次出击、一次格挡、一次踉跄
+    压进一镜，首尾帧只记得住头尾那两个，中间那个直接消失）。
+    """
+
+    def test_talking_gets_more_room_than_fighting(self):
+        assert sp.STATIC_MAX_MS > sp.ACTION_MAX_MS
+
+    def test_the_numbers_match_what_was_asked(self):
+        assert sp.STATIC_MAX_MS == 8000, "对话 5–8 秒"
+        assert sp.ACTION_MAX_MS == 2000, "打斗 1–2 秒"
+
+    def test_a_long_conversation_is_not_over_cut(self):
+        from app.pipelines.shot_plan import _coverage_slices
+
+        got = _coverage_slices(15000, cap=sp.STATIC_MAX_MS)
+        assert len(got) == 2 and all(5000 <= x <= 8000 for x in got)
+
+    def test_a_fight_is_cut_fine(self):
+        from app.pipelines.shot_plan import _coverage_slices
+
+        got = _coverage_slices(5000, cap=sp.ACTION_MAX_MS)
+        assert len(got) >= 3 and all(x <= sp.ACTION_MAX_MS for x in got)
+
+    def test_shot_plan_picks_the_tier_by_content(self):
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan.build_shot_plan)
+        assert "sp.is_action_beat(" in src
+        assert "sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS" in src

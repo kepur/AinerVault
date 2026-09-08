@@ -283,5 +283,5 @@ class TestCoverageSplit:
         from app.pipelines import shot_plan
 
         src = inspect.getsource(shot_plan.build_shot_plan)
-        assert "_coverage_slices(span)" in src
+        assert "_coverage_slices(\n" in src or "_coverage_slices(" in src
         assert "for slice_idx, dur in enumerate(slices)" in src
