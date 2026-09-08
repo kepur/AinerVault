@@ -14,12 +14,13 @@ from typing import Any
 import httpx
 
 from app.capability.dialects import (
-    DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE, DIALECT_GEMINI, DIALECT_OPENAI,
-    DIALECT_SD,
+    DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE, DIALECT_GEMINI, DIALECT_HUNYUAN,
+    DIALECT_OPENAI, DIALECT_SD,
     SYNC_ONLY_DIALECTS,
     cloudflare_health, cloudflare_invoke, dashscope_catalog, dashscope_health,
     dashscope_invoke, dashscope_voices, openai_catalog, openai_health, openai_invoke,
-    gemini_health, gemini_invoke, sd_health, sd_invoke,
+    gemini_health, gemini_invoke, hunyuan_health, hunyuan_invoke,
+    sd_health, sd_invoke,
 )
 from app.capability.errors import CapabilityError, CapErrorCode
 from app.capability.router import ResolvedRoute
@@ -211,6 +212,9 @@ class CapabilityClient:
         if self.dialect == DIALECT_GEMINI:
             return gemini_health(
                 self.client, self.base_url, self._headers(), self.timeout_sec)
+        if self.dialect == DIALECT_HUNYUAN:
+            return hunyuan_health(
+                self.client, self.base_url, self._headers(), self.timeout_sec)
         return HealthResult.model_validate(self._request("GET", "/health", timeout=10))
 
     def capabilities(self) -> CapabilityCatalog:
@@ -330,6 +334,13 @@ class CapabilityClient:
             )
         if self.dialect == DIALECT_GEMINI:
             return gemini_invoke(
+                self.client, self.base_url, self._headers(),
+                capability=cap, payload=req.input, model=model,
+                timeout=timeout_for(cap, req.options.timeout_ms, self.timeout_sec),
+                task_id=req.idempotency_key,
+            )
+        if self.dialect == DIALECT_HUNYUAN:
+            return hunyuan_invoke(
                 self.client, self.base_url, self._headers(),
                 capability=cap, payload=req.input, model=model,
                 timeout=timeout_for(cap, req.options.timeout_ms, self.timeout_sec),

@@ -44,8 +44,10 @@ DIALECT_DASHSCOPE = "dashscope"
 DIALECT_SD = "sd_webui"
 #: Google Gemini。接进来的唯一理由是 Veo 3.1 认首尾帧
 DIALECT_GEMINI = "gemini"
+#: 本机混元网关。**跑在本地不等于免费** —— 它按张收 0.2 元
+DIALECT_HUNYUAN = "hunyuan_image"
 DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE,
-            DIALECT_DASHSCOPE, DIALECT_SD, DIALECT_GEMINI)
+            DIALECT_DASHSCOPE, DIALECT_SD, DIALECT_GEMINI, DIALECT_HUNYUAN)
 
 #: openai 方言能承接的能力。图像/音频不在此列 —— 走这条方言的服务只有文本。
 OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
@@ -622,7 +624,7 @@ def openai_catalog(transport: httpx.Client, base_url: str, headers: dict[str, st
 
 #: 同步方言：没有任务队列，submit 也得当场跑完
 SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE,
-                      DIALECT_SD, DIALECT_GEMINI)
+                      DIALECT_SD, DIALECT_GEMINI, DIALECT_HUNYUAN)
 
 #: **每个模型只吃自己 schema 里的字段，多传一个就整个请求 400。**
 #: flux-1-schnell 只认 prompt 与 steps —— 传 width/height/seed/negative_prompt
@@ -2181,4 +2183,123 @@ def gemini_health(transport: httpx.Client, base_url: str,
     except httpx.HTTPError:
         ok = False
     return HealthResult(ok=ok, version=f"gemini-dialect/{CONTRACT_VERSION}",
+                        contract_version=CONTRACT_VERSION)
+
+
+# ── hunyuan_image 方言（本机混元 3.0 网关）───────────────────────────────────
+#
+# 用户自己搭在 127.0.0.1:8765 的服务，包着腾讯混元生图 3.0。
+# 与别的方言的三点不同，每一点都影响怎么接：
+#
+#   **收中文。** 服务自己写着 prompt_lang: zh-CN recommended。
+#   我们合成的帧提示词是英文（CJK 被过滤掉），所以这条线要走另一份 ——
+#   handoff.compose_image_cn 早就在为「喂国产模型」拼中文那一份了。
+#   payload 里有 prompt_cn 就用它，没有才退回英文。
+#
+#   **尺寸锁死。** 1280×720 由服务强制写入，传 width/height 没有意义。
+#   我们的 16:9 帧正好对得上；竖屏那一档这条线出不了。
+#
+#   **按张计费，0.2 元。** 不是免费本地推理 —— 它只是**跑在本地的
+#   付费网关**。这一点最容易看错：地址是 127.0.0.1，费用照收。
+#   所以路由必须标 paid，让那道闸挡住。
+
+_HY_PRICE_CNY = 0.2
+
+
+def hunyuan_invoke(
+    transport: httpx.Client, base_url: str, headers: dict[str, str], *,
+    capability: Capability, payload: dict[str, Any], model: str | None,
+    timeout: float, task_id: str,
+) -> Task:
+    """跑一次本机混元网关。"""
+    if capability not in (Capability.image_t2i, Capability.image_i2i):
+        raise CapabilityError(
+            CapErrorCode.CAPABILITY_UNSUPPORTED,
+            f"{capability.value} 不能走 hunyuan_image 方言 —— "
+            f"这个网关只有文生图与图生图。")
+
+    # 中文优先。服务明说 zh-CN recommended，而喂英文它也认，只是不擅长
+    prompt = str(payload.get("prompt_cn") or payload.get("prompt") or "").strip()
+    if not prompt:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "prompt 为空")
+    prompt = prompt[:8192]          # 服务上限，超了整个请求会被拒
+
+    body: dict[str, Any] = {"prompt": prompt}
+    params = payload.get("params") or {}
+    for key in ("logo_add", "revise", "seed"):
+        if params.get(key) is not None:
+            body[key] = params[key]
+
+    # ── 参考图 ──
+    #
+    # 服务收 /files 地址、本地路径、公网 URL 和 base64。这里一律送 base64：
+    # 我们的产物地址是 localhost:8100，而网关是另一个进程 ——
+    # 同机时能取到，换台机器或改了端口就断，而断了只表现为「这张图没锁住脸」，
+    # 不会报错。base64 没有这层依赖。
+    refs: list[str] = []
+    for cand in ([payload.get("image")]
+                 + [r.get("ref") for r in (payload.get("reference_images") or [])
+                    if isinstance(r, dict)]):
+        if len(refs) >= 3:          # 服务上限三张
+            break
+        url = _ds_data_url(transport, cand, timeout)
+        if url and "," in url:
+            refs.append(url.split(",", 1)[1])
+    if refs:
+        body["images"] = refs
+        # 有参考图时服务会自动加身份锁定前缀，明写一次不吃亏
+        body["lock_identity"] = True
+        # **扩写会把场景改跑。** 派生视角（转角、头肩）要的正是
+        # 「同一个人同一身衣服，只换角度」，扩写一介入就可能换个场景重画。
+        # 除非路由明确指定，i2i 一律关掉扩写。
+        body.setdefault("revise", 0)
+    elif capability is Capability.image_i2i:
+        raise CapabilityError(
+            CapErrorCode.INVALID_REQUEST,
+            "image_to_image 需要参考图，且要取得到图片内容")
+
+    try:
+        resp = transport.post(f"{base_url.rstrip('/')}/v1/images/generate",
+                              json=body, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
+                              f"混元网关超时: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise CapabilityError(
+            CapErrorCode.TRANSPORT_ERROR,
+            f"连不上本机混元网关（{base_url}）：{exc}。确认服务在跑。") from exc
+    if resp.status_code >= 400:
+        code = (CapErrorCode.INVALID_REQUEST if resp.status_code < 500
+                else CapErrorCode.UPSTREAM_ERROR)
+        raise CapabilityError(code, f"混元 {resp.status_code}: {resp.text[:300]}")
+
+    data = resp.json()
+    src = str(data.get("url") or "")
+    if not src:
+        raise CapabilityError(CapErrorCode.UPSTREAM_ERROR,
+                              f"混元返回里没有 url：{str(data)[:200]}")
+    # **取回来落盘。** 服务说 /files 长期可下，但那是它的本地盘 ——
+    # 换台机器、清了目录，链接就断了，而库里只剩一个指向空处的地址
+    media = _ds_fetch(transport, src, mime="image/png", timeout=max(timeout, 120))
+    price = data.get("price_cny")
+    return Task(
+        task_id=task_id, status=TaskState.succeeded,
+        capability=capability.value, model=model or "hunyuan-image-3.0",
+        provider="hunyuan-local-gateway",
+        output={"images": [media]},
+        # **真按张计费，如实记。** 地址是 127.0.0.1 很容易让人当成免费本地推理
+        usage=Usage(cost=float(price if price is not None else _HY_PRICE_CNY),
+                    currency="CNY", units={"images": 1.0}),
+    )
+
+
+def hunyuan_health(transport: httpx.Client, base_url: str,
+                   headers: dict[str, str], timeout: float) -> HealthResult:
+    try:
+        resp = transport.get(f"{base_url.rstrip('/')}/health",
+                             headers=headers, timeout=timeout)
+        ok = resp.status_code < 400
+    except httpx.HTTPError:
+        ok = False
+    return HealthResult(ok=ok, version=f"hunyuan-dialect/{CONTRACT_VERSION}",
                         contract_version=CONTRACT_VERSION)
