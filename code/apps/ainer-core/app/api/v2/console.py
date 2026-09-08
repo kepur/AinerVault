@@ -333,7 +333,7 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
     ).scalars().first() if production_doc else None
 
     shots = perf = crew = motion = videos = 0
-    first_n = last_n = 0
+    first_n = last_n = last_required = 0
     au_total = au_done = 0
     if plan:
         shot_rows = list(db.execute(
@@ -376,12 +376,15 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
                          if m.motion_prompt_en and len(m.deltas_en_json or []) >= 2
                          and m.start_frame and m.end_frame
                          and m.start_frame.strip() != m.end_frame.strip())
-            first_n = _count(db, FrameSpec, FrameSpec.shot_id.in_(shot_rows),
-                             FrameSpec.role == FrameRole.first,
-                             FrameSpec.asset_id.isnot(None))
-            last_n = _count(db, FrameSpec, FrameSpec.shot_id.in_(shot_rows),
-                            FrameSpec.role == FrameRole.last,
-                            FrameSpec.asset_id.isnot(None))
+            shot_objects = list(db.execute(select(Shot).where(Shot.id.in_(shot_rows))).scalars())
+            needs_last = {s.id for s in shot_objects
+                          if (s.camera_json or {}).get("frame_mode") != "first_only"}
+            last_required = len(needs_last)
+            usable_frames = [f for f in db.execute(select(FrameSpec).where(
+                FrameSpec.shot_id.in_(shot_rows))).scalars()
+                if f.asset_id and not (f.params_json or {}).get("needs_regeneration")]
+            first_n = sum(f.role == FrameRole.first for f in usable_frames)
+            last_n = sum(f.role == FrameRole.last and f.shot_id in needs_last for f in usable_frames)
             au_total = _count(db, AudioSpec, AudioSpec.shot_id.in_(shot_rows),
                               AudioSpec.kind == AudioKind.dialogue)
             au_done = _count(db, AudioSpec, AudioSpec.shot_id.in_(shot_rows),
@@ -407,7 +410,7 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
     no_motion = (f"可执行的物理运动还没齐（{motion}/{shots}）"
                  if plan is not None and motion < shots else None)
     no_first = ("首帧还没出" if plan is not None and first_n < shots else None)
-    no_last = ("尾帧还没出" if plan is not None and last_n < shots else None)
+    no_last = ("尾帧还没出" if plan is not None and last_n < last_required else None)
 
     return [
         _stage("prose", "译本锁定", tr_done, max(tr_total, 1), page="prose",
@@ -428,7 +431,7 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
         _stage("first_frame", "首帧", first_n, shots, page="prompts",
                hint="带身份锚的走编辑模型，锚当底图，脸才保得住",
                blocked_by=no_plan or no_staging or no_crew or no_motion),
-        _stage("last_frame", "尾帧", last_n, shots, page="prompts",
+        _stage("last_frame", "尾帧", last_n, last_required, page="prompts",
                hint="从首帧派生，只改可见物理变化",
                blocked_by=no_plan or no_motion or no_first),
         _stage("audio", "对白配音", (au_done if au_total else (1 if plan else 0)),
@@ -436,8 +439,8 @@ def chapter_stages(db: Session, chapter: Chapter) -> list[dict[str, Any]]:
                hint="电影只配对白；完整旁白只在有声书。TTS 真实时长决定对白镜头",
                blocked_by=no_plan),
         _stage("video", "动态镜头", videos, shots, page="cut",
-               hint="每镜都读首帧、尾帧与英文物理运动；缺一项就不花额度",
-               blocked_by=no_plan or no_motion or no_last),
+               hint="按本镜模式读取首帧或首尾帧，并使用已验收的运动单",
+               blocked_by=no_plan or no_motion or no_first or no_last),
         _stage("handoff", "成片交付 / 手动模式", 0, 0, page="handoff",
                hint="轨道时间轴 · 中英双份提示词 · 字幕与剪辑标记表",
                blocked_by=no_plan, countable=False),
@@ -846,6 +849,8 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
         frames.setdefault(f.shot_id, {})[f.role.value] = f
     motions = {m.shot_id: m for m in db.execute(
         select(ShotMotion).where(ShotMotion.shot_id.in_(sids or [""]))).scalars()}
+    sound_notes = {c.shot_id: (c.payload_json or {}) for c in db.execute(
+        select(CrewSheet).where(CrewSheet.shot_id.in_(sids or [""]), CrewSheet.role == "sound")).scalars()}
     audios: dict[str, list[AudioSpec]] = {}
     for a in db.execute(select(AudioSpec).where(AudioSpec.shot_id.in_(sids or [""]))).scalars():
         audios.setdefault(a.shot_id, []).append(a)
@@ -862,6 +867,8 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
 
     asset_ids = {f.asset_id for d in frames.values() for f in d.values() if f.asset_id}
     asset_ids |= {a.asset_id for lst in audios.values() for a in lst if a.asset_id}
+    asset_ids |= {a.asset_id for lst in scene_audio.values() for a in lst if a.asset_id}
+    asset_ids |= {s.video_asset_id for s in shots if s.video_asset_id}
     assets = {a.id: a for a in db.execute(
         select(Asset).where(Asset.id.in_(list(asset_ids) or [""]))).scalars()}
     ents = {e.id: e for e in db.execute(
@@ -878,12 +885,29 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
             AssetEpoch.world_profile_id == prof,
         )).scalars():
             views = (ep.reference_set_json or {}).get("views") or {}
-            item = views.get(SHEET_VIEW) or views.get("front") or {}
+            item = views.get("front") or views.get("bust") or {}
             aid = item.get("asset_id") if isinstance(item, dict) else None
             if aid and ep.entity_id not in ref_of:
                 ref_of[ep.entity_id] = str(aid)
     ref_assets = {a.id: a for a in db.execute(
         select(Asset).where(Asset.id.in_(list(ref_of.values()) or [""]))).scalars()}
+
+    # **画面里的人叫什么，是译名说了算。**
+    # 分镜的 description 和台词已经全用译名，而这一行从前只给原名 ——
+    # 于是「这一镜用到 谢文东」和台词里的 Thomas Ashford 对不上，
+    # 手搓的人得自己回人名映射页去查谁是谁。
+    # 两个都给：原名认人，译名对稿。
+    tf_id = _default_transform(db, chapter.novel_id)
+    target_name = {
+        n.entity_id: n.target_name
+        for n in db.execute(select(EntityWorldName).where(
+            EntityWorldName.transform_id == tf_id)).scalars()
+    } if tf_id else {}
+
+    reference_names = {a.canonical_key: a.display_name for a in db.execute(
+        select(AssetSpec).where(AssetSpec.novel_id == chapter.novel_id)).scalars()}
+    reference_names.update({e.canonical_key: e.display_name for e in ents.values()})
+    reference_names["world_style"] = "全书画风"
 
     def _frame(f: FrameSpec | None,
                m: ShotMotion | None = None) -> dict[str, Any] | None:
@@ -892,7 +916,10 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
         asset = assets.get(f.asset_id or "")
         par = f.params_json or {}
         return {
-            "role": f.role.value,
+            "id": f.id, "role": f.role.value,
+            "references": [{**r, "label": reference_names.get(
+                str(r.get("tag") or "").removesuffix(".view"), r.get("tag") or r.get("role"))}
+                for r in par.get("reference_images") or []],
             "url": asset.url if asset else None,
             # **中英各是一份，不是一份的两种显示。**
             # 英文是喂模型的那一句（图像模型不认中文），
@@ -908,14 +935,21 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
             "status": f.status.value,
             "entities": [
                 {"name": ents[e].display_name,
+                 "target_name": target_name.get(e),
                  "ref_url": (ref_assets[ref_of[e]].url
                              if e in ref_of and ref_of[e] in ref_assets else None)}
                 for e in (f.entity_ids_json or []) if e in ents
             ],
             "asset_keys": (f.params_json or {}).get("asset_keys") or [],
             "refs": len(f.ref_asset_ids or []),
+            "warnings": (frame_tasks[f.gen_task_id].warnings_json or []
+                         if f.gen_task_id in frame_tasks else []),
+            "needs_regeneration": par.get("needs_regeneration", False),
         }
 
+    from app.models import GenTask
+    task_ids = [f.gen_task_id for pair in frames.values() for f in pair.values() if f.gen_task_id]
+    frame_tasks = {t.id: t for t in db.execute(select(GenTask).where(GenTask.id.in_(task_ids or [""]))).scalars()}
     out = []
     for s in shots:
         pair = frames.get(s.id, {})
@@ -937,16 +971,19 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
             "shot_size": s.shot_size, "camera": s.camera_json or {},
             "duration_ms": s.duration_ms,
             "description": s.description,
+            "music_note": sound_notes.get(s.id, {}).get("配乐"),
             # 这一镜念的是哪几句 —— 画面对不上台词时先看这里
             "lines": lines,
             "first": _frame(pair.get("first")),
             "last": _frame(pair.get("last"), m),
             "motion": ({"camera_move": m.camera_move, "subject_move": m.subject_move,
                         "prompt_en": m.motion_prompt_en,
-                        "deltas": m.deltas_en_json or []} if m else None),
+                        "deltas": m.deltas_en_json or [], "start": m.start_frame,
+                        "end": m.end_frame} if m else None),
             "video_url": (assets.get(s.video_asset_id).url
                           if s.video_asset_id and s.video_asset_id in assets else None),
             "audio": [{
+                "id": a.id, "at_ms": (a.params_json or {}).get("at_ms", 0),
                 "kind": a.kind.value,
                 "speaker": ents[a.entity_id].display_name
                            if a.entity_id in ents else None,
@@ -956,6 +993,7 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
                 "duration_ms": a.duration_ms,
             } for a in sorted(audios.get(s.id, []), key=lambda x: x.kind.value)],
             "scene_audio": [{
+                "id": a.id, "at_ms": (a.params_json or {}).get("at_ms", 0),
                 "kind": a.kind.value,
                 "text": (a.params_json or {}).get("prompt_cn") or a.text,
                 "url": assets.get(a.asset_id).url if a.asset_id in assets else None,
@@ -964,12 +1002,12 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
                               key=lambda x: x.kind.value)],
         })
 
-    ready = sum(1 for s in out if s["first"] and s["first"]["url"])
+    ready = sum(1 for s in out if s["first"] and s["first"]["url"] and not s["first"]["needs_regeneration"])
     return {
         "chapter": {"id": chapter.id, "title": chapter.title,
                     "order_no": chapter.order_no},
         "plan": {"id": plan.id, "version": plan.version,
-                 "director": plan.director_profile_id},
+                 "director": plan.director_profile_id, "config": plan.config_json or {}},
         "shots": out,
         "total": len(out), "with_first_frame": ready,
         "total_duration_ms": sum(s["duration_ms"] or 0 for s in out),

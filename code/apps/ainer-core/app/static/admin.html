@@ -3573,6 +3573,8 @@ const Storyboard = {
             <button class="btn sm" onclick="goto('chapter')">回章节工作台 →</button>
           </div></div></div>`; return;
     }
+    this.pid = d.plan.id;
+    this.data = d;
     const from = this.page * this.SIZE, to = Math.min(from + this.SIZE, d.shots.length);
     const mins = Math.round(d.total_duration_ms / 600) / 100;
 
@@ -3584,7 +3586,18 @@ const Storyboard = {
         <span class="grow"></span>
         <button class="btn sm" onclick="goto('chapter')">章节工作台</button>
         <button class="btn sm" onclick="goto('reader')">译本</button>
-      </div></div>
+      </div>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <label>起始镜 <input id="sample-start" type="number" min="1" value="1" style="width:70px"></label>
+        <button class="btn" onclick="Storyboard.sample(this)">建立 ≤30 秒试片（不调用模型）</button>
+        <button class="btn" onclick="goto('handoff')">下载制作手册 / 字幕</button>
+        <label class="btn">上传本镜图片 / 视频<input type="file" multiple accept="image/*,video/*"
+          style="display:none" onchange="Storyboard.uploadMedia(this)"></label>
+        <button class="btn" onclick="goto('cut')">合成与下载视频</button>
+        <label><input type="checkbox" ${this.autoRender ? 'checked' : ''}
+          onchange="Storyboard.autoRender=this.checked">上传齐且验收通过后自动合成</label>
+      </div><p class="hint">${d.plan.config.sample ? '当前为独立试片版本。' : '当前为整章；先建立试片，再生成素材。'}
+        保留完整镜头和台词，最长 30 秒。图片命名 1_first.png / 1_last.png，视频 1.mp4；音频在对应卡片上传。</p></div>
       ${d.shots.slice(from, to).map(s => this.shot(s)).join("")}
       <div class="card"><div class="row">
         <button class="btn" ${this.page ? "" : "disabled"}
@@ -3615,11 +3628,21 @@ const Storyboard = {
       <div style="margin:6px 0 10px">${h(s.description || "")}</div>
 
       ${this.uses(s)}
+      <div class="row" style="margin-bottom:10px;gap:8px">
+        <button class="btn sm" onclick="copyText(this)" data-copy="${encodeURIComponent(this.copyShot(s))}">复制本镜完整制作单</button>
+        <span class="hint">起幅：${h((s.motion||{}).start || '待填写')} → 落幅：${h((s.motion||{}).end || '待填写')}</span>
+      </div>
+      <label>制作方式 <select onchange="Storyboard.mode('${s.shot_id}', this.value)">
+        <option value="first_last">首尾帧 · 明确动作变化</option>
+        <option value="first_only" ${(s.camera||{}).frame_mode === 'first_only' ? 'selected' : ''}>单首帧 · 对话 / 连续运镜</option>
+      </select></label>
+      <div class="hint">主体：${h((s.motion||{}).subject_move || '待填写')} · 运镜：${h((s.motion||{}).camera_move || '待填写')}。
+        轻微动作可只制作首帧并用连续运镜生成视频；动作有明确位移时制作首尾帧。</div>
 
       <div class="row" style="gap:12px;align-items:flex-start;flex-wrap:nowrap;
         overflow-x:auto;padding-bottom:4px">
         ${this.frame(s.first, "首帧", s)}
-        ${this.frame(s.last, "尾帧", s)}
+        ${(s.camera||{}).frame_mode === 'first_only' ? '' : this.frame(s.last, "尾帧", s)}
         ${s.video_url ? `<div style="flex:1 1 0;min-width:260px">
           <div class="sub" style="color:var(--muted);margin-bottom:4px">成片</div>
           <video controls preload="metadata" src="${s.video_url}"
@@ -3633,6 +3656,7 @@ const Storyboard = {
           : `<div style="margin:3px 0;color:var(--muted);font-size:13px">${h(l.text || "")}</div>`
         ).join("")}</div>` : ""}
 
+      ${s.music_note ? `<div class="hint">配乐：${h(s.music_note)}</div>` : ""}
       ${this.audio(s)}
 
       <div class="row" style="margin-top:8px">
@@ -3651,10 +3675,11 @@ const Storyboard = {
   uses(s) {
     const f = s.first || s.last || {};
     const ents = f.entities || [], keys = f.asset_keys || [];
+    const refs = f.references || [];
     if (!ents.length && !keys.length) return "";
     return `<div class="row" style="gap:12px;align-items:center;flex-wrap:wrap;
-      margin:0 0 10px;padding:8px 10px;background:var(--panel-2);border-radius:6px">
-      <span class="sub mono" style="color:var(--muted);font-size:11px">这一镜用到</span>
+      overflow-x:auto;flex-wrap:nowrap;margin:0 0 10px;padding:8px 10px;background:var(--panel-2);border-radius:6px">
+      <span class="sub mono" style="color:var(--muted);font-size:11px;flex:0 0 auto;white-space:nowrap">这一镜用到</span>
       ${ents.map(e => `<span class="row" style="gap:6px;align-items:center;flex:0 0 auto">
         ${e.ref_url
           ? `<a href="${e.ref_url}" target="_blank"
@@ -3663,7 +3688,15 @@ const Storyboard = {
                style="width:40px;height:54px;object-fit:cover;object-position:left top;
                       border-radius:4px;border:1px solid var(--line);display:block"></a>`
           : `<span class="tag t-warn" title="这个人物还没生成三要素参考图">缺参考图</span>`}
-        <b style="font-size:13px">${h(e.name)}</b></span>`).join("")}
+        <span style="line-height:1.25">
+          <b style="font-size:13px;display:block">${h(e.target_name || e.name)}</b>
+          ${e.target_name && e.target_name !== e.name
+            ? `<span class="sub mono" style="color:var(--muted);font-size:10.5px"
+                 >原名 ${h(e.name)}</span>` : ""}
+        </span></span>`).join("")}
+      ${refs.map(r => r.ref && r.ref.url ? `<a href="${h(r.ref.url)}" target="_blank" style="flex:0 0 130px">
+        <img src="${h(r.ref.url)}" style="width:130px;height:90px;object-fit:contain">
+        <div class="sub">${h(r.label || r.tag || r.role)} · ${h(({scene:"场景",character:"人物",style:"风格",prop:"道具",costume:"服装"})[r.role] || r.role)}</div><span>打开 / 下载原图</span></a>` : '').join('')}
       ${keys.length ? `<span style="color:var(--muted)">+</span>
         ${keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}` : ""}
     </div>`;
@@ -3677,7 +3710,7 @@ const Storyboard = {
     const shot = (s.audio || []).map(a => ({ ...a, scope: "本镜" }));
     const scene = (s.scene_audio || []).map(a => ({ ...a, scope: "整场" }));
     const rows = shot.concat(scene);
-    if (!rows.length) return "";
+    if (!rows.length) return '<p class="hint">尚无音频规格：请在配音表 / 制作单中填写对白、音色、配乐与环境声。</p>';
     const KIND = { dialogue: "对白", narration: "旁白", sfx: "音效",
                    bgm: "配乐", ambience: "环境声" };
     const dur = s.duration_ms || 0;
@@ -3701,6 +3734,10 @@ const Storyboard = {
               title="${over ? "音频比镜头长，话没说完就切镜" : "音频时长"}"
               >${(ms / 1000).toFixed(1)}s${over ? " ⚠" : ""}</span>` : ""}
           </div>
+          <div class="sub">${h(a.scope)} · 起点 ${((a.at_ms || 0)/1000).toFixed(1)}s · ${ms ? (a.url ? '实测时长' : '计划时长，待实测') : '时长待上传测量'}</div>
+          <button class="btn sm" onclick="copyText(this)" data-copy="${encodeURIComponent(JSON.stringify(a, null, 2))}">复制音频制作单</button>
+          ${a.id ? `<label class="btn sm">上传音频<input type="file" accept=".wav,.mp3,.m4a,.ogg" style="display:none"
+            data-audio="${h(a.id)}" onchange="Storyboard.uploadAudio(this)"></label>` : ''}
           ${a.voice_id ? `<div class="mono" style="font-size:11px;color:var(--muted);
             margin-top:2px">音色 ${h(a.voice_id)}</div>` : ""}
           ${a.text ? `<div style="font-size:12.5px;margin-top:3px">${h(a.text)}</div>` : ""}
@@ -3725,13 +3762,14 @@ const Storyboard = {
     return `<div style="flex:1 1 0;min-width:260px">
       <div class="row" style="align-items:center;gap:6px;margin-bottom:4px">
         <span class="sub" style="color:var(--muted)">${label}</span>
-        <span class="mono" style="color:var(--muted);font-size:11px">${h(f.status)}</span>
-        ${f.refs ? `<span class="tag t-mute">${f.refs} 张参考</span>` : ""}
+        <span class="mono" style="color:var(--muted);font-size:11px">${h(f.needs_regeneration ? "旧图 · 参考已变，待重出" : f.status)}</span>
+        ${f.refs ? `<span class="tag t-mute">${f.refs} 张候选参考</span>` : ""}
         <span class="grow"></span>
         ${en ? `<button class="btn sm" onclick="copyText(this)"
           data-copy="${encodeURIComponent(en)}"
           title="复制这一帧发给出图模型的英文提示词">复制 EN</button>` : ""}
       </div>
+      ${(f.warnings||[]).map(w=>`<div class="hint">${h(w)}</div>`).join('')}
       ${f.url
         ? `<a href="${f.url}" target="_blank"><img src="${f.url}"
              style="width:100%;border-radius:4px;display:block"></a>`
@@ -3795,6 +3833,61 @@ const Storyboard = {
     </div>`;
   },
 
+  copyShot(s) {
+    const m=s.motion||{}, f=s.first||{}, l=s.last||{};
+    const mode=(s.camera||{}).frame_mode==='first_only';
+    return [`镜 ${s.order_no} · ${s.duration_ms/1000} 秒 · ${s.scene||''}`,
+      `内容：${s.description||''}`, `制作方式：${mode?'单首帧＋连续运镜':'首尾帧'}`,
+      '基础素材：', ...(f.references||[]).map(r=>`${r.label||r.tag||r.role}: ${(r.ref||{}).url||'缺图'}`),
+      `起幅：${m.start||''}`, `落幅：${m.end||''}`,
+      `主体动作：${m.subject_move||''}`, `运镜：${m.camera_move||''}`,
+      `首帧提示词：${f.prompt||''}`, `首帧图片：${f.url||'待制作'}`,
+      ...(mode?[]:[`尾帧提示词：${l.prompt||''}`, `尾帧变化：${l.derive_en||''}`, `尾帧图片：${l.url||'待制作'}`]),
+      `视频提示词：${m.prompt_en||''}`, `配乐：${s.music_note||'待定'}`, '声音：',
+      ...[...(s.audio||[]),...(s.scene_audio||[])].map(a=>
+        `${a.kind} · ${a.speaker||''} · 音色 ${a.voice_id||'不适用'} · 起点 ${(a.at_ms||0)/1000}s · 时长 ${a.duration_ms?a.duration_ms/1000+'s':'待制作实测'}\n${a.text||''}\n${a.url||'待上传'}`)
+    ].join('\n\n');
+  },
+  async mode(id, mode) {
+    try { await api('PATCH', `/shots/${id}/frame-mode`, {mode}); App.refresh(); }
+    catch(e) { alert(e.message); }
+  },
+  async sample(btn) {
+    btn.disabled = true;
+    try {
+      await api('POST', `/shot-plans/${this.pid}/sample`, {
+        target_ms:30000, start_order:Number(document.getElementById('sample-start').value) || 1});
+      this.page = 0; App.refresh();
+    } catch(e) { alert(e.message); } finally { btn.disabled = false; }
+  },
+  async maybeRender() {
+    if (!this.autoRender) return;
+    const t = await api('GET', `/shot-plans/${this.pid}/timeline`);
+    if (!(t.quality||{}).production_ready) {
+      alert('已保存。自动合成尚缺：' + ((t.quality||{}).blockers||[]).join('；')); return;
+    }
+    await api('POST', `/shot-plans/${this.pid}/render`, {final:true});
+    goto('cut');
+  },
+  async uploadAudio(input) {
+    if (!input.files.length) return;
+    const body = new FormData(); body.append('file', input.files[0]);
+    try {
+      const r = await fetch(`/api/v2/shot-plans/${this.pid}/audio/${input.dataset.audio}:upload`, {method:'POST', body});
+      const d = await r.json(); if (!r.ok) throw Error(JSON.stringify(d.detail));
+      await this.maybeRender(); App.refresh();
+    } catch(e) { alert(e.message); }
+  },
+  async uploadMedia(input) {
+    const body = new FormData(); for (const f of input.files) body.append('files', f);
+    if (!input.files.length) return;
+    try {
+      const r = await fetch(`/api/v2/shot-plans/${this.pid}/handoff:upload`, {method:'POST', body});
+      const d = await r.json(); if (!r.ok) throw Error(JSON.stringify(d.detail));
+      if (d.failed) alert(JSON.stringify(d.problems));
+      await this.maybeRender(); App.refresh();
+    } catch(e) { alert(e.message); }
+  },
   toggle(n) { this.open[n] = !this.open[n]; App.refresh(); },
   flip(d) { this.page = Math.max(0, this.page + d); this.open = {}; App.refresh(); },
 };
