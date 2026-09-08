@@ -26,6 +26,7 @@ from app.capability.service import estimate_cost, submit_task
 from app.ids import new_id
 from app.models import (
     Asset, AssetKindSpec, AssetSpec, AssetVariant, AudioKind, AudioSpec, Chapter,
+    DocMode,
     Scene, ScriptBlock, ScriptDoc, Shot, ShotPlan, SpecStatus, TranslationBlock,
     WorldEntity, WorldProfile, WorldTransform,
 )
@@ -125,6 +126,8 @@ def compile_audio(
     chapter = db.get(Chapter, doc.chapter_id) if doc else None
     if chapter is None:
         raise PipelineError("分镜对应的章节不存在")
+    #: 剧本的对白块已经是纯台词了，不必再按引号拆一次
+    is_screenplay = bool(doc and doc.doc_mode is DocMode.screenplay)
 
     lang = plan.target_language_code or transform.target_language_code
     # 分镜计划可能指向别的语言版本，此时按语言回落到该语言的映射；
@@ -252,7 +255,15 @@ def compile_audio(
                 params["voice_reference_asset_ids"] = voice_ref_ids
             # 动作那一半不发声，但要留着 —— 它是首尾帧之间该变的东西
             params.update(params_extra)
-            if split is not None and split.uncertain:
+            # **剧本里的对白块不必再问「有没有引号」。**
+            #
+            # split_speech 是为**散文**写的：小说的一个自然段里对白与旁白
+            # 混着，靠引号才分得出哪几个字是说出口的。而剧本那一步已经
+            # 把台词单独成块了，块里就是纯台词，本来就没有引号。
+            # 不区分的话，一章 42 条对白报 42 条一模一样的「没有引号」，
+            # 而其中没有一条是问题 —— 真正该看的
+            # missing_voice（三个说话人没配音色）就被埋在里面了。
+            if split is not None and split.uncertain and not is_screenplay:
                 result.unsplit.append({
                     "block_id": bid, "shot": shot.order_no,
                     "why": split.uncertain, "text": text[:80],
