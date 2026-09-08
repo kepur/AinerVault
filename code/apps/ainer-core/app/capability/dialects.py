@@ -2206,6 +2206,44 @@ def gemini_health(transport: httpx.Client, base_url: str,
 _HY_PRICE_CNY = 0.2
 
 
+def _hy_ref_path(transport: httpx.Client, ref: Any, timeout: float) -> str | None:
+    """参考图 → 混元网关能读的**绝对本地路径**。
+
+    这个网关的文档说 images「支持公网 URL、本服务 /files、本地路径、Base64」。
+    四种里只有一种真的能用，四种都探过：
+
+        裸 base64    500  File name too long: …/_aigc_out/iVBORw0KG…
+        data: URI    500  同上 —— 整串被当成了文件名
+        相对路径     400  无法解析参考图: var/media/249aa9…jpg
+        绝对路径     200  ✅
+
+    **供应商的接口只能观察，不能猜。** 照文档送 base64 的后果不是报错，
+    是每一张首帧都失败，而失败信息在网关那侧、要翻它的日志才看得见。
+
+    绝对路径在这里是安全的：网关自己说「腾讯访问不到 127.0.0.1」，
+    它本来就只能是同机进程。拿不到本地文件的（远端图、裸 b64），
+    先落到 media_root 再送路径 —— 一律走同一种已验证的形式。
+    """
+    from pathlib import Path
+
+    from app.capability.mediastore import media_root, store_b64
+
+    if not isinstance(ref, dict):
+        return None
+    url = str(ref.get("url") or "")
+    if "/media/" in url:
+        p = (Path(media_root()) / url.rsplit("/media/", 1)[-1].split("?")[0]).resolve()
+        if p.exists():
+            return str(p)
+    data = _ds_data_url(transport, ref, timeout)
+    if not data or "," not in data:
+        return None
+    mime = data.split(";", 1)[0][len("data:"):] or "image/png"
+    stored = store_b64(data, mime=mime)
+    p = (Path(media_root()) / str(stored["url"]).rsplit("/media/", 1)[-1]).resolve()
+    return str(p) if p.exists() else None
+
+
 def hunyuan_invoke(
     transport: httpx.Client, base_url: str, headers: dict[str, str], *,
     capability: Capability, payload: dict[str, Any], model: str | None,
@@ -2231,20 +2269,15 @@ def hunyuan_invoke(
             body[key] = params[key]
 
     # ── 参考图 ──
-    #
-    # 服务收 /files 地址、本地路径、公网 URL 和 base64。这里一律送 base64：
-    # 我们的产物地址是 localhost:8100，而网关是另一个进程 ——
-    # 同机时能取到，换台机器或改了端口就断，而断了只表现为「这张图没锁住脸」，
-    # 不会报错。base64 没有这层依赖。
     refs: list[str] = []
     for cand in ([payload.get("image")]
                  + [r.get("ref") for r in (payload.get("reference_images") or [])
                     if isinstance(r, dict)]):
         if len(refs) >= 3:          # 服务上限三张
             break
-        url = _ds_data_url(transport, cand, timeout)
-        if url and "," in url:
-            refs.append(url.split(",", 1)[1])
+        path = _hy_ref_path(transport, cand, timeout)
+        if path:
+            refs.append(path)
     if refs:
         body["images"] = refs
         # 有参考图时服务会自动加身份锁定前缀，明写一次不吃亏
