@@ -213,8 +213,10 @@ def submit_task(
         nxt = _next_ok_route(_tried | {route.key})
         if nxt is None:
             return None
-        log.warning("额度用尽（%s %s），换免费路由 %s 继续",
-                    route.model, detail[:60], nxt.model)
+        # 别把原因写死成「额度用尽」—— 转移有三种起因（额度、连不上、超时），
+        # 日志里统一说成额度，查问题的人会去翻额度页，而机器根本是关着的
+        log.warning("路由 %s 不可用（%s %s），换 %s 继续",
+                    route.model, exc_code, detail[:60], nxt.model)
         return submit_task(
             db, cap, payload, purpose=purpose, ref_kind=ref_kind, ref_id=ref_id,
             novel_id=novel_id, chapter_id=chapter_id, sync=sync, route=nxt,
