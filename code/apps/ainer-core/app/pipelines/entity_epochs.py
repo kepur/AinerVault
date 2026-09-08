@@ -224,15 +224,22 @@ from_chapter_order / to_chapter_order 按章节序号，闭区间。
 
 **人物是目标世界的人，不是原文世界的人。**
 这一层和货币场所一样要做映射：五元钱要变成 five-dollar bill，
-人也要变成目标世界的人。原文写的是中国少年，译到美国当代都市，
-写出来就该是一个美国少年 —— 脸型骨相可以沿用原文的描写（圆脸、
-高颧骨、下巴短），但**不要写族裔词，也不要写肤色**：
-  ✗ East Asian male, monolid eyes, yellowish skin
-  ✗ Asian woman with a round soft face
-  ✓ round soft face, gentle features, dark brown eyes, medium build
-族裔由目标圈层统一决定，在出图那一步补上；这里写了反而会打架。
-「yellowish skin」这类肤色词比族裔词更隐蔽 —— 它不写族裔，
-出来的仍是一张东亚面孔。
+人也要变成目标世界的人。原文写的是中国少年，译到美国当代都市，写出来就该是一个美国少年。
+
+**不要写族裔词，不要写肤色，也不要沿用带族裔的骨相。**
+  ✗ East Asian male, monolid eyes, yellowish skin   ← 族裔词
+  ✗ Asian woman with a round soft face              ← 族裔词
+  ✗ small eyes, flat features, flat cheekbones      ← 骨相，同样是东亚脸
+  ✓ round soft face, gentle features, medium build
+
+肤色词比族裔词隐蔽，骨相又比肤色更隐蔽：一个族裔词都不写，
+只要写了 small eyes、flat features，出来的仍是一屋子东亚面孔，
+而故事发生在美国、人物叫 Thomas Ashford。实跑踩过两次。
+
+**留下的是戏剧功能，换掉的是族裔判据。**
+「极度瘦弱、肋骨可见」要留 —— 那是这个人物之所以受欺负的原因；
+「小眼睛、颧骨扁平」要换 —— 那只是原文世界那张脸的长法。
+族裔由目标圈层统一决定，在出图那一步补上。
 
 ## 每一项写成一个短语，不超过 20 字
 

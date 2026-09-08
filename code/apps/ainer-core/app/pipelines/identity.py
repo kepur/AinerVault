@@ -87,6 +87,22 @@ _SOURCE_ETHNICITY = (
     # 肤色词比族裔词更隐蔽：「yellowish skin」不写族裔，
     # 出来的仍是一张东亚面孔，而检查只找族裔词的话一个都抓不到
     "yellowish skin", "yellow skin", "sallow yellow",
+    # **骨相比肤色更隐蔽。**
+    #
+    # 抽取提示词从前明说「脸型骨相可以沿用原文的描写」，于是
+    # 不变项里一个族裔词、一个肤色词都没有，检查全绿，
+    # 出来的仍是一屋子东亚面孔 —— 因为 small eyes、flat features
+    # 描述的本来就是东亚骨相。
+    #
+    # 坏蛋实跑：谢文东写 small eyes、prominent cheekbones，
+    # 李爽写 flat features、small snub nose，而故事发生在美国、
+    # 名字叫 Thomas Ashford。
+    #
+    # 骨相和货币场所一样要做映射：留下的是**戏剧功能**
+    #（瘦弱、高瘦、矮胖），换掉的是族裔判据。
+    "small eyes", "narrow eyes", "slanted eyes", "epicanthic",
+    "flat features", "flat face", "flat nose", "snub nose",
+    "flat cheekbones", "high flat cheekbones", "broad flat",
 )
 
 
@@ -101,6 +117,31 @@ def foreign_appearance_terms(text: str, profile: WorldProfile) -> list[str]:
         return []
     low = (text or "").lower()
     return [t for t in _SOURCE_ETHNICITY if t in low]
+
+
+def recast_appearance(text: str, profile: WorldProfile) -> tuple[str, list[str]]:
+    """摘掉与目标圈层不符的族裔判据，返回（重铸后的描述, 摘掉的短语）。
+
+    **查出来还要拦得住。** 从前 foreign_appearance_terms 只被一处
+    调用，而那一处是出报告的：issues 里如实写着「不变项里还写着
+    monolid eyes」，而同一段文字照原样流进锚提示词，脸照出不误。
+    查了没拦，和存了没注入是同一类。
+
+    按逗号切开逐段判断，只摘掉出问题的那一段 —— 整段清空会把
+    「extremely frail build with visible ribs」这种戏剧信息一起丢掉，
+    而那正是这个人物之所以是这个人物的地方。
+    """
+    if not text:
+        return "", []
+    kept, dropped = [], []
+    for phrase in (p.strip() for p in text.split(",")):
+        if not phrase:
+            continue
+        if foreign_appearance_terms(phrase, profile):
+            dropped.append(phrase)
+        else:
+            kept.append(phrase)
+    return ", ".join(kept), dropped
 
 
 def demonym(profile: WorldProfile) -> str:
@@ -323,12 +364,8 @@ def character_reference_asset_id(
     tail = (("front", "three_quarter_left", "profile_left")
             if preferred == "bust"
             else ("three_quarter_left", "front", "bust", "profile_left"))
-    # 非特写优先用三要素合成图：一个人物只占一个参考位，
-    # 四张分开存就只有一张会被选中，另外三张的约束到出图时都不在场，
-    # 于是同一个人在镜与镜之间漂 —— 这一镜外套长一点，下一镜下巴尖一点。
-    # 特写仍走头肩像：那时要的是脸的分辨率，拼图上的脸反而更小。
-    order = (preferred, *tail) if preferred == "bust" else (
-        SHEET_VIEW, preferred, *tail)
+    # Contact sheets are for human review; model inputs use one viewpoint.
+    order = (preferred, *tail)
     for key in order:
         item = views.get(key)
         if isinstance(item, dict) and item.get("asset_id"):
@@ -407,6 +444,8 @@ def compose_anchor_prompt(epoch: AssetEpoch,
     """
     inv = epoch.invariant_json or {}
     en = str(inv.get(EN_KEY) or "").strip()
+    if profile is not None:
+        en = recast_appearance(en, profile)[0]
     if not en:
         return ""
     # 性别与年代族裔排最前。都不是「脸的特征」，但少了任何一个，

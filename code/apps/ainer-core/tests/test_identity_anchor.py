@@ -392,7 +392,7 @@ class TestReferenceSheet:
 
         assert SHEET_VIEW not in CHARACTER_REFERENCE_VIEWS
 
-    def test_sheet_wins_for_normal_shots(self):
+    def test_single_view_wins_over_contact_sheet(self):
         from app.models import AssetEpoch
         from app.pipelines.identity import SHEET_VIEW, character_reference_asset_id
 
@@ -400,8 +400,8 @@ class TestReferenceSheet:
             "front": {"asset_id": "a_front"},
             SHEET_VIEW: {"asset_id": "a_sheet"},
         }})
-        assert character_reference_asset_id(epoch, "to_camera", "ms") == "a_sheet"
-        assert character_reference_asset_id(epoch, "to_camera", "ws") == "a_sheet"
+        assert character_reference_asset_id(epoch, "to_camera", "ms") == "a_front"
+        assert character_reference_asset_id(epoch, "to_camera", "ws") == "a_front"
 
     def test_close_shots_still_take_the_bust(self):
         """特写要的是脸的分辨率，拼图上的脸反而更小。"""
@@ -471,3 +471,103 @@ class TestSkinToneIsAlsoUnmapped:
         prompt = _system(cap_chapters=3, total=20)
         assert "yellowish skin" in prompt
         assert "不要写族裔词" in prompt
+
+
+def test_asset_urls_preserve_identity_first_even_if_database_reorders():
+    from types import SimpleNamespace
+    from app.pipelines.frame_compose import _asset_urls
+    rows = [SimpleNamespace(id='view', url='view.png'), SimpleNamespace(id='anchor', url='anchor.png')]
+    class DB:
+        def execute(self, query): return self
+        def scalars(self): return rows
+    assert _asset_urls(DB(), ['anchor', 'view']) == ['anchor.png', 'view.png']
+
+
+def test_current_character_material_does_not_mix_with_old_independent_face(monkeypatch):
+    from types import SimpleNamespace
+    from app.models import AssetEpoch
+    from app.pipelines import frame_compose as fc
+    epoch = AssetEpoch(identity_ref_asset_id='old_face', locked=False,
+                       reference_set_json={'views': {'front': {'asset_id': 'current_person'}}})
+    monkeypatch.setattr(fc, 'resolve_epoch', lambda *args: epoch)
+    monkeypatch.setattr(fc, 'compose_epoch_prompt', lambda *args, **kwargs: 'same character')
+    _, refs = fc._entity_look(None, SimpleNamespace(id='person'), 'profile', 1, 'to_camera', 'ms')
+    assert refs == ['current_person']
+
+
+class TestAppearanceIsRecastForTheTargetWorld:
+    """骨相和货币场所一样要做映射。
+
+    抽取提示词从前明说「脸型骨相可以沿用原文的描写」，于是不变项里
+    一个族裔词、一个肤色词都没有，检查全绿，出来的仍是一屋子东亚面孔 ——
+    因为 small eyes、flat features 描述的本来就是东亚骨相。
+
+    坏蛋实跑：谢文东写 small eyes、prominent cheekbones，李爽写
+    flat features、small snub nose，而故事发生在美国、名字叫
+    Thomas Ashford。
+    """
+
+    def _profile(self):
+        from app.models import WorldProfile
+
+        return WorldProfile(
+            id="wp_test", code="en_modern", display_name="英语圈 · 现代都市",
+            axes_json={"region": "US", "era_span": [1990, 2030]},
+        )
+
+    def test_loaded_bone_structure_is_dropped(self):
+        from app.pipelines.identity import recast_appearance
+
+        kept, dropped = recast_appearance(
+            "thin elongated face, small eyes, straight nose, "
+            "extremely frail build with visible ribs", self._profile())
+        assert "small eyes" in dropped
+        assert "small eyes" not in kept
+
+    def test_dramatic_function_survives(self):
+        """留下的是**戏剧功能**，换掉的才是族裔判据。
+
+        「极度瘦弱、肋骨可见」是这个人物之所以受欺负的原因，
+        整段清空会把它一起丢掉。
+        """
+        from app.pipelines.identity import recast_appearance
+
+        kept, _ = recast_appearance(
+            "flat features, small snub nose, short and stout teenage boy, "
+            "protruding belly", self._profile())
+        assert "short and stout teenage boy" in kept
+        assert "protruding belly" in kept
+        assert "flat features" not in kept
+
+    def test_east_asian_target_keeps_everything(self):
+        """译到日本或中国时写 small eyes 完全正确，不是漏做映射。"""
+        from app.models import WorldProfile
+        from app.pipelines.identity import recast_appearance
+
+        cn = WorldProfile(id="wp_cn", code="cn", display_name="中文圈",
+                          axes_json={"region": "CN"})
+        kept, dropped = recast_appearance("round face, small eyes", cn)
+        assert dropped == []
+        assert "small eyes" in kept
+
+    def test_the_anchor_prompt_actually_drops_them(self):
+        """**查出来还要拦得住。**
+
+        从前 foreign_appearance_terms 只被出报告的那一处调用：issues 里
+        如实写着「不变项里还写着 monolid eyes」，而同一段文字照原样
+        流进锚提示词，脸照出不误。查了没拦，和存了没注入是同一类。
+        """
+        from app.models import AssetEpoch
+        from app.pipelines.entity_epochs import EN_KEY
+        from app.pipelines.identity import compose_anchor_prompt
+
+        epoch = AssetEpoch(
+            id="ae_test", subject_key="e1", entity_id="e1",
+            world_profile_id="wp_test", epoch_key="baseline",
+            invariant_json={EN_KEY: "small eyes, extremely frail build",
+                            "sex": "male"},
+            variant_json={},
+        )
+        text = compose_anchor_prompt(epoch, self._profile())
+        assert "small eyes" not in text
+        assert "frail" in text
