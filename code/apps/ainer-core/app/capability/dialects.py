@@ -2278,15 +2278,50 @@ def hunyuan_invoke(
             body[key] = params[key]
 
     # ── 参考图 ──
+    #
+    # **服务只收三张，所以这里是在取舍，不是在装填。**
+    #
+    # 上游按「画风 → 场景 → 人物 → 服装道具」的顺序拼参考图，
+    # 从前这里照那个顺序取前三张 —— 于是每一镜送出去的都是
+    # 「身份锚 + 画风图 + 场景图」，**人物的脸一张都进不去**。
+    #
+    # 实跑的样子：镜 1 的三个人里只有一个有参考，镜 2 里那个金发白人
+    # 在上一镜还是亚洲脸。查起来极难 —— 图是好图，构图也对，
+    # 只是人不对；而参考图在库里挂得好好的，谁都以为送进去了。
+    #
+    # 三张的预算按重要性给，顺序就是下面那个字典：
+    #   0 身份锚          i2i 要改的就是这一张
+    #   1 每个人物的主参考  多人镜头里每人一张脸，这一层最不能省
+    #   2 场景
+    #   3 人物的次视角     同一个人的第二张，信息量不如场景
+    #   4 画风、服装、道具  这些在提示词里还各有一整段文字
+    # 人脸没有替代品，画风有。
+    warnings: list[str] = []
+    ranked: list[tuple[int, str, Any]] = []
+    base = payload.get("image")
+    if base:
+        ranked.append((0, "身份锚", base))
+    for item in (payload.get("reference_images") or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "")
+        rank = ({"character": 1 if item.get("identity") else 3,
+                 "scene": 2}.get(role, 4))
+        ranked.append((rank, str(item.get("tag") or role or "参考"), item.get("ref")))
+    ranked.sort(key=lambda x: x[0])
+
     refs: list[str] = []
-    for cand in ([payload.get("image")]
-                 + [r.get("ref") for r in (payload.get("reference_images") or [])
-                    if isinstance(r, dict)]):
-        if len(refs) >= 3:          # 服务上限三张
-            break
-        path = _hy_ref_path(transport, cand, timeout)
-        if path:
+    dropped: list[str] = []
+    for _rank, label, cand in ranked:
+        path = _hy_ref_path(transport, cand, timeout) if len(refs) < 3 else None
+        if len(refs) >= 3:
+            dropped.append(label)
+        elif path:
             refs.append(path)
+        else:
+            warnings.append(f"参考图 {label} 取不到内容，已跳过")
+    if dropped:
+        warnings.append(f"服务只收 3 张参考图，按重要性丢掉了：{'、'.join(dropped)}")
     if refs:
         body["images"] = refs
         # 有参考图时服务会自动加身份锁定前缀，明写一次不吃亏
@@ -2332,6 +2367,7 @@ def hunyuan_invoke(
         # **真按张计费，如实记。** 地址是 127.0.0.1 很容易让人当成免费本地推理
         usage=Usage(cost=float(price if price is not None else _HY_PRICE_CNY),
                     currency="CNY", units={"images": 1.0}),
+        warnings=warnings or None,
     )
 
 

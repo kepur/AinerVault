@@ -121,6 +121,55 @@ class TestIdentityLock:
                                  for _ in range(5)]})
         assert len(body["images"]) == 3
 
+    def test_the_three_slots_go_to_faces_not_to_style(self):
+        """三张的预算按重要性给，不按上游拼装顺序给。
+
+        上游按「画风 → 场景 → 人物 → 服装道具」拼参考图，从前这里照
+        那个顺序取前三张，于是每一镜送出去的都是「身份锚 + 画风图 +
+        场景图」—— **人物的脸一张都进不去**。
+
+        实跑的样子：镜 2 里那个金发白人在上一镜还是亚洲脸。查起来极难，
+        因为图是好图、构图也对，只是人不对；而参考图在库里挂得好好的，
+        谁都以为送进去了。
+
+        画风与场景在提示词里还各有一整段文字，人脸没有替代品。
+        """
+        import base64
+
+        from app.capability.dialects import hunyuan_invoke
+        from app.capability.mediastore import store_b64
+
+        def b64(word: str) -> str:
+            return base64.b64encode(word.encode()).decode()
+
+        # 内容不同，落盘的文件名才不同 —— 否则三张参考图在
+        # body["images"] 里长得一模一样，断言不了是谁被丢掉的
+        def name(word: str) -> str:
+            return str(store_b64(b64(word), mime="image/png")["url"]).rsplit("/", 1)[-1]
+
+        def ref(word: str) -> dict:
+            return {"b64": b64(word), "mime": "image/png"}
+
+        t = _Transport()
+        hunyuan_invoke(
+            t, "http://x", {}, capability=Capability.image_i2i, timeout=10,
+            model=None, task_id="t",
+            payload={
+                "prompt": "x",
+                "image": ref("anchor"),
+                "reference_images": [
+                    {"ref": ref("style"), "role": "style", "tag": "world_style"},
+                    {"ref": ref("scene"), "role": "scene", "tag": "location.x"},
+                    {"ref": ref("face"), "role": "character",
+                     "identity": True, "tag": "character.xie"},
+                ],
+            })
+        sent = [str(x).rsplit("/", 1)[-1] for x in t.calls[0][1]["images"]]
+        assert len(sent) == 3
+        assert name("anchor") in sent      # 身份锚永远第一
+        assert name("face") in sent        # 脸没有替代品
+        assert name("style") not in sent   # 画风在提示词里还有一整段文字
+
     def test_t2i_sends_no_images(self):
         body = self._sent({"prompt": "一条走廊"}, cap=Capability.image_t2i)
         assert "images" not in body and "lock_identity" not in body
@@ -192,3 +241,20 @@ class TestCostIsRecorded:
         from app.capability import dialects
 
         assert 'data.get("price_cny")' in inspect.getsource(dialects.hunyuan_invoke)
+
+
+class TestReferencePriority:
+    def test_characters_survive_style_first_order(self, monkeypatch):
+        from app.capability import dialects as d
+        monkeypatch.setattr(d, '_hy_ref_path', lambda transport, ref, timeout: ref['url'])
+        transport = _Transport()
+        result = d.hunyuan_invoke(transport, 'http://x', {},
+            capability=Capability.image_i2i, model=None, timeout=10, task_id='priority',
+            payload={'prompt': 'a scene', 'image': {'url': 'base'}, 'reference_images': [
+                {'role': 'style', 'tag': 'style', 'ref': {'url': 'style'}},
+                {'role': 'scene', 'tag': 'classroom', 'ref': {'url': 'room'}},
+                {'role': 'character', 'identity': True, 'ref': {'url': 'girl'}},
+                {'role': 'character', 'identity': True, 'ref': {'url': 'boy'}},
+            ]})
+        assert transport.calls[0][1]['images'] == ['base', 'girl', 'boy']
+        assert any('classroom' in w and 'style' in w for w in result.warnings)
