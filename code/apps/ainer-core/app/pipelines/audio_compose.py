@@ -45,6 +45,8 @@ class AudioComposeResult:
     narration: int = 0
     scene_bgm: int = 0
     scene_tone: int = 0
+    #: 要了整场音轨却一条没建时，这里说是为什么（缺规格 ≠ 不需要）
+    no_scene_audio: list[str] = field(default_factory=list)
     missing_voice: list[str] = field(default_factory=list)
     #: 台词与动作拆不干净的段落。**要报出来** ——
     #: 拆错的后果是配音把「他把碗放在栏杆上」念出来，
@@ -58,6 +60,7 @@ class AudioComposeResult:
         return {
             "dialogue": self.dialogue, "narration": self.narration,
             "scene_bgm": self.scene_bgm, "scene_tone": self.scene_tone,
+            "no_scene_audio": self.no_scene_audio,
             "missing_voice": self.missing_voice,
             "unsplit": self.unsplit,
             "stale_audio": self.stale_audio,
@@ -342,6 +345,13 @@ def compile_audio(
                 ((sp_, v) for sp_, v in variants.values() if sp_.kind == asset_kind), None
             )
             if pair is None:
+                # **要了配乐却一条都没出，得说清是为什么。**
+                # 从前这里直接 continue，结果里只留一个 scene_bgm: 0 ——
+                # 人看不出是「这一章不需要配乐」还是「素材包里压根没有
+                # bgm 这一类规格」，而后者要回素材包补，前者不用管。
+                why = f"素材包里没有 {asset_kind.value} 类规格，整章都不会有这一轨"
+                if why not in result.no_scene_audio:
+                    result.no_scene_audio.append(why)
                 continue
             spec, var = pair
             prompt = ", ".join(

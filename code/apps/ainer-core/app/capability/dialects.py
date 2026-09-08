@@ -2203,6 +2203,8 @@ def gemini_health(transport: httpx.Client, base_url: str,
 #   付费网关**。这一点最容易看错：地址是 127.0.0.1，费用照收。
 #   所以路由必须标 paid，让那道闸挡住。
 
+#: 网关在 lock_identity 时自己加的【身份锁定】前缀实测 69 字，留 200 防它变长
+_HY_PREFIX_ROOM = 200
 _HY_PRICE_CNY = 0.2
 
 
@@ -2260,7 +2262,14 @@ def hunyuan_invoke(
     prompt = str(payload.get("prompt_cn") or payload.get("prompt") or "").strip()
     if not prompt:
         raise CapabilityError(CapErrorCode.INVALID_REQUEST, "prompt 为空")
-    prompt = prompt[:8192]          # 服务上限，超了整个请求会被拒
+    # **上限是 8192，但那是网关加完前缀之后的总长。**
+    # 按 8192 截断的结果是 8192 + 69 = 8261，腾讯直接回
+    # InvalidParameterValue.TextLengthExceed —— 而这条错误只在网关那侧，
+    # 我们这边只看到「这一镜没出图」。
+    # 69 是实测量出来的：发 3 字回 72 字，加的是那句【身份锁定】。
+    # 留到 200 是防它哪天把那句话改长；截断本身不损失什么，
+    # 真正该担心的是提示词为什么会有八千字。
+    prompt = prompt[:8192 - _HY_PREFIX_ROOM]
 
     body: dict[str, Any] = {"prompt": prompt}
     params = payload.get("params") or {}

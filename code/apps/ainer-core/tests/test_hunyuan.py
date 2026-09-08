@@ -151,10 +151,19 @@ class TestChineseFirst:
         body = self._sent({"prompt": "a boy in a hallway"})
         assert body["prompt"] == "a boy in a hallway"
 
-    def test_prompt_is_truncated_to_the_service_limit(self):
-        """超过 8192 整个请求会被拒，截断比失败好。"""
+    def test_prompt_leaves_room_for_the_gateway_prefix(self):
+        """8192 是网关**加完前缀之后**的总长，不是我们能发的长度。
+
+        照 8192 截断的实跑结果：8192 + 69 = 8261，腾讯回
+        InvalidParameterValue.TextLengthExceed，整批首帧无声失败 ——
+        错误只在网关那侧，我们这边只看到「这一镜没出图」。
+        69 是量出来的：发 3 字回 72 字，加的是那句【身份锁定】。
+        """
+        from app.capability.dialects import _HY_PREFIX_ROOM
+
         body = self._sent({"prompt_cn": "字" * 9000})
-        assert len(body["prompt"]) == 8192
+        assert len(body["prompt"]) == 8192 - _HY_PREFIX_ROOM
+        assert len(body["prompt"]) + 69 < 8192
 
     def test_empty_prompt_is_refused(self):
         from app.capability.dialects import hunyuan_invoke
