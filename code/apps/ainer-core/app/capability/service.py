@@ -193,7 +193,14 @@ def submit_task(
         只换**明确标了免费**的。路由表里同时配着 deepseek / mistral /
         openrouter，猜一下就是在悄悄花钱，那比停下来糟糕得多。
         """
-        if pinned or exc_code != CapErrorCode.QUOTA_EXCEEDED.value:
+        # **连不上也要换。**
+        #
+        # 转移原来只认「额度耗尽」，而本地服务最常见的失败是**它没开**：
+        # 显卡机器重启、WebUI 崩了、IP 变了。这时首选路由每次都
+        # TRANSPORT_ERROR，而备用路由明明可用 —— 整批就这么全失败，
+        # 报出来是一串「连不上」，看着像网络问题，实际是没人替它换条路。
+        if pinned or exc_code not in (CapErrorCode.QUOTA_EXCEEDED.value,
+                                      CapErrorCode.TRANSPORT_ERROR.value):
             return None
         nxt = _next_ok_route(_tried | {route.key})
         if nxt is None:

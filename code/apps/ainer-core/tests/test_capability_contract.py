@@ -600,3 +600,31 @@ class TestPerRouteApproval:
 
         why = route_blocked(None, self._route("paid"))
         assert "approved:true" in why and "CORE_ALLOW_PAID_MODELS" in why
+
+
+class TestFailoverOnUnreachable:
+    """本地服务最常见的失败是**它没开** —— 显卡机器重启、WebUI 崩了、IP 变了。
+
+    转移原来只认「额度耗尽」，于是首选路由每次 TRANSPORT_ERROR，
+    而备用路由明明可用，整批就这么全失败 ——
+    报出来是一串「连不上」，看着像网络问题，实际是没人替它换条路。
+    """
+
+    def test_transport_error_also_triggers_failover(self):
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        assert "CapErrorCode.TRANSPORT_ERROR.value" in src
+
+    def test_other_errors_do_not_trigger_it(self):
+        """参数错换条路由还是参数错，只是把同一个错在每条路上撞一遍。"""
+        import inspect
+
+        from app.capability import service
+
+        src = inspect.getsource(service.submit_task)
+        gate = src[src.index("if pinned or exc_code not in"):][:220]
+        assert "QUOTA_EXCEEDED" in gate and "TRANSPORT_ERROR" in gate
+        assert "INVALID_REQUEST" not in gate
