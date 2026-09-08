@@ -293,6 +293,18 @@ def build_shot_plan(
         if tf is not None:
             transform = tf
             tf_id = tf.id
+    if tf_id is None:
+        # **剧本自己记着它是从哪个映射生成的，就用那个。**
+        # 不接这一句的后果：调用方没传 target_language 时 transform_id 留空，
+        # 而八工种、配乐、绑定拼装全读这一列，一律 409
+        # 「分镜计划没有关联世界观档案」—— 可那个 id 一直躺在
+        # generator_meta 里，只是没人把它写进列。
+        own = (script_doc.generator_meta or {}).get("transform_id")
+        if own:
+            tf = db.get(WorldTransform, str(own))
+            if tf is not None and tf.novel_id == chapter.novel_id:
+                transform = tf
+                tf_id = tf.id
     if transform is not None:
         if transform.novel_id != chapter.novel_id:
             raise PipelineError("分镜映射不属于当前小说")
@@ -485,12 +497,18 @@ def build_shot_plan(
                                  or as_text(item.get("first_frame")).strip())
                 last_content = (as_text(item.get("last_frame_en")).strip()
                                 or as_text(item.get("last_frame")).strip())
+                # **中文那份也要存。** 模型两份都给了，这里只取英文
+                # 就把审核用的那份丢在响应里了 —— 人看后台时只剩英文，
+                # 校不出「他推开门」被写成了 pushes open the window
+                first_cn = as_text(item.get("first_frame")).strip()
+                last_cn = as_text(item.get("last_frame")).strip()
 
                 db.add(FrameSpec(
                     id=new_id("fs"), shot_id=shot.id, role=FrameRole.first,
                     prompt=first_content or None,
                     entity_ids_json=entity_ids,
-                    params_json={**shared, "content": first_content},
+                    params_json={**shared, "content": first_content,
+                                 "content_cn": first_cn or None},
                     derive_from_first=False, status=SpecStatus.pending,
                 ))
                 # **变化说明必须是看得见的动作。**
@@ -513,7 +531,8 @@ def build_shot_plan(
                     id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
                     prompt=last_content or None,
                     entity_ids_json=entity_ids,
-                    params_json={**shared, "content": last_content},
+                    params_json={**shared, "content": last_content,
+                                 "content_cn": last_cn or None},
                     derive_from_first=True,
                     derive_instruction=derive,
                     status=SpecStatus.pending,

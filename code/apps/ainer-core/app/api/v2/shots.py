@@ -227,6 +227,11 @@ def resolve_dialogue(chapter_id: str, body: DialogueIn,
 
 class PerfIn(BaseModel):
     batch_size: int = 6
+    #: 只跑指定镜头。链条上另外五步都收这个参数，只有这一步从前不收 ——
+    #: FastAPI 对多出来的字段是**静默丢弃**，于是「先跑前 8 镜看看效果」
+    #: 会不声不响地跑完全部 215 镜（实测 1213 秒）。
+    #: 少一个字段不报错，只是把小样变成了全量。
+    shot_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("/shot-plans/{plan_id}/performance:extract")
@@ -244,7 +249,9 @@ def extract_performance(plan_id: str, body: PerfIn,
     if plan is None:
         raise HTTPException(status_code=404, detail="shot plan not found")
     try:
-        return perf_pipe.extract_performance(db, plan, batch_size=body.batch_size).as_dict()
+        return perf_pipe.extract_performance(
+            db, plan, batch_size=body.batch_size,
+            shot_ids=body.shot_ids or None).as_dict()
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

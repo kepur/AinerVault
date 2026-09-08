@@ -28,12 +28,14 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import (
-    TRANSLATABLE_TYPES, AssetSpec, AudioKind, AudioSpec, Chapter, CrewSheet,
+    TRANSLATABLE_TYPES, AssetEpoch, AssetSpec, AudioKind, AudioSpec, Chapter,
+    CrewSheet,
     DocMode, DocStatus, EntityKind, EntityWorldName, FrameRole, FrameSpec, Novel,
     Asset, ScriptBlock, ScriptDoc, Scene, Shot, ShotMotion, ShotPerformance,
-    ShotPlan, TranslationBlock, VoiceCasting,
+    ShotPlan, TransformStatus, TranslationBlock, VoiceCasting,
     WorldEntity, WorldLexicon, WorldTransform,
 )
+from app.pipelines.identity import SHEET_VIEW
 
 router = APIRouter(prefix="/api/v2", tags=["console"])
 
@@ -200,6 +202,19 @@ def _default_transform(db: Session, novel_id: str) -> str | None:
     return db.execute(
         select(WorldTransform.id).where(WorldTransform.novel_id == novel_id)
         .order_by(WorldTransform.created_at.desc()).limit(1)).scalars().first()
+
+
+def _default_profile_id(db: Session, novel_id: str) -> str | None:
+    """这本书当前出的是哪一版（写实／动漫／…）。
+
+    素材按 world_profile_id 分区，不带这个条件去查参考图，
+    翻出来的可能是上一版的脸。
+    """
+    return db.execute(
+        select(WorldTransform.target_profile_id).where(
+            WorldTransform.novel_id == novel_id,
+            WorldTransform.status == TransformStatus.active,
+        )).scalars().first()
 
 
 def _novel_card(db: Session, novel: Novel) -> dict[str, Any]:
@@ -834,6 +849,16 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     audios: dict[str, list[AudioSpec]] = {}
     for a in db.execute(select(AudioSpec).where(AudioSpec.shot_id.in_(sids or [""]))).scalars():
         audios.setdefault(a.shot_id, []).append(a)
+    # **BGM 与环境声挂在场次上，不挂单镜。** 只按 shot_id 查的话，
+    # 手搓的人翻遍整页也找不到配乐 —— 而那是他要在剪辑软件里
+    # 铺整场底的那一条
+    scene_audio: dict[str, list[AudioSpec]] = {}
+    scene_ids = [s.scene_id for s in shots if s.scene_id]
+    if scene_ids:
+        for a in db.execute(select(AudioSpec).where(
+            AudioSpec.scene_id.in_(scene_ids), AudioSpec.shot_id.is_(None)
+        )).scalars():
+            scene_audio.setdefault(a.scene_id, []).append(a)
 
     asset_ids = {f.asset_id for d in frames.values() for f in d.values() if f.asset_id}
     asset_ids |= {a.asset_id for lst in audios.values() for a in lst if a.asset_id}
@@ -842,19 +867,51 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     ents = {e.id: e for e in db.execute(
         select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)).scalars()}
 
-    def _frame(f: FrameSpec | None) -> dict[str, Any] | None:
+    # 人物的基础素材：这一镜引用的是**哪一张脸**。
+    # 只给名字不够 —— 手搓时要把那张参考图一起拖进出图工具，
+    # 名字帮不上忙
+    ref_of: dict[str, str] = {}
+    prof = _default_profile_id(db, chapter.novel_id)
+    if prof:
+        for ep in db.execute(select(AssetEpoch).where(
+            AssetEpoch.entity_id.in_(list(ents) or [""]),
+            AssetEpoch.world_profile_id == prof,
+        )).scalars():
+            views = (ep.reference_set_json or {}).get("views") or {}
+            item = views.get(SHEET_VIEW) or views.get("front") or {}
+            aid = item.get("asset_id") if isinstance(item, dict) else None
+            if aid and ep.entity_id not in ref_of:
+                ref_of[ep.entity_id] = str(aid)
+    ref_assets = {a.id: a for a in db.execute(
+        select(Asset).where(Asset.id.in_(list(ref_of.values()) or [""]))).scalars()}
+
+    def _frame(f: FrameSpec | None,
+               m: ShotMotion | None = None) -> dict[str, Any] | None:
         if f is None:
             return None
         asset = assets.get(f.asset_id or "")
+        par = f.params_json or {}
         return {
             "role": f.role.value,
             "url": asset.url if asset else None,
-            # 提示词是**合成结果**，人要能逐条回看它由哪几层拼成
+            # **中英各是一份，不是一份的两种显示。**
+            # 英文是喂模型的那一句（图像模型不认中文），
+            # 中文是给人校的那一句 —— 少了中文就校不出
+            # 「他推开门」被写成了 pushes open the window
             "prompt": f.prompt, "negative_prompt": f.negative_prompt,
+            "prompt_cn": par.get("content_cn"),
+            # 变化说明同理：库里那条是中文（分镜时模型写的），
+            # 真正送进 i2i 的是运动单的 deltas_en
             "derive_instruction": f.derive_instruction,
+            "derive_en": (", ".join(m.deltas_en_json)
+                          if m and m.deltas_en_json else None),
             "status": f.status.value,
-            "entities": [ents[e].display_name for e in (f.entity_ids_json or [])
-                         if e in ents],
+            "entities": [
+                {"name": ents[e].display_name,
+                 "ref_url": (ref_assets[ref_of[e]].url
+                             if e in ref_of and ref_of[e] in ref_assets else None)}
+                for e in (f.entity_ids_json or []) if e in ents
+            ],
             "asset_keys": (f.params_json or {}).get("asset_keys") or [],
             "refs": len(f.ref_asset_ids or []),
         }
@@ -883,7 +940,7 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
             # 这一镜念的是哪几句 —— 画面对不上台词时先看这里
             "lines": lines,
             "first": _frame(pair.get("first")),
-            "last": _frame(pair.get("last")),
+            "last": _frame(pair.get("last"), m),
             "motion": ({"camera_move": m.camera_move, "subject_move": m.subject_move,
                         "prompt_en": m.motion_prompt_en,
                         "deltas": m.deltas_en_json or []} if m else None),
@@ -898,6 +955,13 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
                 "url": assets.get(a.asset_id).url if a.asset_id in assets else None,
                 "duration_ms": a.duration_ms,
             } for a in sorted(audios.get(s.id, []), key=lambda x: x.kind.value)],
+            "scene_audio": [{
+                "kind": a.kind.value,
+                "text": (a.params_json or {}).get("prompt_cn") or a.text,
+                "url": assets.get(a.asset_id).url if a.asset_id in assets else None,
+                "duration_ms": a.duration_ms,
+            } for a in sorted(scene_audio.get(s.scene_id or "", []),
+                              key=lambda x: x.kind.value)],
         })
 
     ready = sum(1 for s in out if s["first"] and s["first"]["url"])

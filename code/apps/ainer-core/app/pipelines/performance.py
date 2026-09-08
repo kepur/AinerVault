@@ -287,16 +287,20 @@ class PerfResult:
 
 
 def extract_performance(
-    db: Session, plan: ShotPlan, *, batch_size: int = 6
+    db: Session, plan: ShotPlan, *, batch_size: int = 6,
+    shot_ids: list[str] | None = None,
 ) -> PerfResult:
-    """为一个分镜计划的每个镜头抽表演信息。"""
-    shots = list(
-        db.execute(
-            select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
-        ).scalars()
-    )
+    """为一个分镜计划的每个镜头抽表演信息。
+
+    `shot_ids` 限定只跑这几镜 —— 出小样时不该把整章跑一遍。
+    """
+    q = select(Shot).where(Shot.shot_plan_id == plan.id)
+    if shot_ids:
+        q = q.where(Shot.id.in_(shot_ids))
+    shots = list(db.execute(q.order_by(Shot.order_no)).scalars())
     if not shots:
-        raise PipelineError("该分镜计划下没有镜头")
+        raise PipelineError("该分镜计划下没有镜头"
+                            if not shot_ids else "指定的镜头不在这个分镜计划里")
 
     doc = db.get(ScriptDoc, plan.script_doc_id)
     chapter = db.get(Chapter, doc.chapter_id) if doc else None

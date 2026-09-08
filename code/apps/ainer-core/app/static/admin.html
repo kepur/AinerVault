@@ -3614,10 +3614,13 @@ const Storyboard = {
       </div>
       <div style="margin:6px 0 10px">${h(s.description || "")}</div>
 
-      <div class="row" style="gap:10px;align-items:flex-start">
-        ${this.frame(s.first, "首帧")}
-        ${this.frame(s.last, "尾帧")}
-        ${s.video_url ? `<div style="flex:1;min-width:200px">
+      ${this.uses(s)}
+
+      <div class="row" style="gap:12px;align-items:flex-start;flex-wrap:nowrap;
+        overflow-x:auto;padding-bottom:4px">
+        ${this.frame(s.first, "首帧", s)}
+        ${this.frame(s.last, "尾帧", s)}
+        ${s.video_url ? `<div style="flex:1 1 0;min-width:260px">
           <div class="sub" style="color:var(--muted);margin-bottom:4px">成片</div>
           <video controls preload="metadata" src="${s.video_url}"
             style="width:100%;background:#000;border-radius:4px"></video></div>` : ""}
@@ -3630,15 +3633,7 @@ const Storyboard = {
           : `<div style="margin:3px 0;color:var(--muted);font-size:13px">${h(l.text || "")}</div>`
         ).join("")}</div>` : ""}
 
-      ${s.audio.length ? `<div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
-        ${s.audio.map(a => `<div style="min-width:220px;flex:1">
-          <div class="sub" style="color:var(--muted);font-size:12px">
-            ${h(a.kind)} ${a.speaker ? "· " + h(a.speaker) : ""}
-            ${a.voice_id ? `<span class="mono">${h(a.voice_id)}</span>` : ""}</div>
-          ${a.url ? `<audio controls preload="none" src="${a.url}"
-             style="width:100%;height:30px"></audio>`
-            : `<div class="eff">还没配音</div>`}</div>`).join("")}
-      </div>` : ""}
+      ${this.audio(s)}
 
       <div class="row" style="margin-top:8px">
         <button class="btn sm" onclick="Storyboard.toggle(${s.order_no})">
@@ -3648,18 +3643,99 @@ const Storyboard = {
     </div>`;
   },
 
-  frame(f, label) {
-    if (!f) return `<div style="flex:1;min-width:200px">
+  // 这一镜用到哪些**基础素材** —— 人物那几张脸、场景与道具。
+  //
+  // 从前这里只在展开提示词后给一行 canonical_key。手搓的人要的是
+  // 「主角 + 主角小妹 + 教室」这三样东西的**图**，好一起拖进出图工具；
+  // 一串 key 帮不上忙，名字也帮不上忙 —— 得看见那张脸。
+  uses(s) {
+    const f = s.first || s.last || {};
+    const ents = f.entities || [], keys = f.asset_keys || [];
+    if (!ents.length && !keys.length) return "";
+    return `<div class="row" style="gap:12px;align-items:center;flex-wrap:wrap;
+      margin:0 0 10px;padding:8px 10px;background:var(--panel-2);border-radius:6px">
+      <span class="sub mono" style="color:var(--muted);font-size:11px">这一镜用到</span>
+      ${ents.map(e => `<span class="row" style="gap:6px;align-items:center;flex:0 0 auto">
+        ${e.ref_url
+          ? `<a href="${e.ref_url}" target="_blank"
+               title="${h(e.name)} · 人物基础素材（正面／三分侧／侧脸／头肩）— 点开取原图"
+               ><img src="${e.ref_url}"
+               style="width:40px;height:54px;object-fit:cover;object-position:left top;
+                      border-radius:4px;border:1px solid var(--line);display:block"></a>`
+          : `<span class="tag t-warn" title="这个人物还没生成三要素参考图">缺参考图</span>`}
+        <b style="font-size:13px">${h(e.name)}</b></span>`).join("")}
+      ${keys.length ? `<span style="color:var(--muted)">+</span>
+        ${keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}` : ""}
+    </div>`;
+  },
+
+  // 音频要说全：谁、什么音色、多长、够不够铺满这一镜。
+  //
+  // **配乐与环境声挂在场次上，不挂单镜** —— 它们从前不在这一页上，
+  // 手搓的人翻遍整页也找不到该给整场铺底的那一条。
+  audio(s) {
+    const shot = (s.audio || []).map(a => ({ ...a, scope: "本镜" }));
+    const scene = (s.scene_audio || []).map(a => ({ ...a, scope: "整场" }));
+    const rows = shot.concat(scene);
+    if (!rows.length) return "";
+    const KIND = { dialogue: "对白", narration: "旁白", sfx: "音效",
+                   bgm: "配乐", ambience: "环境声" };
+    const dur = s.duration_ms || 0;
+    return `<div style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px">
+      <div class="sub mono" style="color:var(--muted);font-size:11px;margin-bottom:6px">
+        音频 ${rows.length} 条</div>
+      <div class="row" style="gap:10px;flex-wrap:wrap">
+      ${rows.map(a => {
+        const ms = a.duration_ms || 0;
+        // 对白比镜头还长，成片里话没说完就切了 —— 这条判据只有
+        // 把两个数摆在一起才看得出来
+        const over = a.scope === "本镜" && ms && dur && ms > dur + 200;
+        return `<div style="flex:1 1 240px;min-width:240px;padding:8px 10px;
+          background:var(--panel-2);border-radius:6px">
+          <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
+            <span class="tag ${a.scope === "整场" ? "t-mute" : "t-ok"}"
+              >${h(KIND[a.kind] || a.kind)}</span>
+            ${a.speaker ? `<b style="font-size:13px">${h(a.speaker)}</b>` : ""}
+            <span class="grow"></span>
+            ${ms ? `<span class="tag ${over ? "t-bad" : "t-mute"}"
+              title="${over ? "音频比镜头长，话没说完就切镜" : "音频时长"}"
+              >${(ms / 1000).toFixed(1)}s${over ? " ⚠" : ""}</span>` : ""}
+          </div>
+          ${a.voice_id ? `<div class="mono" style="font-size:11px;color:var(--muted);
+            margin-top:2px">音色 ${h(a.voice_id)}</div>` : ""}
+          ${a.text ? `<div style="font-size:12.5px;margin-top:3px">${h(a.text)}</div>` : ""}
+          ${a.url ? `<audio controls preload="none" src="${a.url}"
+             style="width:100%;height:30px;margin-top:4px"></audio>`
+            : `<div class="eff" style="font-size:12px;color:var(--muted);margin-top:4px"
+                 >还没配音</div>`}
+        </div>`;
+      }).join("")}
+      </div>
+      ${dur ? `<div class="sub mono" style="color:var(--muted);font-size:11px;margin-top:4px"
+        >镜头长 ${(dur / 1000).toFixed(1)}s</div>` : ""}
+    </div>`;
+  },
+
+  frame(f, label, s) {
+    if (!f) return `<div style="flex:1 1 0;min-width:260px">
       <div class="sub" style="color:var(--muted);margin-bottom:4px">${label}</div>
       <div class="eff">还没有这一帧的规格</div></div>`;
-    return `<div style="flex:1;min-width:200px">
-      <div class="sub" style="color:var(--muted);margin-bottom:4px">${label}
-        <span class="mono">${h(f.status)}</span>
-        ${f.refs ? `<span class="tag t-mute">${f.refs} 张参考</span>` : ""}</div>
-      ${f.url ? `<img src="${f.url}" style="width:100%;border-radius:4px;display:block">`
+    // 出图用的是英文那句；复制按钮直接给英文，手搓时贴进工具就能出
+    const en = f.role === "last" ? (f.derive_en || f.prompt) : f.prompt;
+    return `<div style="flex:1 1 0;min-width:260px">
+      <div class="row" style="align-items:center;gap:6px;margin-bottom:4px">
+        <span class="sub" style="color:var(--muted)">${label}</span>
+        <span class="mono" style="color:var(--muted);font-size:11px">${h(f.status)}</span>
+        ${f.refs ? `<span class="tag t-mute">${f.refs} 张参考</span>` : ""}
+        <span class="grow"></span>
+        ${en ? `<button class="btn sm" onclick="copyText(this)"
+          data-copy="${encodeURIComponent(en)}"
+          title="复制这一帧发给出图模型的英文提示词">复制 EN</button>` : ""}
+      </div>
+      ${f.url
+        ? `<a href="${f.url}" target="_blank"><img src="${f.url}"
+             style="width:100%;border-radius:4px;display:block"></a>`
         : `<div class="eff">还没出图</div>`}
-      ${f.entities.length ? `<div class="sub" style="color:var(--muted);margin-top:4px">
-        ${f.entities.map(h).join("、")}</div>` : ""}
     </div>`;
   },
 
@@ -3679,35 +3755,39 @@ const Storyboard = {
 
     const m = s.motion || {};
     const f = s.first || {}, l = s.last || {};
-    // 中英并列：英文那份是**发给模型的**，中文那份是给人审的。
-    // 只显示一种的后果实测过 —— 人对着中文改了半天，
-    // 而模型收到的一直是另一份英文
+    // **中英各是一份，不是一份的两种显示。**
+    // 英文是发给模型的那一句（图像模型不认中文，中文喂进去出来的是
+    // 一整版汉字纹样）；中文是给人审的那一句 —— 少了中文就校不出
+    // 「他推开门」被写成了 pushes open the window。
+    //
+    // 从前这里把中文的 derive_instruction 标成 EN，人照着它去核对
+    // 模型收到了什么，核对的却是另一份。
     const all = [
       ["EN", "首帧 · 正向（发给出图模型）", f.prompt],
+      ["中", "首帧 · 正向（人审）", f.prompt_cn],
       ["EN", "首帧 · 负向", f.negative_prompt],
-      ["EN", "尾帧 · 相对首帧改什么", l.derive_instruction || l.prompt],
+      ["EN", "尾帧 · 正向（发给出图模型）", l.prompt],
+      ["中", "尾帧 · 正向（人审）", l.prompt_cn],
+      ["EN", "尾帧 · 相对首帧改什么（i2i 读的就是这条）", l.derive_en],
+      ["中", "尾帧 · 相对首帧改什么", l.derive_instruction],
       ["EN", "物理运动（发给视频模型）", m.prompt_en],
       ["中", "镜头内容", s.description],
       ["中", "相机怎么动", m.camera_move],
       ["中", "主体怎么动", m.subject_move],
     ].filter(x => x[2]);
 
-    const full = all.map(([tag, t, v]) => `【${t}】\n${v}`).join("\n\n");
+    const full = all.map(([tag, t, v]) => `【${tag}｜${t}】\n${v}`).join("\n\n");
+    const enOnly = all.filter(x => x[0] === "EN")
+      .map(([tag, t, v]) => `【${t}】\n${v}`).join("\n\n");
     return `<div style="border-top:1px solid var(--line);margin-top:8px;padding-top:4px">
-      <div class="row" style="margin-top:6px">
+      <div class="row" style="margin-top:6px;gap:6px">
         <button class="btn sm pri" onclick="copyText(this)"
-          data-copy="${encodeURIComponent(full)}">📋 复制这一镜全部提示词</button>
+          data-copy="${encodeURIComponent(enOnly)}"
+          title="只要发给模型的那几句">📋 复制英文（发给模型）</button>
+        <button class="btn sm" onclick="copyText(this)"
+          data-copy="${encodeURIComponent(full)}">复制全部（中英）</button>
       </div>
       ${all.map(([tag, t, v]) => box(t, v, tag)).join("")}
-      ${m.deltas && m.deltas.length ? `<div style="margin-top:10px">
-        <div class="row" style="align-items:center;gap:6px">
-          <span class="tag t-ok">EN</span><b style="font-size:13px">首尾可见差异</b>
-          <span class="grow"></span>
-          <button class="btn sm" onclick="copyText(this)"
-            data-copy="${encodeURIComponent(m.deltas.join("\n"))}">复制</button>
-        </div>
-        ${m.deltas.map(x => `<div style="font-size:13px">· ${h(x)}</div>`).join("")}
-      </div>` : ""}
       ${f.asset_keys && f.asset_keys.length ? `<div style="margin-top:10px">
         <div class="sub" style="color:var(--muted)">引用素材</div>
         <div>${f.asset_keys.map(k => `<span class="tag t-mute">${h(k)}</span>`).join(" ")}</div>
