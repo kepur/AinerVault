@@ -791,6 +791,22 @@ def to_csv(handoff: dict[str, Any]) -> str:
 _UPLOAD_SLOT = {"frame_first": "first", "frame_last": "last", "video": "video"}
 
 
+def _ranges(nums: list[int]) -> str:
+    """把镜号折成区间：[1,2,3,5,7,8,9] → 「1–3、5、7–9」。"""
+    xs = sorted(set(nums))
+    if not xs:
+        return ""
+    parts, a, b = [], xs[0], xs[0]
+    for n in xs[1:]:
+        if n == b + 1:
+            b = n
+            continue
+        parts.append(str(a) if a == b else f"{a}–{b}")
+        a = b = n
+    parts.append(str(a) if a == b else f"{a}–{b}")
+    return "、".join(parts)
+
+
 def to_markdown(handoff: dict[str, Any]) -> str:
     """整章手搓手册。一个文件带走，离线也能干活。"""
     ch = handoff.get("chapter") or {}
@@ -816,10 +832,21 @@ def to_markdown(handoff: dict[str, Any]) -> str:
     ]
     gaps = handoff.get("gaps") or []
     if gaps:
+        # **同一个缺口不要逐镜重复。**
+        # 215 镜都缺运动提示词时，逐镜列会在手册开头堆出 215 行
+        # 一模一样的话 —— 人翻过去就不会再看这一节，而下面混着的
+        # 那两三条真正只影响个别镜头的缺口，就跟着一起被翻过去了。
         out += ["## ⚠ 开工前要补的缺口", ""]
+        grouped: dict[tuple[str, str, str], list[int]] = {}
         for g in gaps:
-            out.append(f"- **{TRACK_NAMES.get(g['track'], g['track'])}** "
-                       f"镜 {g['shot']}：{g['why']} —— {g['fix']}")
+            grouped.setdefault(
+                (g["track"], g["why"], g["fix"]), []).append(int(g["shot"]))
+        n_shots = handoff.get("shots") or 0
+        for (track, why, fix), shots in grouped.items():
+            where = (f"全部 {len(shots)} 镜" if len(shots) == n_shots and n_shots
+                     else f"镜 {_ranges(shots)}")
+            out.append(f"- **{TRACK_NAMES.get(track, track)}** "
+                       f"{where}：{why} —— {fix}")
         out.append("")
     res = handoff.get("resources") or {}
     if res.get("anchors"):
