@@ -559,3 +559,44 @@ class TestPerModelQuotaCap:
         route = TestPaidModelsAreBlockedByDefault()._route(
             "free", "wan3.0-video", quota={"calls": 30})
         assert service.route_blocked(None, route) is None
+
+
+class TestPerRouteApproval:
+    """逐条批准优先于全局开关。
+
+    全局 CORE_ALLOW_PAID_MODELS=true 会把**所有**付费路由一起放出来 ——
+    包括 wan2.7-i2v（实测 ¥48/天）和 qwen-image-edit-max（¥31.5/天）。
+    人想用的往往只是其中一条，为了那一条把另外两条也放开，代价不对称。
+    """
+
+    def _route(self, billing, approved=None, model="m"):
+        from app.capability.router import ResolvedRoute
+        from app.capability.schemas import Capability
+
+        class Ep:
+            id = "ep1"
+            enabled = True
+            caps_cache_json = None
+
+        dp = {"billing": billing}
+        if approved is not None:
+            dp["approved"] = approved
+        return ResolvedRoute(endpoint=Ep(), capability=Capability.image_t2i,
+                             model=model, default_params=dp)
+
+    def test_approved_paid_route_passes(self):
+        from app.capability.service import route_blocked
+
+        assert route_blocked(None, self._route("paid", approved=True)) is None
+
+    def test_unapproved_paid_route_is_still_blocked(self):
+        from app.capability.service import route_blocked
+
+        assert route_blocked(None, self._route("paid"))
+        assert route_blocked(None, self._route("paid", approved=False))
+
+    def test_the_message_names_both_ways_out(self):
+        from app.capability.service import route_blocked
+
+        why = route_blocked(None, self._route("paid"))
+        assert "approved:true" in why and "CORE_ALLOW_PAID_MODELS" in why

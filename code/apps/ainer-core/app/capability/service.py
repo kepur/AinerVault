@@ -96,9 +96,19 @@ def route_blocked(db: Session, route: ResolvedRoute) -> str | None:
     路由上配了 free_quota.calls 就自己先数一遍，到点了直接换下一条。
     数的是成功次数 —— 失败的那些供应商不计费。
     """
-    if route.billing != "free" and not get_settings().allow_paid_models:
+    # **逐条批准优先于全局开关。**
+    #
+    # 全局 CORE_ALLOW_PAID_MODELS=true 会把**所有**付费路由一起放出来 ——
+    # 包括 wan2.7-i2v（实测 ¥48/天）和 qwen-image-edit-max（¥31.5/天）。
+    # 人想用的往往只是其中一条（比如自建的混元网关 0.2 元/张），
+    # 为了那一条把另外两条也放开，代价不对称。
+    # 所以路由上可以单独标 approved:true，只放行这一条。
+    approved = bool(route.default_params.get("approved"))
+    if route.billing != "free" and not approved \
+            and not get_settings().allow_paid_models:
         return (f"{route.model} 标为{'付费' if route.billing == 'paid' else '未标注'}，"
-                f"而当前不允许调付费模型（CORE_ALLOW_PAID_MODELS=false）")
+                f"而这条路由没有被单独批准"
+                f"（在路由上加 approved:true，或全局 CORE_ALLOW_PAID_MODELS=true）")
     quota = route.default_params.get("free_quota") or {}
     cap = quota.get("calls")
     if isinstance(cap, int) and cap > 0:
