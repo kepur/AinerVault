@@ -6,12 +6,16 @@ manifest 给程序，handoff 给人。所以这里除了 JSON，还出三种落�
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import re
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import ShotPlan
+from app.ids import new_id
+from app.models import ShotPlan, SpecStatus
 from app.pipelines import handoff as hf
 
 router = APIRouter(prefix="/api/v2", tags=["handoff"])
@@ -54,3 +58,136 @@ def get_markdown(plan_id: str, target: str = Query("generic"),
     data = hf.build_handoff(db, _plan(plan_id, db), target=target)
     return PlainTextResponse(hf.to_markdown(data),
                              media_type="text/markdown; charset=utf-8")
+
+
+# ── 手搓产物回传 ─────────────────────────────────────────────────────────────
+#
+# **这一段原来是断的。** 导出有了（handoff.md／csv／srt 三种），
+# 而人在网页上生成完图和视频之后，没有任何一处能把它们送回系统 ——
+# 整个系统唯一的上传入口是导入章节文本。于是「手动模式」只走通了一半：
+# 提示词拿得出去，成品回不来，回不来就合不成片。
+#
+# 命名约定是这个闭环的关键：导出时就写清每张该叫什么，
+# 回传时按文件名认领。人不必在界面上逐个点一百多次。
+
+#: 文件名 → (镜号, 角色)。三种写法都收 —— 人从网页下载下来的文件
+#: 名字五花八门，强求一种写法等于逼人手工改一百多个文件名
+_UPLOAD_NAME = re.compile(
+    r"(?:shot[_-]?)?(\d{1,4})[_-]?(first|last|video|f|l|v)?\b", re.I)
+_ROLE_ALIAS = {"f": "first", "l": "last", "v": "video",
+               "first": "first", "last": "last", "video": "video"}
+
+
+def parse_upload_name(filename: str) -> tuple[int, str] | None:
+    """从文件名认领镜号与角色。认不出返回 None。
+
+    收这几种：
+      12_first.png / shot012-last.jpg / 12.mp4 / shot_12_v.mp4
+    认不出的**不猜**，报回去让人自己指定 —— 猜错会把一张图挂到别的镜头上，
+    而那一镜从此再也没人会去看它对不对。
+    """
+    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    m = _UPLOAD_NAME.search(stem)
+    if not m:
+        return None
+    order = int(m.group(1))
+    role = _ROLE_ALIAS.get((m.group(2) or "").lower(), "")
+    if not role:
+        # 没写角色时按扩展名猜：视频只可能是成片，图默认首帧
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        role = "video" if ext in {"mp4", "mov", "webm", "m4v"} else "first"
+    return order, role
+
+
+def _attach_upload(
+    db: Session, plan: ShotPlan, order_no: int, role: str,
+    raw: bytes, filename: str,
+) -> dict:
+    """把一份手搓产物挂到对应的镜头上。"""
+    from app.capability.mediastore import store_bytes
+    from app.models import Asset, AssetKind, AssetSource, FrameRole, FrameSpec, Shot
+
+    shot = db.execute(
+        select(Shot).where(Shot.shot_plan_id == plan.id,
+                           Shot.order_no == order_no)
+    ).scalars().first()
+    if shot is None:
+        return {"file": filename, "ok": False, "why": f"这一版分镜里没有第 {order_no} 镜"}
+
+    is_video = role == "video"
+    mime = ("video/mp4" if is_video
+            else ("image/jpeg" if filename.lower().endswith((".jpg", ".jpeg"))
+                  else "image/png"))
+    item = store_bytes(raw, mime=mime)
+    asset = db.execute(
+        select(Asset).where(Asset.sha256 == item.get("sha256"))
+    ).scalars().first()
+    if asset is None:
+        asset = Asset(
+            id=new_id("as"),
+            kind=AssetKind.video if is_video else AssetKind.image,
+            url=item["url"], sha256=item.get("sha256"), mime=item.get("mime"),
+            bytes=item.get("bytes"),
+            # **uploaded，不是 generated。** 来路要分得清 ——
+            # 重跑生成时不能把人手搓的产物当成自己的旧产物覆盖掉
+            source=AssetSource.uploaded,
+            meta_json={"uploaded_as": filename, "shot": order_no, "role": role},
+        )
+        db.add(asset)
+        db.flush()
+
+    if is_video:
+        shot.video_asset_id = asset.id
+        shot.status = SpecStatus.ready
+    else:
+        frame = db.execute(
+            select(FrameSpec).where(
+                FrameSpec.shot_id == shot.id,
+                FrameSpec.role == (FrameRole.last if role == "last"
+                                   else FrameRole.first),
+            )
+        ).scalars().first()
+        if frame is None:
+            return {"file": filename, "ok": False,
+                    "why": f"第 {order_no} 镜没有 {role} 帧的规格，先跑一次绑定拼装"}
+        frame.asset_id = asset.id
+        frame.status = SpecStatus.ready
+        # 人手搓的不该被下一次自动生成覆盖
+        frame.edited_by_human = True
+    db.flush()
+    return {"file": filename, "ok": True, "shot": order_no, "role": role,
+            "url": asset.url}
+
+
+@router.post("/shot-plans/{plan_id}/handoff:upload")
+async def upload_handoff(
+    plan_id: str,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """把网页上生成好的首尾帧／成片批量传回来，按文件名认领镜头。
+
+    命名：`12_first.png`、`shot012-last.jpg`、`12.mp4` 都收。
+    认不出的**不猜**，原样报回去 —— 猜错会把一张图挂到别的镜头上，
+    而那一镜从此再也没人会去看它对不对。
+
+    传回来的产物标 source=uploaded 且 edited_by_human，
+    重跑自动生成时不会被覆盖。
+    """
+    plan = _plan(plan_id, db)
+    done, failed = [], []
+    for f in files:
+        raw = await f.read()
+        if not raw:
+            failed.append({"file": f.filename, "ok": False, "why": "空文件"})
+            continue
+        parsed = parse_upload_name(f.filename or "")
+        if parsed is None:
+            failed.append({"file": f.filename, "ok": False,
+                           "why": "文件名里认不出镜号。请用 12_first.png 这样的写法"})
+            continue
+        res = _attach_upload(db, plan, parsed[0], parsed[1], raw, f.filename or "")
+        (done if res["ok"] else failed).append(res)
+    db.flush()
+    return {"attached": len(done), "failed": len(failed),
+            "items": done, "problems": failed}

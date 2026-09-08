@@ -786,6 +786,11 @@ def to_csv(handoff: dict[str, Any]) -> str:
     return buf.getvalue()
 
 
+#: 哪条轨道的产物回传时算哪个角色。没列的轨道（对白、环境音、BGM）
+#: 不走这条回传路 —— 那些是音频，由配音那一步出
+_UPLOAD_SLOT = {"frame_first": "first", "frame_last": "last", "video": "video"}
+
+
 def to_markdown(handoff: dict[str, Any]) -> str:
     """整章手搓手册。一个文件带走，离线也能干活。"""
     ch = handoff.get("chapter") or {}
@@ -798,6 +803,15 @@ def to_markdown(handoff: dict[str, Any]) -> str:
         f"- 出图目标 {handoff.get('target')}",
         "",
         str(handoff.get("notes") or ""),
+        "",
+        "## 生成完怎么传回来",
+        "",
+        "在网页上出好图／视频后，**按下面每一格标的文件名存**，",
+        "然后整个文件夹一次性拖进后台「手动模式 › 回传」，系统按文件名认领镜头。",
+        "认不出名字的不会去猜 —— 猜错会把一张图挂到别的镜头上，",
+        "而那一镜从此再也没人会去看它对不对。",
+        "",
+        "回传的产物标为「人工」，重跑自动生成时不会被覆盖。",
         "",
     ]
     gaps = handoff.get("gaps") or []
@@ -823,6 +837,13 @@ def to_markdown(handoff: dict[str, Any]) -> str:
         for clip in track["clips"]:
             flag = "✅ 已生成" if clip["status"] == "ready" else "✏️ 待手搓"
             out.append(f"### 镜 {clip['shot']} · {clip['tc']} · {flag}")
+            # 文件名就是回传时的认领依据。写在每一格上，
+            # 人不必回头去查约定，也不必在界面上逐个点一百多次
+            slot = _UPLOAD_SLOT.get(track["id"])
+            if slot:
+                out.append(f"**存成** `{clip['shot']}_{slot}.png`"
+                           if slot != "video"
+                           else f"**存成** `{clip['shot']}.mp4`")
             if clip.get("label"):
                 out.append(f"*{clip['label']}*")
             en = (clip.get("copy") or "").strip()

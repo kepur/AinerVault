@@ -310,3 +310,50 @@ class TestLastFrameDerivation:
         src = inspect.getsource(frame_compose.generate_last_frames)
         assert '"width": width_last' in src
         assert "_size_for(" in src
+
+
+class TestManualUploadBack:
+    """**这一段原来是断的。** 导出有三种（md／csv／srt），而人在网页上
+    生成完图和视频之后，没有任何一处能把它们送回系统 ——
+    整个系统唯一的上传入口是导入章节文本。于是「手动模式」只走通了一半：
+    提示词拿得出去，成品回不来，回不来就合不成片。
+    """
+
+    @pytest.mark.parametrize("name,expect", [
+        ("12_first.png", (12, "first")),
+        ("shot012-last.jpg", (12, "last")),
+        ("003_l.png", (3, "last")),
+        ("shot_7_v.mp4", (7, "video")),
+        ("12.mp4", (12, "video")),      # 没写角色，按扩展名判
+        ("12.png", (12, "first")),      # 图默认首帧
+    ])
+    def test_filenames_are_claimed(self, name, expect):
+        from app.api.v2.handoff import parse_upload_name
+
+        assert parse_upload_name(name) == expect
+
+    @pytest.mark.parametrize("name", ["random.png", "final_render.mp4", ".png"])
+    def test_unrecognised_names_are_not_guessed(self, name):
+        """猜错会把一张图挂到别的镜头上，而那一镜从此再也没人会去看它对不对。"""
+        from app.api.v2.handoff import parse_upload_name
+
+        assert parse_upload_name(name) is None
+
+    def test_uploads_are_marked_human_not_generated(self):
+        """来路要分得清 —— 重跑生成时不能把人手搓的产物当成自己的旧产物覆盖。"""
+        import inspect
+
+        from app.api.v2 import handoff
+
+        src = inspect.getsource(handoff._attach_upload)
+        assert "AssetSource.uploaded" in src
+        assert "edited_by_human = True" in src
+
+    def test_manual_says_the_filename_to_save_as(self):
+        """导出时就写清每张该叫什么 —— 闭环才成立。
+        否则人得回头去查约定，或者在界面上逐个点一百多次。"""
+        from app.pipelines.handoff import TRACKS, _UPLOAD_SLOT
+
+        assert set(_UPLOAD_SLOT) <= {t[0] for t in TRACKS}, "轨道 id 必须对得上"
+        assert _UPLOAD_SLOT["frame_first"] == "first"
+        assert _UPLOAD_SLOT["video"] == "video"

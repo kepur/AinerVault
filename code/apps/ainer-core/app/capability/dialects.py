@@ -42,8 +42,10 @@ DIALECT_CLOUDFLARE = "cloudflare"
 DIALECT_DASHSCOPE = "dashscope"
 #: 本地 AUTOMATIC1111 WebUI。第一个跑在自己显卡上的方言 —— 出图不花钱
 DIALECT_SD = "sd_webui"
+#: Google Gemini。接进来的唯一理由是 Veo 3.1 认首尾帧
+DIALECT_GEMINI = "gemini"
 DIALECTS = (DIALECT_CAPABILITY, DIALECT_OPENAI, DIALECT_CLOUDFLARE,
-            DIALECT_DASHSCOPE, DIALECT_SD)
+            DIALECT_DASHSCOPE, DIALECT_SD, DIALECT_GEMINI)
 
 #: openai 方言能承接的能力。图像/音频不在此列 —— 走这条方言的服务只有文本。
 OPENAI_CAPABILITIES = (Capability.text_chat, Capability.text_translate)
@@ -620,7 +622,7 @@ def openai_catalog(transport: httpx.Client, base_url: str, headers: dict[str, st
 
 #: 同步方言：没有任务队列，submit 也得当场跑完
 SYNC_ONLY_DIALECTS = (DIALECT_OPENAI, DIALECT_CLOUDFLARE, DIALECT_DASHSCOPE,
-                      DIALECT_SD)
+                      DIALECT_SD, DIALECT_GEMINI)
 
 #: **每个模型只吃自己 schema 里的字段，多传一个就整个请求 400。**
 #: flux-1-schnell 只认 prompt 与 steps —— 传 width/height/seed/negative_prompt
@@ -1992,3 +1994,191 @@ def sd_models(transport: httpx.Client, base_url: str, headers: dict[str, str],
                               f"取模型列表失败 {resp.status_code}")
     return [{"name": m.get("model_name"), "title": m.get("title")}
             for m in resp.json()]
+
+
+# ── gemini 方言（Veo 3.1 视频）────────────────────────────────────────────────
+#
+# 接进来的唯一理由是**首尾帧**。我们的分镜给的是首帧 + 尾帧，中间让模型插值；
+# 而免费那几个 wan 全是 t2v／r2v，吃不了尾帧：
+#   wan2.7-i2v      认首尾帧，付费（实测 ¥48/天）
+#   wan2.7-t2v/r2v  免费，但是文生／参考图生，尾帧无处可放
+#   veo-3.1-*       认 image + lastFrame
+#
+# 字段是探出来的，不是照文档抄的 —— 这个接口会把未知字段点名拒绝
+#（`endFrame` isn't supported by this model），所以「传进去只报图片解不开」
+# 就等于「这个字段它认」。据此确认：
+#   认   image / lastFrame / aspectRatio / resolution / negativePrompt / sampleCount
+#   不认 endFrame / generateAudio（fast 档）
+#   durationSeconds 必须 4–8，接口自己报的边界
+
+_VEO_MIN_S, _VEO_MAX_S = 4, 8
+#: 轮询间隔与上限。Veo 一段十几秒到几分钟不等
+_VEO_POLL_SEC = 10.0
+
+
+def _veo_part(transport: httpx.Client, ref: Any, timeout: float) -> dict[str, Any] | None:
+    """AssetRefIn → Veo 的图片入参（裸 base64 + mime）。"""
+    url = _ds_data_url(transport, ref, timeout)
+    if not url or "," not in url:
+        return None
+    head, b64 = url.split(",", 1)
+    mime = head[5:].split(";", 1)[0] or "image/png"
+    return {"bytesBase64Encoded": b64, "mimeType": mime}
+
+
+def _veo_body(transport: httpx.Client, payload: dict[str, Any],
+              timeout: float, warnings: list[str]) -> dict[str, Any]:
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST, "prompt 为空")
+    first = _veo_part(transport, payload.get("first_frame"), timeout)
+    if first is None:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST,
+                              "video_to_image 需要首帧，且要取得到图片内容")
+    inst: dict[str, Any] = {"prompt": prompt, "image": first}
+    last = _veo_part(transport, payload.get("last_frame"), timeout)
+    if last is not None:
+        inst["lastFrame"] = last
+
+    secs = round((int(payload.get("duration_ms") or 0) or 5000) / 1000)
+    clamped = max(_VEO_MIN_S, min(_VEO_MAX_S, secs))
+    if clamped != secs:
+        # 说清是被夹住了。不说的话成片时长与分镜表对不上，
+        # 而没有任何一处会解释为什么
+        warnings.append(
+            f"这一镜 {secs}s，Veo 只接 {_VEO_MIN_S}–{_VEO_MAX_S}s，已按 {clamped}s 出")
+    params: dict[str, Any] = {"durationSeconds": clamped}
+    neg = str(payload.get("negative_prompt") or "").strip()
+    if neg:
+        params["negativePrompt"] = neg
+    if payload.get("aspect_ratio"):
+        params["aspectRatio"] = str(payload["aspect_ratio"])
+    return {"instances": [inst], "parameters": params}
+
+
+def _veo_video_url(data: dict[str, Any]) -> str | None:
+    """从 operation 结果里取视频地址。
+
+    **响应形状没有实测过** —— 真跑一次要花钱，而这台机器上的判断
+    只到「参数校验」为止。所以这里把几种常见位置都找一遍，
+    一个都对不上时把原始结果原样抛出来：
+    第一次真跑就会告诉我们它到底长什么样，而不是静默返回空。
+    """
+    resp = data.get("response") or data
+    pools = [
+        (resp.get("generateVideoResponse") or {}).get("generatedSamples") or [],
+        resp.get("generatedSamples") or [],
+        resp.get("videos") or [],
+        resp.get("predictions") or [],
+    ]
+    for pool in pools:
+        for item in pool:
+            if not isinstance(item, dict):
+                continue
+            video = item.get("video") if isinstance(item.get("video"), dict) else item
+            for key in ("uri", "url", "videoUri", "gcsUri"):
+                if video.get(key):
+                    return str(video[key])
+    return None
+
+
+def _veo_await(transport: httpx.Client, base_url: str, headers: dict[str, str],
+               op: str, *, timeout: float) -> dict[str, Any]:
+    """轮询 long-running operation 直到 done。"""
+    deadline = time.time() + timeout
+    url = f"{base_url.rstrip('/')}/{op.lstrip('/')}"
+    last: dict[str, Any] = {}
+    while time.time() < deadline:
+        resp = transport.get(url, headers=headers, timeout=min(timeout, 60))
+        if resp.status_code >= 400:
+            raise _gemini_error(resp)
+        last = resp.json()
+        if last.get("error"):
+            raise CapabilityError(
+                CapErrorCode.UPSTREAM_ERROR,
+                f"Veo 生成失败：{str(last['error'])[:200]}")
+        if last.get("done"):
+            return last
+        time.sleep(_VEO_POLL_SEC)
+    raise CapabilityError(CapErrorCode.UPSTREAM_TIMEOUT,
+                          f"Veo 等待超时（{timeout:.0f}s），任务 {op}")
+
+
+def _gemini_error(resp: httpx.Response) -> CapabilityError:
+    """Gemini 的错误体。**额度与鉴权要分开** —— 两者处置完全不同。"""
+    detail, status = resp.text[:300], ""
+    try:
+        err = (resp.json() or {}).get("error") or {}
+        detail = str(err.get("message") or detail)
+        status = str(err.get("status") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    if resp.status_code == 429 or status == "RESOURCE_EXHAUSTED":
+        return CapabilityError(CapErrorCode.QUOTA_EXCEEDED,
+                               f"Gemini 额度用尽：{detail}", retryable=False)
+    if resp.status_code in (401, 403) or status in ("PERMISSION_DENIED",
+                                                    "UNAUTHENTICATED"):
+        return CapabilityError(CapErrorCode.UNAUTHORIZED, f"Gemini 鉴权失败：{detail}")
+    code = (CapErrorCode.INVALID_REQUEST if resp.status_code < 500
+            else CapErrorCode.UPSTREAM_ERROR)
+    return CapabilityError(code, f"Gemini {resp.status_code}: {detail}")
+
+
+def gemini_invoke(
+    transport: httpx.Client, base_url: str, headers: dict[str, str], *,
+    capability: Capability, payload: dict[str, Any], model: str | None,
+    timeout: float, task_id: str,
+) -> Task:
+    """跑一次 Veo。提交 + 轮询都在这一次调用里完成，与百炼视频同形状。"""
+    if capability is not Capability.video_i2v:
+        raise CapabilityError(
+            CapErrorCode.CAPABILITY_UNSUPPORTED,
+            f"{capability.value} 不能走 gemini 方言 —— 目前只接 video.image_to_video。")
+    if not model:
+        raise CapabilityError(CapErrorCode.INVALID_REQUEST,
+                              "gemini 方言必须在路由上指定模型，例如 veo-3.1-fast-generate-preview")
+    warnings: list[str] = []
+    body = _veo_body(transport, payload, timeout, warnings)
+    url = f"{base_url.rstrip('/')}/models/{model}:predictLongRunning"
+    try:
+        resp = transport.post(url, json=body, headers=headers,
+                              timeout=min(timeout, 120))
+    except httpx.HTTPError as exc:
+        raise CapabilityError(CapErrorCode.TRANSPORT_ERROR,
+                              f"连不上 Gemini：{exc}") from exc
+    if resp.status_code >= 400:
+        raise _gemini_error(resp)
+    op = str((resp.json() or {}).get("name") or "")
+    if not op:
+        raise CapabilityError(CapErrorCode.BAD_RESPONSE,
+                              f"Gemini 未回 operation name：{resp.text[:200]}")
+
+    done = _veo_await(transport, base_url, headers, op, timeout=timeout)
+    src = _veo_video_url(done)
+    if not src:
+        raise CapabilityError(
+            CapErrorCode.BAD_RESPONSE,
+            f"Veo 结果里找不到视频地址。原始结果：{str(done)[:400]}")
+    # 产物地址带鉴权要求，取回来落盘 —— 与百炼那条一样，
+    # 临时地址过期之后 URL 就再也取不到了
+    media = _ds_fetch(transport, src, mime="video/mp4", timeout=max(timeout, 180))
+    return Task(
+        task_id=task_id, status=TaskState.succeeded,
+        capability=capability.value, model=model, provider="gemini-veo",
+        output={"video": media},
+        usage=Usage(cost=0.0, units={"videos": 1.0}),
+        warnings=warnings or None,
+    )
+
+
+def gemini_health(transport: httpx.Client, base_url: str,
+                  headers: dict[str, str], timeout: float) -> HealthResult:
+    """用模型列表代替健康检查 —— 它同时验证了 key 有效。"""
+    try:
+        resp = transport.get(f"{base_url.rstrip('/')}/models",
+                             headers=headers, timeout=timeout)
+        ok = resp.status_code < 400
+    except httpx.HTTPError:
+        ok = False
+    return HealthResult(ok=ok, version=f"gemini-dialect/{CONTRACT_VERSION}",
+                        contract_version=CONTRACT_VERSION)
