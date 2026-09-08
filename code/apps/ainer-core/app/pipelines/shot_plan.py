@@ -144,6 +144,10 @@ class ShotPlanResult:
     #: 这个数字等于「有几镜的画面里张嘴的是另一张脸」，
     #: 而台词、配音、时间轴全都对，只有把画面和台词摆在一起才看得出来
     speaker_added: list[dict] = field(default_factory=list)
+    #: 因为太长被切成多机位的镜头。**要报出来** —— 这几段是
+    #: 「同一段内容换角度覆盖」，不是新增情节；剪的人要知道哪几个镜头
+    #: 本来是一条，才不会当成连续动作去接
+    split_for_length: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +159,7 @@ class ShotPlanResult:
             "uncovered_blocks": self.uncovered_blocks,
             "static_derives": self.static_derives,
             "speaker_added": self.speaker_added,
+            "split_for_length": self.split_for_length,
             "orphaned_assets": self.orphaned_assets,
         }
 
@@ -397,106 +402,119 @@ def build_shot_plan(
             ))
         valid_ids = {b.id for b in scene_blocks}
         for item in raw_shots:
-            order_no += 1
             block_ids = [b for b in (item.get("block_ids") or []) if b in valid_ids]
             covered.update(block_ids)
-
-            size = size_alloc.take() or "ms"
-            move = move_alloc.take() or "static"
             shot_blocks = [b for b in scene_blocks if b.id in block_ids]
-            dur = _estimate_ms(db, shot_blocks, target_language, tf_id) or avg_shot_ms
-
-            shot = Shot(
-                id=new_id("sh"), shot_plan_id=plan.id,
-                scene_id=scene.id if scene else None,
-                order_no=order_no, block_ids_json=block_ids,
-                duration_ms=max(dur, 1200), shot_size=size,
-                camera_json={
-                    "move": move,
-                    "speed": float(camera.get("speed", 0.4)),
-                    "lens_mm": camera.get("lens_mm"),
-                    "angle": camera.get("angle_bias"),
-                },
-                description=str(item.get("description") or "") or None,
-                status=SpecStatus.pending,
-            )
-            db.add(shot)
-            db.flush()
-
-            names = [str(n) for n in (item.get("entity_names") or [])]
-            entity_ids = [entities[n].id for n in names if n in entities]
-            # **说话人必须在场。**
-            #
-            # entity_names 是模型的判断，而这一镜覆盖的对白块上写着
-            # speaker_tag —— 那是上一步定下来的事实，不是判断。
-            # 两者冲突时以事实为准：坏蛋实跑里镜 2 的台词是 Tyler Kao 说的
-            #（speaker_tag 写得清清楚楚），模型却把出场人物填成了 Brad Lee，
-            # 于是首帧提示词描述的是另一个人 —— 画面里张嘴的那张脸是错的，
-            # 而台词、配音、时间轴全都对。这种错只有把画面和台词摆在一起
-            # 才看得出来，报表上一片正常。
-            for b in shot_blocks:
-                if b.block_type is not BlockType.dialogue:
-                    continue
-                who = b.speaker_entity_id or (
-                    entities[b.speaker_tag].id
-                    if b.speaker_tag in entities else None)
-                if who and who not in entity_ids:
-                    entity_ids.append(who)
-                    result.speaker_added.append({
-                        "shot": order_no, "speaker": b.speaker_tag,
-                        "why": "台词的说话人不在模型给的出场人物里，已补上",
-                    })
-            asset_keys = [str(k) for k in (item.get("asset_keys") or [])]
-            shared = {"asset_keys": asset_keys, "shot_size": size,
-                      "seed": (seed + order_no) % (2**31)}
-            # 镜头内容存进 params.content 而不是只存 prompt：
-            # prompt 是合成的**产出**，会被反复覆写。
-            # 只存在 prompt 里的话，第二次合成会把上一次的产出
-            # 当成镜头内容读回去，一层层套下去
-            # 出图用英文，审核用中文。没有英文时退回中文 ——
-            # 少了这一句画面就没有内容了，而 cjk_segments 会把它报出来
-            first_content = (as_text(item.get("first_frame_en")).strip()
-                             or as_text(item.get("first_frame")).strip())
-            last_content = (as_text(item.get("last_frame_en")).strip()
-                            or as_text(item.get("last_frame")).strip())
-
-            db.add(FrameSpec(
-                id=new_id("fs"), shot_id=shot.id, role=FrameRole.first,
-                prompt=first_content or None,
-                entity_ids_json=entity_ids,
-                params_json={**shared, "content": first_content},
-                derive_from_first=False, status=SpecStatus.pending,
-            ))
-            # **变化说明必须是看得见的动作。**
-            #
-            # 提示词里已经写死了（含反例），但模型仍会写出「眉头微皱」
-            # 「呼吸略显急促」这类 —— 五秒的镜头里那些看不出来，
-            # 首尾帧于是几乎相同，i2v 无从插值，成片里就是一张静止画面。
-            #
-            # 判出来后保留原话并报出，不用「姿态轻微移动」这种假动作糊住。
-            # 后续动作导演会依据剧本、调度与八工种单，补齐完成该动作
-            # 所需的最小物理过程；在那之前，出帧与出视频都会被硬门禁挡住。
-            derive = as_text(item.get("derive_instruction")) or None
-            vis_ok, vis_why = sp.is_visible_change(derive)
-            if not vis_ok:
-                result.static_derives.append({
-                    "shot": shot.order_no, "instruction": derive, "why": vis_why,
+            span = _estimate_ms(db, shot_blocks, target_language, tf_id) or avg_shot_ms
+            slices = _coverage_slices(span)
+            if len(slices) > 1:
+                result.split_for_length.append({
+                    "from_shot": order_no + 1, "span_ms": span,
+                    "into": len(slices),
+                    "why": f"{span / 1000:.0f} 秒装不进一个镜头，切成 "
+                           f"{len(slices)} 个机位覆盖同一段",
                 })
+            # 下面这一层就是「同一段内容的第 n 个机位」。
+            # 景别与运镜由分配器逐个给，所以每个机位天然不同 ——
+            # 那正是覆盖的做法：说话人正面、听者反应、手部特写。
+            # 内容共用父镜的首尾帧描述：模型只为整段写了一份，
+            # 硬给每个机位编一份不同的等于凭空造情节。
+            for slice_idx, dur in enumerate(slices):
+                order_no += 1
+                size = size_alloc.take() or "ms"
+                move = move_alloc.take() or "static"
 
-            db.add(FrameSpec(
-                id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
-                prompt=last_content or None,
-                entity_ids_json=entity_ids,
-                params_json={**shared, "content": last_content},
-                derive_from_first=True,
-                derive_instruction=derive,
-                status=SpecStatus.pending,
-            ))
+                shot = Shot(
+                    id=new_id("sh"), shot_plan_id=plan.id,
+                    scene_id=scene.id if scene else None,
+                    order_no=order_no, block_ids_json=block_ids,
+                    duration_ms=max(dur, 1200), shot_size=size,
+                    camera_json={
+                        "move": move,
+                        "speed": float(camera.get("speed", 0.4)),
+                        "lens_mm": camera.get("lens_mm"),
+                        "angle": camera.get("angle_bias"),
+                    },
+                    description=str(item.get("description") or "") or None,
+                    status=SpecStatus.pending,
+                )
+                db.add(shot)
+                db.flush()
 
-            result.shots += 1
-            result.total_duration_ms += shot.duration_ms
-            result.size_distribution[size] = result.size_distribution.get(size, 0) + 1
-            result.move_distribution[move] = result.move_distribution.get(move, 0) + 1
+                names = [str(n) for n in (item.get("entity_names") or [])]
+                entity_ids = [entities[n].id for n in names if n in entities]
+                # **说话人必须在场。**
+                #
+                # entity_names 是模型的判断，而这一镜覆盖的对白块上写着
+                # speaker_tag —— 那是上一步定下来的事实，不是判断。
+                # 两者冲突时以事实为准：坏蛋实跑里镜 2 的台词是 Tyler Kao 说的
+                #（speaker_tag 写得清清楚楚），模型却把出场人物填成了 Brad Lee，
+                # 于是首帧提示词描述的是另一个人 —— 画面里张嘴的那张脸是错的，
+                # 而台词、配音、时间轴全都对。这种错只有把画面和台词摆在一起
+                # 才看得出来，报表上一片正常。
+                for b in shot_blocks:
+                    if b.block_type is not BlockType.dialogue:
+                        continue
+                    who = b.speaker_entity_id or (
+                        entities[b.speaker_tag].id
+                        if b.speaker_tag in entities else None)
+                    if who and who not in entity_ids:
+                        entity_ids.append(who)
+                        result.speaker_added.append({
+                            "shot": order_no, "speaker": b.speaker_tag,
+                            "why": "台词的说话人不在模型给的出场人物里，已补上",
+                        })
+                asset_keys = [str(k) for k in (item.get("asset_keys") or [])]
+                shared = {"asset_keys": asset_keys, "shot_size": size,
+                          "seed": (seed + order_no) % (2**31)}
+                # 镜头内容存进 params.content 而不是只存 prompt：
+                # prompt 是合成的**产出**，会被反复覆写。
+                # 只存在 prompt 里的话，第二次合成会把上一次的产出
+                # 当成镜头内容读回去，一层层套下去
+                # 出图用英文，审核用中文。没有英文时退回中文 ——
+                # 少了这一句画面就没有内容了，而 cjk_segments 会把它报出来
+                first_content = (as_text(item.get("first_frame_en")).strip()
+                                 or as_text(item.get("first_frame")).strip())
+                last_content = (as_text(item.get("last_frame_en")).strip()
+                                or as_text(item.get("last_frame")).strip())
+
+                db.add(FrameSpec(
+                    id=new_id("fs"), shot_id=shot.id, role=FrameRole.first,
+                    prompt=first_content or None,
+                    entity_ids_json=entity_ids,
+                    params_json={**shared, "content": first_content},
+                    derive_from_first=False, status=SpecStatus.pending,
+                ))
+                # **变化说明必须是看得见的动作。**
+                #
+                # 提示词里已经写死了（含反例），但模型仍会写出「眉头微皱」
+                # 「呼吸略显急促」这类 —— 五秒的镜头里那些看不出来，
+                # 首尾帧于是几乎相同，i2v 无从插值，成片里就是一张静止画面。
+                #
+                # 判出来后保留原话并报出，不用「姿态轻微移动」这种假动作糊住。
+                # 后续动作导演会依据剧本、调度与八工种单，补齐完成该动作
+                # 所需的最小物理过程；在那之前，出帧与出视频都会被硬门禁挡住。
+                derive = as_text(item.get("derive_instruction")) or None
+                vis_ok, vis_why = sp.is_visible_change(derive)
+                if not vis_ok:
+                    result.static_derives.append({
+                        "shot": shot.order_no, "instruction": derive, "why": vis_why,
+                    })
+
+                db.add(FrameSpec(
+                    id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
+                    prompt=last_content or None,
+                    entity_ids_json=entity_ids,
+                    params_json={**shared, "content": last_content},
+                    derive_from_first=True,
+                    derive_instruction=derive,
+                    status=SpecStatus.pending,
+                ))
+
+                result.shots += 1
+                result.total_duration_ms += shot.duration_ms
+                result.size_distribution[size] = result.size_distribution.get(size, 0) + 1
+                result.move_distribution[move] = result.move_distribution.get(move, 0) + 1
 
     result.scenes = len([s for s, _b, _d, _c in scene_plan if s])
     result.uncovered_blocks = [
@@ -531,6 +549,29 @@ def build_shot_plan(
 #: 镜头数跟着涨，一次性生成就再也装不下。
 #: 拆细是对的（首尾帧之间跨半小时会漂），代价是这里必须分批。
 _SHOTS_PER_CALL = 10
+
+
+#: 一镜的时长上限。超过就切机位 —— 一个画面停五秒以上，观众会觉得卡住。
+#: 首尾帧插值本身也撑不住更长：超过五秒开始变慢动作糊影。
+_SHOT_MAX_MS = 5000
+_SHOT_MIN_MS = 1200
+
+
+def _coverage_slices(dur: int, *, cap: int = _SHOT_MAX_MS) -> list[int]:
+    """一镜太长就切成几个机位，返回每个机位的时长。
+
+    **切的是机位，不是内容。** 一句十五秒的台词没法缩短，能做的是
+    换角度覆盖它：说话人正面、听者反应、手部特写。这是剪辑里
+    「coverage」本来的意思，不是把台词砍掉。
+
+    平均分而不是「切满五秒再留个零头」—— 后者会留下一个一秒的尾巴，
+    剪在一起像卡了一下。
+    """
+    if dur <= cap:
+        return [max(dur, _SHOT_MIN_MS)]
+    n = -(-dur // cap)
+    base, extra = divmod(dur, n)
+    return [max(base + (1 if i < extra else 0), _SHOT_MIN_MS) for i in range(n)]
 
 
 def _chunk_scene(

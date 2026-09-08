@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import inspect
 from pathlib import Path
 
@@ -227,3 +229,59 @@ class TestSpeakerMustBeOnScreen:
         src = inspect.getsource(shot_plan.build_shot_plan)
         gate = src[src.index("for b in shot_blocks:"):][:400]
         assert "is not BlockType.dialogue" in gate and "continue" in gate
+
+
+class TestCoverageSplit:
+    """一镜超过五秒就切机位。
+
+    一个画面停五秒以上观众会觉得卡住；首尾帧插值本身也撑不住更长 ——
+    超过五秒开始变慢动作糊影。坏蛋第一章实测 143 镜里 27 个超过 10 秒，
+    最长 37 秒。
+
+    **切的是机位，不是内容。** 一句十五秒的台词没法缩短，能做的是换角度
+    覆盖它：说话人正面、听者反应、手部特写。这是剪辑里 coverage 的本意。
+    """
+
+    @pytest.mark.parametrize("dur", [1200, 3000, 4999, 5000])
+    def test_short_shots_are_left_alone(self, dur):
+        from app.pipelines.shot_plan import _coverage_slices
+
+        assert _coverage_slices(dur) == [dur]
+
+    @pytest.mark.parametrize("dur", [7300, 13700, 37380, 60000])
+    def test_long_shots_all_land_in_range(self, dur):
+        from app.pipelines.shot_plan import _SHOT_MAX_MS, _coverage_slices
+
+        got = _coverage_slices(dur)
+        assert len(got) > 1
+        assert all(x <= _SHOT_MAX_MS for x in got), got
+
+    def test_total_duration_is_preserved(self):
+        """切机位不该改变这一段占的时间 —— 时间轴要对得上配音。"""
+        from app.pipelines.shot_plan import _coverage_slices
+
+        for dur in (7300, 13700, 37380):
+            assert sum(_coverage_slices(dur)) == dur
+
+    def test_slices_are_even(self):
+        """「切满五秒再留个零头」会留下一秒的尾巴，剪在一起像卡了一下。"""
+        from app.pipelines.shot_plan import _coverage_slices
+
+        got = _coverage_slices(37380)
+        assert max(got) - min(got) <= 1
+
+    def test_the_split_is_reported(self):
+        """剪的人要知道哪几个镜头本来是一条，
+        才不会当成连续动作去接。"""
+        from app.pipelines.shot_plan import ShotPlanResult
+
+        assert "split_for_length" in ShotPlanResult().as_dict()
+
+    def test_build_uses_the_splitter(self):
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan.build_shot_plan)
+        assert "_coverage_slices(span)" in src
+        assert "for slice_idx, dur in enumerate(slices)" in src
