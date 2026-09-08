@@ -610,13 +610,17 @@ class TestFailoverOnUnreachable:
     报出来是一串「连不上」，看着像网络问题，实际是没人替它换条路。
     """
 
-    def test_transport_error_also_triggers_failover(self):
+    def test_unreachable_shapes_all_trigger_failover(self):
+        """机器关着时连接不会被立刻拒绝，而是一路等到 socket 超时
+        （实测 75 秒，Errno 60）—— 映射出来是 UPSTREAM_TIMEOUT
+        而不是 TRANSPORT_ERROR。只认后者的话这一支永远走不到。"""
         import inspect
 
         from app.capability import service
 
         src = inspect.getsource(service.submit_task)
         assert "CapErrorCode.TRANSPORT_ERROR.value" in src
+        assert "CapErrorCode.UPSTREAM_TIMEOUT.value" in src
 
     def test_other_errors_do_not_trigger_it(self):
         """参数错换条路由还是参数错，只是把同一个错在每条路上撞一遍。"""

@@ -199,8 +199,16 @@ def submit_task(
         # 显卡机器重启、WebUI 崩了、IP 变了。这时首选路由每次都
         # TRANSPORT_ERROR，而备用路由明明可用 —— 整批就这么全失败，
         # 报出来是一串「连不上」，看着像网络问题，实际是没人替它换条路。
+        # 超时也算。机器**关着**的时候连接不会被立刻拒绝，而是一路等到
+        # socket 超时（实测 75 秒，Errno 60）—— 映射出来是 UPSTREAM_TIMEOUT
+        # 而不是 TRANSPORT_ERROR，只认后者的话这一支永远走不到。
+        #
+        # 权衡：超时也可能只是「这条路由慢」，那样转移就把活挪给了备用路由。
+        # 可以接受 —— 备用路由要么免费，要么是人逐条批准过的付费路由，
+        # 不存在「悄悄花钱」那种情况。而不转移的代价是整批全失败。
         if pinned or exc_code not in (CapErrorCode.QUOTA_EXCEEDED.value,
-                                      CapErrorCode.TRANSPORT_ERROR.value):
+                                      CapErrorCode.TRANSPORT_ERROR.value,
+                                      CapErrorCode.UPSTREAM_TIMEOUT.value):
             return None
         nxt = _next_ok_route(_tried | {route.key})
         if nxt is None:
