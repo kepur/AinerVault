@@ -343,6 +343,40 @@ def build_handoff(
         entities = {e.id: e for e in db.execute(
             select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)).scalars()}
 
+    # **画面里的人叫什么，由译本说了算。**
+    # 手搓的人拿着这段文字去网页版出图，看到的却是「谢文东」——
+    # 而台词里说话的是 Thomas Ashford，参考图文件名也是译名。
+    # 目标圈层换成日语时这里自然就是日文名，不用另写一套。
+    from app.models import EntityWorldName
+
+    target_name: dict[str, str] = {}
+    if plan.transform_id:
+        target_name = {
+            n.entity_id: n.target_name
+            for n in db.execute(select(EntityWorldName).where(
+                EntityWorldName.transform_id == plan.transform_id)).scalars()
+            if n.target_name
+        }
+    #: 参考图的 tag 写的是原名（character.谢文东），按显示名回查译名
+    name_by_display = {
+        e.display_name: target_name.get(eid)
+        for eid, e in entities.items() if target_name.get(eid)
+    }
+
+    # 素材包里**真实存在**的场景素材。
+    # 分镜模型会自己编 asset_key（实跑：scene_corridor_90s），
+    # 而素材包里叫 location.school_corridor_1f —— 对不上就没有场景参考，
+    # 同一场次的几十镜于是各画各的教室。编出来的 key 只被 missing_assets
+    # 报一句，没有任何一处把它对回去。
+    from app.models import AssetSpec
+
+    real_scenes = [
+        f"{sp.canonical_key}（{sp.display_name}）"
+        for sp in db.execute(select(AssetSpec).where(
+            AssetSpec.novel_id == chapter.novel_id,
+            AssetSpec.kind == "location")).scalars()
+    ] if chapter else []
+
     assets = _assets(db, [
         *(f.asset_id for d in frames.values() for f in d.values()),
         *(a.asset_id for lst in audio_shot.values() for a in lst),
@@ -368,31 +402,43 @@ def build_handoff(
         first = pair.get(FrameRole.first.value)
         last = pair.get(FrameRole.last.value)
         first_url = _url(assets, first)
-        last_url = _url(assets, last)
+        last_url = (None if (shot.camera_json or {}).get("frame_mode") == "first_only"
+                    else _url(assets, last))
         scene = scenes.get(shot.scene_id or "")
         detail = _detail(shot, scene, perfs.get(shot.id, []), motions.get(shot.id),
-                         crew.get(shot.id, {}), entities)
+                         crew.get(shot.id, {}), entities, target_name)
         label = (shot.description or "").strip() or f"镜 {shot.order_no}"
 
         for role, frame, url, track in (
             ("first", first, first_url, "frame_first"),
             ("last", last, last_url, "frame_last"),
         ):
+            if role == "last" and (shot.camera_json or {}).get("frame_mode") == "first_only":
+                continue
             prompt = (frame.prompt if frame else "") or ""
             if not prompt:
                 gaps.append({"track": track, "shot": shot.order_no,
                              "why": "没有提示词" if frame is None else "提示词为空",
                              "fix": "在「剧本转换」重新拼帧，或到「分镜调度」补表演"})
+            frame_refs = _refs(frame, entities, assets, db, name_by_display)
+            miss_scene = ""
+            if not any(r.get("role") == "scene" for r in frame_refs) and real_scenes:
+                miss_scene = ("这一镜没有场景参考图 —— 请自己上传背景。"
+                              f"素材包里可用：{'；'.join(real_scenes)}")
             clips[track].append(_clip(
                 track, shot, cursor, shot.duration_ms, label, url,
                 copy=format_image(prompt, (frame.negative_prompt if frame else "") or "",
-                                  target=target, aspect=aspect),
+                                  target=target, aspect=aspect)
+                     + _ref_block(frame_refs, cn=False,
+                                  missing_scene=miss_scene),
                 copy_cn=compose_image_cn(
                     shot.description or "", detail.get("人物") or [],
                     cn_sheets.get(shot.id, {}), aspect=aspect,
-                    negative=_cn_negative(frame)),
+                    negative=_cn_negative(frame))
+                     + _ref_block(frame_refs, cn=True,
+                                  missing_scene=miss_scene),
                 detail=detail,
-                refs=_refs(frame, entities, assets, db),
+                refs=frame_refs,
             ))
 
         motion = motions.get(shot.id)
@@ -580,7 +626,8 @@ def _clip(track: str, shot: Shot, start: int, dur: int, label: str,
 
 def _detail(shot: Shot, scene: Scene | None, perfs: Sequence[ShotPerformance],
             motion: ShotMotion | None, sheets: dict[str, CrewSheet],
-            entities: dict[str, WorldEntity]) -> dict[str, Any]:
+            entities: dict[str, WorldEntity],
+            names: dict[str, str] | None = None) -> dict[str, Any]:
     """一格展开后能看到的全部上下文。
 
     用户手搓时的实际动作是「找这一镜对应的人物、位置、光影、美术……」——
@@ -595,7 +642,12 @@ def _detail(shot: Shot, scene: Scene | None, perfs: Sequence[ShotPerformance],
         ent = entities.get(p.entity_id)
         en = p.en_json or {}
         people.append({
-            "角色": ent.display_name if ent else p.entity_id,
+            # 译名在前 —— 这一段会进 copy_cn，而同一份文字里的台词、
+            # 参考图名字全是译名；只写原名的话人得自己对着两套名字读
+            "角色": ((names or {}).get(p.entity_id)
+                   or (ent.display_name if ent else p.entity_id)),
+            "原名": (ent.display_name
+                   if ent and (names or {}).get(p.entity_id) else None),
             "站位": getattr(p.position, "value", p.position),
             "朝向": getattr(p.facing, "value", p.facing),
             "视线": p.gaze_target,
@@ -664,8 +716,26 @@ def _camera_text(shot: Shot) -> str:
     return ", ".join(bits)
 
 
+#: 参考图角色 → 人话。手搓的人要知道这一张是**什么**，不是它的内部角色名
+_REF_ROLE_CN = {"style": "画风", "scene": "场景", "character": "人物",
+                "costume": "服装", "prop": "道具", "asset": "素材"}
+
+
+def _ref_name(role: str, tag: str, name_by_display: dict[str, str]) -> str:
+    """这一张参考图给人看的名字。
+
+    人物用译名 —— tag 里存的是原名（character.谢文东），而手搓的人
+    对着的是一份全是译名的提示词。
+    """
+    bare = (tag or "").split(".", 1)[-1] if tag else ""
+    if role == "character":
+        return name_by_display.get(bare) or bare or "人物"
+    return bare or _REF_ROLE_CN.get(role, role or "素材")
+
+
 def _refs(frame: FrameSpec | None, entities: dict[str, WorldEntity],
-          assets: dict[str, Asset], db: Session) -> list[dict[str, Any]]:
+          assets: dict[str, Asset], db: Session,
+          name_by_display: dict[str, str] | None = None) -> list[dict[str, Any]]:
     """这一格手搓时要上传哪些参考图。
 
     只列真拿得到地址的 —— 列一个取不到的文件名，人会去找、找不到、
@@ -673,17 +743,47 @@ def _refs(frame: FrameSpec | None, entities: dict[str, WorldEntity],
     """
     if frame is None:
         return []
+    names = name_by_display or {}
     out: list[dict[str, Any]] = []
     for item in as_items(frame.params_json or {}, "reference_images"):
         url = ((item.get("ref") or {}) if isinstance(item.get("ref"), dict) else {}).get("url")
         if not url:
             continue
-        out.append({"role": item.get("role"), "tag": item.get("tag"), "url": url})
+        role = str(item.get("role") or "")
+        tag = str(item.get("tag") or "")
+        out.append({"role": role, "tag": tag, "url": url,
+                    "name": _ref_name(role, tag, names),
+                    "kind_cn": _REF_ROLE_CN.get(role, role)})
     for aid in frame.ref_asset_ids or []:
         asset = assets.get(aid) or db.get(Asset, aid)
         if asset and asset.url:
-            out.append({"role": "asset", "tag": None, "url": asset.url})
+            out.append({"role": "asset", "tag": None, "url": asset.url,
+                        "name": "素材", "kind_cn": "素材"})
     return out
+
+
+def _ref_block(refs: list[dict[str, Any]], *, cn: bool,
+               missing_scene: str = "") -> str:
+    """把「要上传哪几张、按什么顺序」写进可复制的正文。
+
+    从前这些只在页面上显示成一排角色标签（style scene character），
+    复制出去就没了 —— 人把提示词贴进网页版出图工具，然后得回来
+    一张一张对着标签猜该传哪张图。**顺序也重要**：多数工具把第一张
+    当主参考。
+    """
+    if not refs and not missing_scene:
+        return ""
+    head = ("参考图（按此顺序上传）：" if cn
+            else "REFERENCE IMAGES (upload in this order):")
+    lines = [f"  {i}. [{r.get('kind_cn') if cn else (r.get('role') or '')}] "
+             f"{r.get('name') or ''}"
+             for i, r in enumerate(refs, 1)]
+    # **缺场景要说出来。** 同一个场次的几十镜要共用一张背景，
+    # 少了它每镜的教室都长得不一样 —— 而这里不写的话，
+    # 手搓的人只会看到一份「人物 + 画风」的清单，以为本来就没有场景。
+    if missing_scene:
+        lines.append(f"  ⚠ {missing_scene}" if cn else f"  ! {missing_scene}")
+    return "\n\n" + head + "\n" + "\n".join(lines)
 
 
 def _resources(db: Session, shots: Sequence[Shot],
