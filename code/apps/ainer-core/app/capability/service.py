@@ -549,6 +549,16 @@ def _attach_to_ref(
             if frame is not None and _supersedes(db, frame, task):
                 frame.asset_id = assets[0].id
                 frame.status = SpecStatus.ready
+                # **「这张图旧了」的标记要在产物落地时清，不是提交时清。**
+                # 提交那边写的是 `if task.status == succeeded`，只有同步
+                # 供应商才走得到 —— 本地 FLUX 是异步的，提交时返回
+                # submitted，于是标记永远清不掉。
+                #
+                # 实跑的样子：八镜十六帧刚出完就全被判成「旧图」，尾帧
+                # 被永久卡住，而报错写的是「首帧还没生成」（首帧明明有图）。
+                # 图是新的，只是没人把那张便签撕下来。
+                frame.params_json = {**(frame.params_json or {}),
+                                     "needs_regeneration": False}
         elif ref_kind == "shot":
             # **分镜视频也要接线。** 这一支从前不存在：视频任务提交成功、
             # 文件也出来了、产物登记也对，只有 Shot.video_asset_id 一直是空。
