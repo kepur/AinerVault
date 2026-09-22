@@ -156,6 +156,26 @@ def demonym(profile: WorldProfile) -> str:
     return _DEMONYM.get(str((profile.axes_json or {}).get("region") or "").upper(), "")
 
 
+def cast_look(profile: WorldProfile) -> str:
+    """出图时补在人物前面的**选角相貌**，一句话。
+
+    抽取那一步刻意把族裔从不变项里剥干净了（提示词原话：「不要写族裔词，
+    不要写肤色，也不要沿用带族裔的骨相」「族裔由目标圈层统一决定，
+    在出图那一步补上」）—— 这里就是「那一步」。
+
+    从前这里只补一个国籍词 American。**国籍不是长相**：不变项里剩下的
+    骨相（small eyes、prominent cheekbones、flat features）是原著人物的，
+    比 American 具体得多，模型听具体的那个，于是美国背景配一屋子东亚脸。
+
+    默认仍只给国籍 —— 代码不替任何作品决定它的人长什么样。
+    要写死的话写在档案的 visual_json.cast_look 上，那是编辑决定，不是代码常量。
+    """
+    # getattr 而不是直接取属性：这个函数拿到的不一定是完整的 ORM 对象
+    look = str((getattr(profile, "visual_json", None) or {}).get("cast_look")
+               or "").strip()
+    return look or demonym(profile)
+
+
 def era_phrase(profile: WorldProfile) -> str:
     """圈层 → 一句英文的年代族裔。
 
@@ -462,10 +482,11 @@ def compose_anchor_prompt(epoch: AssetEpoch,
     # 贴在性别词前面就成了「late 19th century Russian man」，
     # 模型把地域读成人种，于是不变项里写着 monolid eyes 的少年
     # 出成了一个白人。人先说完，再说他站在什么年代的什么城市。
-    # 族裔贴在性别词上：American man / American woman。
-    # 这是**本地化的一部分**，跟货币场所一样 —— 不写的话模型照着
-    # 原文的中文外貌描述画，出来一屋子中国脸配着 Thomas 这种名字。
-    who = demonym(profile) if profile is not None else ""
+    # 相貌贴在性别词上：American man / white American man / …
+    # 这是**本地化的一部分**，跟货币场所一样。具体写到什么程度由档案
+    # 的 visual_json.cast_look 决定 —— 只写国籍时模型会照着不变项里
+    # 剩下的骨相画，而那些骨相是原著人物的。
+    who = cast_look(profile) if profile is not None else ""
     person = " ".join(x for x in (who, noun) if x)
     parts = [p for p in (age, person, en, era) if p]
     return ", ".join(parts) + ", " + ANCHOR_FRAMING

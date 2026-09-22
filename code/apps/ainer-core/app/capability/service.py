@@ -5,6 +5,8 @@ gen_tasks 表本身就是任务状态源；回调直接改表，不需要额外�
 from __future__ import annotations
 
 import logging
+
+import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -38,6 +40,10 @@ _STATE_MAP: dict[TaskState, TaskStatus] = {
 }
 
 #: 结果里的媒体字段 → 资产类型
+#: 上游没给 mime 时按产物类型兜一个 —— sniff 还会再纠一次
+_MIME_FALLBACK = {AssetKind.image: "image/png", AssetKind.audio: "audio/wav",
+                  AssetKind.video: "video/mp4"}
+
 _OUTPUT_ASSET_FIELDS: tuple[tuple[str, AssetKind, bool], ...] = (
     ("images", AssetKind.image, True),
     ("audio", AssetKind.audio, False),
@@ -414,6 +420,41 @@ def apply_task_result(db: Session, task: GenTask, result: Task) -> GenTask:
     return task
 
 
+def _localize(item: dict[str, Any], kind: AssetKind) -> dict[str, Any]:
+    """把上游产物取回本库，返回改写过地址的描述。
+
+    **中间层返回的是它自己盘上的地址。** 本机绘图工作台给的是
+    http://127.0.0.1:7999/api/image?f=…，指向它的 outputs 暂存目录 ——
+    那个目录会被清。清了之后库里全是死链，而且不报错，只是图打不开，
+    再往前追要翻到几周前的某次清理。
+
+    215 镜 × 两帧 + 视频 + 音频都挂在上面，重跑一遍的代价远大于现在存一份。
+
+    取不回来时**保留原地址**并记一条警告 —— 丢掉产物比死链更糟。
+    """
+    from app.capability.mediastore import store_bytes
+
+    url = str(item.get("url") or "")
+    if not url or "/media/" in url:
+        return item                      # 已经是本库的地址
+    try:
+        with httpx.Client(follow_redirects=True) as client:
+            resp = client.get(url, timeout=120)
+            resp.raise_for_status()
+            stored = store_bytes(resp.content,
+                                 mime=str(item.get("mime") or _MIME_FALLBACK[kind]))
+    except Exception as exc:             # noqa: BLE001 —— 什么原因都不该丢产物
+        log.warning("产物取回失败，先挂上游地址：%s（%s）", url, exc)
+        return item
+    out = dict(item)
+    out.update(url=stored["url"], sha256=stored["sha256"],
+               mime=stored["mime"], bytes=stored["bytes"])
+    meta = dict(out.get("meta") or {})
+    meta["source_url"] = url             # 留着原址，出问题时能对回上游
+    out["meta"] = meta
+    return out
+
+
 def _materialize_assets(db: Session, task: GenTask) -> list[Asset]:
     """把 output 里的媒体登记为 assets。按 gen_task_id + url 去重。"""
     output = task.result_json or {}
@@ -434,6 +475,9 @@ def _materialize_assets(db: Session, task: GenTask) -> list[Asset]:
         for item in items:
             if not isinstance(item, dict) or not item.get("url"):
                 continue
+            if item["url"] in existing_urls:
+                continue
+            item = _localize(item, kind)
             if item["url"] in existing_urls:
                 continue
             asset = Asset(
