@@ -641,3 +641,32 @@ def _next_step(pack: dict, firsts: list, lasts: list) -> str:
     if any(not f.asset_id for f in lasts):
         return "从首帧派生尾帧"
     return "首尾帧已就绪，可出片段"
+
+
+class SampleIn(BaseModel):
+    target_ms: int = Field(default=30_000, ge=1000, le=30_000)
+    start_order: int = Field(default=1, ge=1)
+
+
+@router.post("/shot-plans/{plan_id}/sample")
+def create_sample(plan_id: str, body: SampleIn, db: Session = Depends(get_db)) -> dict:
+    from app.pipelines.sample import create_sample as create
+    try:
+        return create(db, _plan(db, plan_id), body.target_ms, body.start_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class FrameModeIn(BaseModel):
+    mode: str = Field(pattern="^(first_only|first_last)$")
+
+
+@router.patch("/shots/{shot_id}/frame-mode")
+def frame_mode(shot_id: str, body: FrameModeIn, db: Session = Depends(get_db)) -> dict:
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise HTTPException(404, "shot not found")
+    shot.camera_json = {**(shot.camera_json or {}), "frame_mode": body.mode}
+    shot.edited_by_human = True
+    db.flush()
+    return {"shot_id": shot.id, "mode": body.mode}

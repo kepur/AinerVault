@@ -59,7 +59,22 @@ AUDIO_DURATION_MS: dict[str, int] = {
     AssetKindSpec.room_tone.value: 20000,
 }
 
+def _wide() -> tuple[int, int]:
+    """场景类素材的宽幅尺寸，跟着全局档位走。"""
+    from app.pipelines.frame_compose import _size_for
+    return _size_for("16:9")
+
+
+def _square() -> tuple[int, int]:
+    """服装道具的方图。短边跟着全局档位 —— 不然素材比帧还大，
+    白等一倍的时间，而它只是被缩小了贴进去。"""
+    from app.config import get_settings
+    n = 512 if int(get_settings().render_short_side) <= 480 else 1024
+    return (n, n)
+
+
 #: 各类素材的参考图尺寸。场景要宽，服装道具要方。
+#: 具体像素由全局档位决定，见 _wide / _square
 KIND_SIZE: dict[str, tuple[int, int]] = {
     AssetKindSpec.style.value: (1280, 720),
     AssetKindSpec.location.value: (1280, 720),
@@ -326,7 +341,10 @@ def generate_refs(
             continue
 
         positive, negative = compose_ref_prompt(spec, variant, profile)
-        width, height = KIND_SIZE.get(spec.kind.value, (1024, 1024))
+        # 宽幅还是方图看类别，具体像素跟全局档位 —— 素材不该比帧还大，
+        # 大了只是白等一倍的时间，贴进画面时照样被缩小
+        _w, _h = KIND_SIZE.get(spec.kind.value, (1024, 1024))
+        width, height = _wide() if _w != _h else _square()
 
         refs: list[dict[str, Any]] = []
         if spec.kind != AssetKindSpec.style:

@@ -343,7 +343,7 @@ MOTION_SCHEMA: dict[str, Any] = {
                  "subject_move_en", "secondary_motion_en",
                  "physics_constraints_en", "lighting_change_en",
                  "facial_change_en", "continuity_constraints_en",
-                 "pacing_en", "deltas_en"],
+                 "pacing_en", "deltas_en", "action_ms"],
     "properties": {
         "start_frame": {"type": "string"},
         "end_frame": {"type": "string"},
@@ -356,6 +356,8 @@ MOTION_SCHEMA: dict[str, Any] = {
         "continuity_constraints": {"type": "string"},
         "pacing": {"type": "string"},
         "deltas": {"type": "array", "items": {"type": "string"}},
+        # 这个动作在现实里要多久。**由你判断，不按镜头时长摊**
+        "action_ms": {"type": "integer", "minimum": 400, "maximum": 8000},
         # 英文那一份**直接交给视频模型**。视频模型与图像模型一样不认中文
         "start_frame_en": {"type": "string"},
         "end_frame_en": {"type": "string"},
@@ -384,6 +386,13 @@ MOTION_SYSTEM = """你是动作导演、场记与动画指导。你要写清这�
   camera_move  相机怎么动。**静止也要明写「机位固定」** ——
                不写，视频模型会自己加运动
   subject_move 主体怎么动
+  action_ms    **这个动作在现实里要多少毫秒**。按动作本身判，不要按镜头
+               时长摊 —— 视频模型拿到多长就把动作铺满多长，一记耳光
+               摊到五秒就成了慢动作，而观众一眼看得出那不对。
+               参考：一记耳光 600–1200；迈一步、抬手、转头 800–1500；
+               推门而入、从坐到站 1500–2500；走过一段走廊、长镜头对峙
+               3000–6000。首尾帧差别越大、位移越长，数值越大。
+               只有嘴在动的对话镜，按说完那句话的时间给。
   secondary_motion 衣摆、头发、烟雾、雨、尘土、道具的跟随运动与滞后。
                    没有就明写哪些保持静止，不让模型自加风与粒子
   physics_constraints 脚与地面的受力、重心转移、手与道具的接触、惯性与遍历路径
@@ -537,6 +546,10 @@ def generate_motion(
         row.camera_move = as_text(data.get("camera_move"))[:1000] or None
         row.subject_move = as_text(data.get("subject_move"))[:1000] or None
         row.pacing = as_text(data.get("pacing"))[:128] or None
+        try:
+            row.action_ms = max(400, min(8000, int(data.get("action_ms") or 0))) or None
+        except (TypeError, ValueError):
+            row.action_ms = None
         deltas = [d for d in (as_text(x) for x in (data.get("deltas") or [])) if d]
         row.deltas_json = deltas or None
         row.start_frame_en = _en_only(data.get("start_frame_en"))[:2000] or None

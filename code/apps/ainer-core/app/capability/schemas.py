@@ -178,6 +178,17 @@ class Task(BaseModel):
     submitted_at: str | None = None
     finished_at: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_warnings(cls, value):
+        if isinstance(value, dict) and value.get("warnings"):
+            value = dict(value)
+            output = dict(value.get("output") or {})
+            output["warnings"] = list(dict.fromkeys(
+                [*(output.get("warnings") or []), *value.pop("warnings")]))
+            value["output"] = output
+        return value
+
     @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_STATES

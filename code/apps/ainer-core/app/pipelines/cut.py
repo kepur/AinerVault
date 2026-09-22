@@ -214,7 +214,8 @@ def build_timeline(
         first = pair.get(FrameRole.first.value)
         last = pair.get(FrameRole.last.value)
         first_url = _url(assets, first)
-        last_url = _url(assets, last)
+        last_url = (None if (shot.camera_json or {}).get("frame_mode") == "first_only"
+                    else _url(assets, last))
         video_url = _url_by_id(assets, shot.video_asset_id)
 
         if not (video_url or first_url):
@@ -228,6 +229,12 @@ def build_timeline(
         # 缺图会黑屏（看得出来），缺变化只是「有点闷」（看不出原因）。
         vis_ok, vis_why = sp.is_visible_change(
             last.derive_instruction if last else None)
+        if (shot.camera_json or {}).get("frame_mode") == "first_only":
+            camera = (motions.get(shot.id).camera_move or "") if motions.get(shot.id) else ""
+            # A single reference may support a planned camera move; it does not
+            # need a second generated still to prove that move exists.
+            vis_ok = bool(re.search(r"dolly|push.in|downward tilt|slow pan|lateral arc|推进|推近|横摇|下移", camera, re.I))
+            vis_why = "单首帧模式需要明确的连续运镜"
         if not vis_ok:
             still_shots.append({
                 "shot": shot.order_no,
@@ -456,6 +463,9 @@ def build_timeline(
                 soundscape_gaps.append(f"场 {scene_id[-6:]} 的{label}制作单尚未编译")
 
     pace = runtime_window(chapter.content if chapter else "")
+    if (plan.config_json or {}).get("sample"):
+        pace = {"source_units": 0, "min_ms": 1,
+                "max_ms": (plan.config_json or {}).get("target_duration_ms", 30_000)}
     blockers: list[str] = []
     if placeholder_shots:
         blockers.append(f"{len(placeholder_shots)} 镜还在用静帧或黑屏代替动态视频")
@@ -616,7 +626,7 @@ def _local(url: str | None) -> Path | None:
 
 
 def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
-           width: int = 1280, height: int = 720, fps: int = 24,
+           width: int | None = None, height: int | None = None, fps: int = 24,
            timeout_sec: int = 900) -> dict[str, Any]:
     """把时间线渲成一支 mp4。
 
@@ -624,8 +634,16 @@ def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
     **静止两张图也远比黑屏有用**，而且一眼看得出这一镜还没出视频。
     声音按轨道混合，各轨音量固定（对白 0dB、音效 -6dB、环境声 -18dB、
     配乐 -20dB）—— 那是配音压过底噪的常规比例，不是随手定的。
+
+    不传尺寸就跟全局档位走 —— 素材是 832×480 而成片按 1280×720 渲，
+    等于把每一帧放大一遍，糊，且白花时间。
     """
     from app.capability.mediastore import media_root, store_bytes
+    from app.pipelines.frame_compose import _size_for
+
+    if width is None or height is None:
+        width, height = _size_for(
+            (plan.config_json or {}).get("aspect_ratio") or "16:9")
 
     if not ffmpeg_available():
         raise RuntimeError("这台机器上没有 ffmpeg，无法导出成片")
@@ -648,9 +666,16 @@ def render(db: Session, plan: ShotPlan, *, voiceover: bool = False,
             first = _local(c.get("first_url"))
             last = _local(c.get("last_url"))
             if vid:
-                cmd = ["ffmpeg", "-y", "-i", str(vid), "-t", f"{secs:.3f}",
+                # **不足镜头槽的部分定格补足。**
+                # 视频按动作的自然长度出（耳光 0.8 秒），而镜头槽可能是
+                # 5 秒。只用 -t 截取的话这一段就只有 0.8 秒，后面每一镜
+                # 连同声音一起往前错位 —— 而错位不会报错，只是嘴型对不上。
+                # tpad 把最后一帧持续到槽满：定格远好过把动作拉成慢动作。
+                cmd = ["ffmpeg", "-y", "-i", str(vid),
                        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-                              f"crop={width}:{height},fps={fps}",
+                              f"crop={width}:{height},fps={fps},"
+                              f"tpad=stop_mode=clone:stop_duration={secs:.3f}",
+                       "-t", f"{secs:.3f}",
                        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(seg)]
             elif first and last:
                 # 首帧慢慢化到尾帧：这一镜的「变化」是有的，只是还没出视频
@@ -861,7 +886,7 @@ def generate_videos(
         if not a:
             skipped.append({"shot": shot.order_no, "why": "没有首帧"})
             continue
-        if not b:
+        if not b and (shot.camera_json or {}).get("frame_mode") != "first_only":
             # 只有首帧也能出，但那是「从一张图生一段运动」，
             # 模型自己编运动 —— 与分镜算好的首尾差异无关，说清楚
             skipped.append({"shot": shot.order_no,
@@ -897,17 +922,32 @@ def generate_videos(
         revision = _production_revision(prompts, motion)
         if any(
             (frame.params_json or {}).get("production_revision") != revision
-            for frame in (pair[FrameRole.first.value], pair[FrameRole.last.value])
+            for frame in ([pair[FrameRole.first.value]] if
+                          (shot.camera_json or {}).get("frame_mode") == "first_only" else
+                          [pair[FrameRole.first.value], pair[FrameRole.last.value]])
         ):
             skipped.append({
                 "shot": shot.order_no,
                 "why": "首尾帧提示词早于最新制作单；请重新绑定拼装并出帧",
             })
             continue
-        action = sp.is_action_beat(
-            shot.description, motion.subject_move)
-        cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
-        todo.append((shot, a, b, min(shot.duration_ms, cap)))
+        # **时长按动作本身给，不按镜头槽摊。**
+        # i2v 拿到多长就把动作铺满多长：一记耳光本来 0.8 秒，摊到 5 秒
+        # 就是慢动作，而观众一眼看得出那不对。
+        #
+        # 从前是 min(镜头时长, 动作镜 2s / 对话镜 8s)，而「是不是动作镜」
+        # 靠关键词猜 —— 猜不中就按 8 秒上限走，于是一批镜头全是慢动作。
+        # 动作导演在写运动时本来就在判断这个动作怎么发生，让它一并给时长。
+        #
+        # 比镜头槽短的部分在渲染时定格补足；定格远好过慢动作。
+        natural = getattr(motion, "action_ms", None)
+        if natural:
+            dur = max(400, min(int(natural), shot.duration_ms))
+        else:
+            action = sp.is_action_beat(shot.description, motion.subject_move)
+            cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
+            dur = min(shot.duration_ms, cap)
+        todo.append((shot, a, b, dur))
 
     if limit:
         todo = todo[:limit]
@@ -918,10 +958,11 @@ def generate_videos(
         # 这里不再回落到只有一个运镜词的 prompt。上面的门禁保证了
         # 每支视频都有主动作、惯性、受力、光影、面部与连续性约束。
         prompt = motion.motion_prompt_en or ""
+        payload = {"first_frame": {"url": a}, "prompt": prompt, "duration_ms": dur}
+        if b and (shot.camera_json or {}).get("frame_mode") != "first_only":
+            payload["last_frame"] = {"url": b}
         task = submit_task(
-            db, Capability.video_i2v,
-            {"first_frame": {"url": a}, "last_frame": {"url": b},
-             "prompt": prompt, "duration_ms": dur},
+            db, Capability.video_i2v, payload,
             purpose="shot_video", ref_kind="shot", ref_id=shot.id,
             novel_id=chapter.novel_id if chapter else None,
             chapter_id=chapter.id if chapter else None,

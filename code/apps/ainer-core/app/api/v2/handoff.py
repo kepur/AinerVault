@@ -154,6 +154,8 @@ def _attach_upload(
         frame.status = SpecStatus.ready
         # 人手搓的不该被下一次自动生成覆盖
         frame.edited_by_human = True
+        frame.gen_task_id = None
+        frame.params_json = {**(frame.params_json or {}), "needs_regeneration": False}
     db.flush()
     return {"file": filename, "ok": True, "shot": order_no, "role": role,
             "url": asset.url}
@@ -191,3 +193,58 @@ async def upload_handoff(
     db.flush()
     return {"attached": len(done), "failed": len(failed),
             "items": done, "problems": failed}
+
+
+@router.post("/shot-plans/{plan_id}/audio/{audio_id}:upload")
+async def upload_audio(plan_id: str, audio_id: str, file: UploadFile = File(...),
+                       db: Session = Depends(get_db)) -> dict:
+    """Attach a specific voice/cue; inspect real duration before altering the spec."""
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from app.models import AudioSpec, Shot, Asset, AssetKind, AssetSource
+    from app.capability.mediastore import store_bytes
+    _plan(plan_id, db)
+    spec = db.get(AudioSpec, audio_id)
+    shots = list(db.execute(select(Shot).where(Shot.shot_plan_id == plan_id)).scalars())
+    if spec is None or not (
+        spec.shot_id in {s.id for s in shots} or
+        (not spec.shot_id and spec.scene_id in {s.scene_id for s in shots if s.scene_id})
+    ):
+        raise HTTPException(404, "audio spec not in this plan")
+    raw = await file.read()
+    suffix = Path(file.filename or "").suffix.lower()
+    mime = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+            ".ogg": "audio/ogg"}.get(suffix)
+    if not raw or not mime:
+        raise HTTPException(422, "请上传 WAV、MP3、M4A 或 OGG 音频")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+            tmp.write(raw); tmp.flush()
+            info = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_streams", "-show_format",
+                "-of", "json", tmp.name], timeout=30))
+        if not any(s.get("codec_type") == "audio" for s in info.get("streams", [])):
+            raise ValueError("no audio stream")
+        duration = round(float(info["format"]["duration"]) * 1000)
+        if duration <= 0:
+            raise ValueError("invalid duration")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        raise HTTPException(422, "无法验证音频及其时长，请检查文件和 ffprobe") from exc
+    item = store_bytes(raw, mime=mime)
+    asset = db.execute(select(Asset).where(Asset.sha256 == item["sha256"])).scalars().first()
+    if asset is None:
+        asset = Asset(id=new_id("as"), kind=AssetKind.audio, source=AssetSource.uploaded,
+                      url=item["url"], sha256=item["sha256"], mime=item["mime"],
+                      bytes=item["bytes"], meta_json={"duration_ms": duration})
+        db.add(asset); db.flush()
+    spec.asset_id = asset.id
+    spec.duration_ms = duration
+    spec.timestamps_json = None
+    spec.gen_task_id = None
+    spec.status = SpecStatus.ready
+    spec.params_json = {**(spec.params_json or {}), "manual_upload": True,
+                        "stale_audio": False}
+    db.flush()
+    return {"id": spec.id, "url": asset.url, "duration_ms": duration}

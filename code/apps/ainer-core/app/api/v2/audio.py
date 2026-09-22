@@ -383,8 +383,10 @@ def compile_soundscape(plan_id: str, transform_id: str = Query(...),
 class RenderIn(BaseModel):
     #: 兼容旧客户端，但电影端点拒绝开启；完整旁白请走 audiobook API。
     voiceover: bool = False
-    width: int = 1280
-    height: int = 720
+    #: 不传就跟全局档位走（CORE_RENDER_SHORT_SIDE）——
+    #: 写死 1280×720 的话，素材降到 480 之后成片还在放大着渲
+    width: int | None = None
+    height: int | None = None
     fps: int = 24
     final: bool = False
 

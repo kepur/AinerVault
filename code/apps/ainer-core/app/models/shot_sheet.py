@@ -107,6 +107,10 @@ class ShotMotion(Base, StdMixin):
     subject_move: Mapped[str | None] = mapped_column(Text)
     #: 运动速度与节奏曲线（匀速／先慢后快／急停）
     pacing: Mapped[str | None] = mapped_column(String(128))
+    #: 这个动作在现实里要多久（毫秒），由动作导演判断。
+    #: **视频时长按它给，不按镜头时长摊** —— i2v 拿到多长就把动作
+    #: 铺满多长，一记耳光摊到五秒就是慢动作。
+    action_ms: Mapped[int | None] = mapped_column(Integer)
     #: 首尾之间**变化了什么**，逐项列出。
     #: 这是 i2i 的直接依据 —— 没有它，尾帧只能整张重画
     deltas_json: Mapped[list | None] = mapped_column(JSONB)
