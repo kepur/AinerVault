@@ -237,19 +237,21 @@ ANCHOR_NEGATIVE = (
 #: 顺序即优先级：额度有限时先出前三张，头肩像排在严格侧面之前 ——
 #: 特写比正侧面常见得多。
 CHARACTER_REFERENCE_VIEWS = (
-    "front", "three_quarter_left", "bust", "profile_left",
+    "front", "three_quarter_left", "bust", "profile_left", "back",
 )
 REFERENCE_VIEW_CN = {
     "front": "正面全身",
     "three_quarter_left": "左前四分之三",
     "bust": "头肩近景",
     "profile_left": "左侧面",
+    "back": "背面全身",
 }
 REFERENCE_REF_KINDS = {
     "front": "character_ref_front",
     "three_quarter_left": "character_ref_3q_left",
     "bust": "character_ref_bust",
     "profile_left": "character_ref_profile_left",
+    "back": "character_ref_back",
 }
 
 #: 引用头肩像的景别。特写与大特写画的是脸，全身参考帮不上忙
@@ -328,6 +330,9 @@ def compose_character_reference_prompt(
         angle = {
             "three_quarter_left": "a left three-quarter view (about 45 degrees)",
             "profile_left": "a strict left profile view (about 90 degrees)",
+            # 背面是设定集的常规一格：发型后部、衣服背面剪裁、背包挂件
+            # 只有这一格说得清，而这些在反打镜头里全会入画
+            "back": "a straight back view (about 180 degrees, facing away)",
         }[view]
         return (
             f"Rotate the exact same character from the input reference to {angle}. "
@@ -923,12 +928,108 @@ SHEET_LABELS = {
     "three_quarter_left": "3/4 LEFT",
     "profile_left": "PROFILE",
     "bust": "FACE",
+    "back": "BACK",
 }
 #: 拼图顺序。正面在最左 —— 它带着全身与服饰，是这一期的权威
-SHEET_ORDER = ("front", "three_quarter_left", "profile_left", "bust")
+SHEET_ORDER = ("front", "three_quarter_left", "profile_left", "back", "bust")
 _SHEET_H = 1152          # 每格统一高度
 _SHEET_PAD = 16
 _SHEET_BG = (200, 200, 202)   # 与各视角的中灰底一致，拼缝不显眼
+
+
+#: 设定面板的宽度。比一格视角窄 —— 它是说明，不是画面
+_SHEET_PANEL_W = 520
+#: 面板上按这个顺序摘不变项。挑的是「换个角度也不该变」的那几项
+_PANEL_FIELDS = (
+    ("体型", "build"), ("身高", "height"), ("年龄感", "age_look"),
+    ("气质", "bearing"), ("发型", "hair"), ("服装", "garments"),
+    ("随身", "carried"), ("疤痕特征", "scars"),
+)
+
+
+def _sheet_font(size: int):
+    """找一个能写中文的字体。找不到就用默认的 —— 面板难看好过没有。"""
+    from PIL import ImageFont
+
+    for path in ("/System/Library/Fonts/PingFang.ttc",
+                 "/System/Library/Fonts/STHeiti Medium.ttc",
+                 "/System/Library/Fonts/Helvetica.ttc"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:      # noqa: BLE001 —— 字体缺失不该让拼图失败
+            continue
+    return ImageFont.load_default()
+
+
+def _palette_of(img, n: int = 5) -> list[tuple[int, int, int]]:
+    """从正面图里取几个主色，作为这个人的配色条。
+
+    设定集上那一列色块不是装饰：**它是「这件外套到底是哪个蓝」的判据**。
+    人工核对时比一句 navy denim jacket 准得多。
+    """
+    small = img.convert("RGB").resize((64, 64))
+    quant = small.quantize(colors=max(2, n * 3), method=2).convert("RGB")
+    counts: dict[tuple[int, int, int], int] = {}
+    for px in quant.getdata():
+        counts[px] = counts.get(px, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+    out: list[tuple[int, int, int]] = []
+    for color, _ in ranked:
+        # 跳掉接近底色的灰 —— 那是棚拍背景，不是这个人的颜色
+        r, g, b = color
+        if abs(r - g) < 10 and abs(g - b) < 10 and 150 < r < 225:
+            continue
+        out.append(color)
+        if len(out) >= n:
+            break
+    return out or [c for c, _ in ranked[:n]]
+
+
+def _spec_panel(epoch: AssetEpoch, front_img, height: int, name: str):
+    """右侧的角色设定面板：名字、要点、配色条。"""
+    from PIL import Image, ImageDraw
+
+    panel = Image.new("RGB", (_SHEET_PANEL_W, height), (246, 246, 244))
+    d = ImageDraw.Draw(panel)
+    d.text((24, 22), name or "—", fill=(24, 24, 26), font=_sheet_font(40))
+    d.line([(24, 78), (_SHEET_PANEL_W - 24, 78)], fill=(206, 206, 204), width=2)
+
+    inv = dict(epoch.invariant_json or {})
+    var = dict(epoch.variant_json or {})
+    y = 100
+    f_key, f_val = _sheet_font(20), _sheet_font(22)
+    for label, key in _PANEL_FIELDS:
+        text = str(inv.get(key) or var.get(key) or "").strip()
+        if not text:
+            continue
+        d.text((24, y), label, fill=(126, 126, 130), font=f_key)
+        y += 26
+        # 手动折行：面板窄，长句必须断开，否则右边全裁掉
+        line, wrote = "", 0
+        for ch in text:
+            if d.textlength(line + ch, font=f_val) > _SHEET_PANEL_W - 52:
+                d.text((24, y), line, fill=(34, 34, 38), font=f_val)
+                y += 28; line = ch; wrote += 1
+                if wrote >= 3:     # 一项最多三行，面板要放得下八项
+                    line += "…"
+                    break
+            else:
+                line += ch
+        if line:
+            d.text((24, y), line, fill=(34, 34, 38), font=f_val)
+            y += 34
+        if y > height - 150:
+            break
+
+    if front_img is not None:
+        sw_y = height - 96
+        d.text((24, sw_y - 30), "配色", fill=(126, 126, 130), font=f_key)
+        x = 24
+        for color in _palette_of(front_img):
+            d.rectangle([x, sw_y, x + 56, sw_y + 56], fill=color,
+                        outline=(206, 206, 204))
+            x += 66
+    return panel
 
 
 def compose_reference_sheet(db: Session, epoch: AssetEpoch) -> str | None:
@@ -980,7 +1081,32 @@ def compose_reference_sheet(db: Session, epoch: AssetEpoch) -> str | None:
     if not tiles:
         return None
 
-    total_w = sum(t.width for _, t in tiles) + _SHEET_PAD * (len(tiles) + 1)
+    # 画面里的人叫什么由译本说了算 —— 设定图是给人看的，
+    # 而这本书从剧本到配音表用的都是译名
+    name = epoch.display_name or ""
+    try:
+        from app.models import EntityWorldName, TransformStatus, WorldTransform
+
+        ent = db.get(WorldEntity, epoch.entity_id) if epoch.entity_id else None
+        if ent is not None:
+            tf = db.execute(select(WorldTransform).where(
+                WorldTransform.novel_id == ent.novel_id,
+                WorldTransform.status == TransformStatus.active)).scalars().first()
+            if tf is not None:
+                wn = db.execute(select(EntityWorldName).where(
+                    EntityWorldName.entity_id == ent.id,
+                    EntityWorldName.transform_id == tf.id)).scalars().first()
+                if wn and wn.target_name:
+                    name = wn.target_name
+            name = name or ent.display_name
+    except Exception as exc:          # noqa: BLE001 —— 取不到名字不该让拼图失败
+        log.warning("设定图取译名失败：%s", exc)
+
+    front = next((t for k, t in tiles if k == "front"), None)
+    panel = _spec_panel(epoch, front, _SHEET_H, name)
+
+    total_w = (sum(t.width for _, t in tiles) + panel.width
+               + _SHEET_PAD * (len(tiles) + 2))
     sheet = Image.new("RGB", (total_w, _SHEET_H + _SHEET_PAD * 2), _SHEET_BG)
     draw = ImageDraw.Draw(sheet)
     x = _SHEET_PAD
@@ -989,6 +1115,7 @@ def compose_reference_sheet(db: Session, epoch: AssetEpoch) -> str | None:
         draw.text((x + 8, _SHEET_PAD + 6), SHEET_LABELS.get(key, key),
                   fill=(90, 90, 92))
         x += tile.width + _SHEET_PAD
+    sheet.paste(panel, (x, _SHEET_PAD))
 
     buf = BytesIO()
     sheet.save(buf, format="JPEG", quality=92)
