@@ -136,11 +136,11 @@ def _variant_index(
 def _asset_urls(db: Session, ids: Sequence[str]) -> list[str]:
     if not ids:
         return []
-    return [
-        u for u in db.execute(
-            select(Asset.url).where(Asset.id.in_(list(ids)))
-        ).scalars() if u
-    ]
+    assets = {a.id: a.url for a in db.execute(
+        select(Asset).where(Asset.id.in_(list(ids)))
+    ).scalars()}
+    return [assets[i] for i in ids if assets.get(i)]
+
 
 
 def _entity_look(
@@ -180,17 +180,13 @@ def _entity_look(
                 else compose_epoch_prompt(epoch, "character", has_anchor=True))
         text = text or compose_epoch_prompt(
             epoch, "character", has_anchor=bool(anchor))
-        refs = list(epoch.ref_asset_ids or [])
-        # 身份锚负责脸，三视角参考负责这一时期的身体/发型/衣着和准确朝向。
-        # 两者不是二选一；只留锚会回到灰底头肩像，只留全身参考又会弱化脸。
+        # Send individual views, never the contact sheet's layout.
         from app.pipelines.identity import character_reference_asset_id
-        # 景别一起传：特写要头肩像，给它一张侧身全身参考等于没给参考
         view_ref = character_reference_asset_id(epoch, facing, shot_size)
-        if anchor and anchor not in refs:
-            # 锚排最前：每个人物只取一张参考图，锚必须是那一张
-            refs.insert(0, anchor)
-        if view_ref and view_ref not in refs:
-            refs.insert(1 if anchor else 0, view_ref)
+        # The current period reference set is the character material selected
+        # for production. Mixing it with an older, independently generated
+        # identity portrait can introduce two different faces for one person.
+        refs = [view_ref] if view_ref else ([anchor] if anchor else [])
         if text:
             return text.strip(), refs
 
@@ -499,7 +495,7 @@ def compose_frame_prompt(
     location = next(
         (by_key[k] for k in asset_keys
          if k in by_key and by_key[k][0].kind == AssetKindSpec.location),
-        by_kind.get(AssetKindSpec.location.value),
+        None,
     )
     if location is not None:
         _spec, var = location
@@ -510,7 +506,22 @@ def compose_frame_prompt(
                          "tag": _spec.canonical_key})
 
     # ── 3 人物 ──
-    for eid in (frame.entity_ids_json or [])[:3]:
+    #
+    # **选角相貌要在这里也说一遍。**
+    # 抽取那一步把族裔从不变项里剥干净了（「族裔由目标圈层统一决定，
+    # 在出图那一步补上」），而「那一步」从前只有身份锚补了，分镜帧没补：
+    # 六千多字的首帧提示词里一个 American 都没有。
+    #
+    # 模型于是照着场景自己脑补 —— 学校走廊这段场景描述译自中文原著，
+    # 出来就是一屋子亚洲脸，而参考素材明明是白人。
+    # 「参考素材对、分镜不对」的全部原因就在这一句的缺席。
+    if frame.entity_ids_json:
+        from app.pipelines.identity import cast_look
+
+        who = cast_look(profile) if profile is not None else ""
+        if who:
+            positive.append(f"all characters are {who}")
+    for eid in (frame.entity_ids_json or []):
         entity = db.get(WorldEntity, eid)
         if entity is None:
             continue
@@ -549,7 +560,7 @@ def compose_frame_prompt(
         if var.negative_prompt:
             negative.append(var.negative_prompt.strip())
         for url in _asset_urls(db, var.ref_asset_ids or [])[:1]:
-            role = "character" if spec.kind == AssetKindSpec.costume else "scene"
+            role = "costume" if spec.kind == AssetKindSpec.costume else "prop"
             refs.append({"ref": {"url": url}, "role": role, "weight": 0.6,
                          "tag": spec.canonical_key})
 
@@ -612,6 +623,9 @@ def compose_frame_prompt(
     # 不挡的话模型会连同**版式**一起抄，出来一张分格设定图而不是一个镜头。
     negative.extend(["character sheet", "turnaround sheet", "contact sheet",
                      "multi-panel", "split screen", "collage", "grid layout"])
+    positive.append("One continuous cinematic frame, one camera viewpoint, no panels or borders. "
+                    "Use reference images only for identity, clothing and location, never their layout. "
+                    "Preserve the location geometry, doors, windows and lighting across this scene.")
     positive.append(cine.GRADE_ANCHOR)
 
     # **中文一个字都不能进图像提示词。** 图像模型不认中文 ——
@@ -631,7 +645,7 @@ def compose_frame_prompt(
             continue
         seen.add(tag)
         uniq_refs.append(r)
-    return pos, neg, uniq_refs[:4]
+    return pos, neg, uniq_refs
 
 
 def bind_and_compose(
@@ -664,6 +678,16 @@ def bind_and_compose(
 
     by_key, _ = _variant_index(db, novel_id, profile.id)
     result = ComposeResult()
+    # Resolve a location once per scene across the whole plan, including when
+    # composing only a later shot. Conflicting explicit locations stay visible.
+    scene_locations: dict[str, set[str]] = {}
+    for member, spec in db.execute(
+        select(Shot, FrameSpec).join(FrameSpec, FrameSpec.shot_id == Shot.id)
+        .where(Shot.shot_plan_id == plan.id)
+    ).all():
+        for key in (spec.params_json or {}).get("asset_keys", []):
+            if key in by_key and by_key[key][0].kind == AssetKindSpec.location:
+                scene_locations.setdefault(member.scene_id, set()).add(key)
 
     for shot in shots:
         scene = db.get(Scene, shot.scene_id) if shot.scene_id else None
@@ -683,7 +707,14 @@ def bind_and_compose(
         for frame in frames:
             if frame.edited_by_human:
                 continue
-            params = frame.params_json or {}
+            params = dict(frame.params_json or {})
+            keys = list(params.get("asset_keys") or [])
+            locations = scene_locations.get(shot.scene_id, set())
+            if len(locations) == 1 and not any(
+                k in by_key and by_key[k][0].kind == AssetKindSpec.location for k in keys
+            ):
+                params["asset_keys"] = keys + sorted(locations)
+                frame.params_json = params
             # asset_keys 是**字符串**列表（canonical_key），不是对象列表。
             # 用 as_items 取会把它们全滤掉 —— 于是 missing_assets 永远是空的，
             # 「缺素材」这道检查从来没真跑过，而它是分镜编译前最后一道闸
@@ -708,6 +739,8 @@ def bind_and_compose(
                 r["ref"]["url"] for r in refs if r.get("ref", {}).get("url")
             ]
             merged = dict(params)
+            if frame.asset_id and params.get("reference_images") != refs:
+                merged["needs_regeneration"] = True
             merged["reference_images"] = refs
             merged["production_revision"] = revision
             # 完整参考集是生成闸门，不是提示性徽章。一个镜头即使只用正脸，
@@ -822,6 +855,23 @@ def _plan_scope(db: Session, plan: ShotPlan) -> tuple[str | None, str | None]:
             chapter.id if chapter else None)
 
 
+def _continuity_anchor(db: Session, plan: ShotPlan, shot: Shot) -> Asset | None:
+    """Use an earlier finished frame from this plan and scene as the set anchor."""
+    if not shot.scene_id:
+        return None
+    rows = db.execute(select(FrameSpec).join(Shot, Shot.id == FrameSpec.shot_id).where(
+        Shot.shot_plan_id == plan.id, Shot.scene_id == shot.scene_id,
+        Shot.order_no < shot.order_no, FrameSpec.role == FrameRole.first,
+        FrameSpec.status == SpecStatus.ready, FrameSpec.asset_id.isnot(None),
+    ).order_by(Shot.order_no)).scalars()
+    for frame in rows:
+        if not (frame.params_json or {}).get("needs_regeneration"):
+            asset = db.get(Asset, frame.asset_id)
+            if asset and asset.url:
+                return asset
+    return None
+
+
 def generate_first_frames(
     db: Session, plan: ShotPlan, *, shot_ids: Sequence[str] | None = None,
     regenerate: bool = False, confirm_cost: bool = False,
@@ -841,7 +891,7 @@ def generate_first_frames(
     result = FrameGenResult()
     pending = []
     for frame, shot in rows:
-        if frame.asset_id and not regenerate:
+        if frame.asset_id and not regenerate and not (frame.params_json or {}).get("needs_regeneration"):
             result.skipped += 1
             continue
         if not frame.prompt:
@@ -889,7 +939,19 @@ def generate_first_frames(
         }
         refs = list(params.get("reference_images") or [])
         cap = Capability.image_t2i
-        anchor, refs = _split_identity_anchor(refs)
+        continuity = _continuity_anchor(db, plan, shot)
+        if continuity:
+            anchor = {"url": continuity.url}
+            # The established shot already contains the set and cast. Close
+            # coverage can explicitly use it alone to avoid duplicate subjects.
+            if params.get("continuity_only"):
+                refs = []
+            else:
+                refs = [r for r in refs if r.get("role") != "scene"]
+            frame.params_json = {**params, "continuity_anchor_asset_id": continuity.id,
+                                 "continuity_anchor_url": continuity.url}
+        else:
+            anchor, refs = _split_identity_anchor(refs)
         if anchor is not None:
             # **带身份锚就走编辑能力，锚本身当底图。**
             #
@@ -920,7 +982,11 @@ def generate_first_frames(
             novel_id=novel_id, chapter_id=chapter_id, force=regenerate,
         )
         frame.gen_task_id = task.id
-        frame.status = SpecStatus.generating
+        from app.models import TaskStatus
+        frame.status = (SpecStatus.ready if task.status == TaskStatus.succeeded
+                        else SpecStatus.generating)
+        if task.status == TaskStatus.succeeded:
+            frame.params_json = {**(frame.params_json or {}), "needs_regeneration": False}
         result.submitted_first += 1
         checkpoint(db)   # 这一张已经付过费了，先落库
 
@@ -954,7 +1020,10 @@ def generate_last_frames(
         ).scalars()
     }
     for frame, shot in rows:
-        if frame.asset_id and not regenerate:
+        if (shot.camera_json or {}).get("frame_mode") == "first_only":
+            result.skipped += 1
+            continue
+        if frame.asset_id and not regenerate and not (frame.params_json or {}).get("needs_regeneration"):
             result.skipped += 1
             continue
         first = db.execute(
@@ -962,7 +1031,7 @@ def generate_last_frames(
                 FrameSpec.shot_id == shot.id, FrameSpec.role == FrameRole.first
             )
         ).scalars().first()
-        if first is None or not first.asset_id:
+        if first is None or not first.asset_id or (first.params_json or {}).get("needs_regeneration"):
             result.blocked.append(f"镜头 {shot.order_no} 的首帧还没生成")
             continue
         url = db.execute(
@@ -995,6 +1064,16 @@ def generate_last_frames(
     # 首帧那边一旦是从方形身份锚编辑出来的，尾帧就会继承那个方形
     width_last, height_last = _size_for((plan.config_json or {}).get("aspect_ratio") or "16:9")
     deltas = _deltas_en(db, [s.id for _, s, _ in pending])
+    # 这一批要发给谁，决定尾帧提示词怎么写
+    prompt_style = PROMPT_STYLE_DESCRIBE
+    try:
+        from app.capability.service import resolve_one
+
+        route = resolve_one(db, Capability.image_i2i, "last_frame")
+        prompt_style = str((route.default_params or {}).get(
+            "prompt_style") or PROMPT_STYLE_DESCRIBE)
+    except Exception as exc:          # noqa: BLE001 —— 解析不出就按老写法
+        log.warning("取不到尾帧路由的提示词风格，按描述式发：%s", exc)
     for frame, shot, first_url in pending:
         params = frame.params_json or {}
         instruction, why = _derive_en(frame, deltas.get(shot.id))
@@ -1002,14 +1081,16 @@ def generate_last_frames(
             result.thin_derive.append({"shot": shot.order_no, "why": why})
         payload: dict[str, Any] = {
             "image": {"url": first_url},
-            # 同一段描述 + 变化说明；同 seed 提升连贯度
-            "prompt": f"{frame.prompt or ''} ; {instruction}".strip(" ;"),
+            # 写法由路由声明：祈使句式只说改什么，描述式给整段画面。
+            # 同 seed 提升连贯度
+            "prompt": _last_frame_prompt(frame.prompt or "", instruction, prompt_style),
             "negative_prompt": frame.negative_prompt or "",
             "strength": strength,
             "width": width_last, "height": height_last,
             "params": {"seed": params.get("seed")},
         }
-        refs = params.get("reference_images") or []
+        refs = ([] if params.get("continuity_only") else
+                params.get("reference_images") or [])
         if refs:
             payload["reference_images"] = refs
 
@@ -1019,7 +1100,11 @@ def generate_last_frames(
             novel_id=novel_id, chapter_id=chapter_id, force=regenerate,
         )
         frame.gen_task_id = task.id
-        frame.status = SpecStatus.generating
+        from app.models import TaskStatus
+        frame.status = (SpecStatus.ready if task.status == TaskStatus.succeeded
+                        else SpecStatus.generating)
+        if task.status == TaskStatus.succeeded:
+            frame.params_json = {**(frame.params_json or {}), "needs_regeneration": False}
         result.submitted_last += 1
         checkpoint(db)   # 同上
 
@@ -1040,6 +1125,39 @@ def _deltas_en(db: Session, shot_ids: list[str]) -> dict[str, list[str]]:
             select(ShotMotion).where(ShotMotion.shot_id.in_(shot_ids))
         ).scalars()
     }
+
+
+#: 尾帧提示词的两种写法。**哪一种由路由声明，不按模型名写死。**
+PROMPT_STYLE_DESCRIBE = "describe"      # 整段画面描述（文生图式的编辑模型）
+PROMPT_STYLE_INSTRUCT = "instruct"      # 只说改什么（祈使句式的编辑模型）
+
+
+def _last_frame_prompt(scene_prompt: str, instruction: str, style: str) -> str:
+    """尾帧发给编辑模型的那一句。
+
+    **本机 FLUX-edit 的自述原话：「提示词要写成祈使句指令
+    （Change the background to ...），而不是画面描述」。**
+    而这里从前发的是 `整段画面描述 ; 变化说明` —— 描述在前、变化只是
+    尾巴上的一小截，编辑模型听前面那一大段。
+
+    两种结局正好对应实跑看到的两种毛病：
+      · 描述和底图基本吻合 → 它几乎不改 → 尾帧≈首帧 → 视频是 PPT
+      · 它照描述重画一遍   → 人物位置与长相重组 → 画面漂移
+
+    祈使句式只说「改什么、别动什么」，改动量正好是分镜算出来的那一点，
+    LTXV 才有东西可插值。
+    """
+    instruction = (instruction or "").strip(" ;.")
+    if style != PROMPT_STYLE_INSTRUCT:
+        return f"{scene_prompt or ''} ; {instruction}".strip(" ;")
+    if not instruction:
+        return "Keep the image unchanged."
+    # 「别动什么」和「改什么」一样重要 —— 不写死的话编辑模型会顺手
+    # 把脸、衣服、机位一起重画，那就是漂移
+    return (f"{instruction}. "
+            "Keep the same people with identical faces, hair and clothing, "
+            "the same location, the same camera angle and framing, "
+            "and the same lighting. Change nothing else.")
 
 
 def _derive_en(frame: FrameSpec, deltas: list[str] | None) -> tuple[str, str]:
@@ -1087,9 +1205,11 @@ def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
         # 按**当前任务**的产图判断，不是「有没有图」。
         # 判「有图就跳过」的话，regenerate 之后挂着的还是旧图 ——
         # 重出一版花了钱，看到的却是上一版
-        if asset_id and asset_id != frame.asset_id:
+        if asset_id and (asset_id != frame.asset_id or frame.status != SpecStatus.ready
+                         or (frame.params_json or {}).get("needs_regeneration")):
             frame.asset_id = asset_id
             frame.status = SpecStatus.ready
+            frame.params_json = {**(frame.params_json or {}), "needs_regeneration": False}
             updated += 1
     db.flush()
     return {"frames_updated": updated, "checked": len(rows)}
