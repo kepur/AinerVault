@@ -549,6 +549,19 @@ def _attach_to_ref(
             if frame is not None and _supersedes(db, frame, task):
                 frame.asset_id = assets[0].id
                 frame.status = SpecStatus.ready
+        elif ref_kind == "shot":
+            # **分镜视频也要接线。** 这一支从前不存在：视频任务提交成功、
+            # 文件也出来了、产物登记也对，只有 Shot.video_asset_id 一直是空。
+            # 后果是 videos:generate 每次都挑中同一镜（它按「还没有视频」
+            # 找活干），跑八次实际只跑了一镜，而每一次都报成功。
+            # 文件末尾那条 bust 的旧账是同一类：出了，没挂上。
+            from app.models import Shot
+
+            shot = db.get(Shot, ref_id)
+            if shot is not None:
+                vid = next((a for a in assets if a.kind == AssetKind.video), None)
+                if vid is not None:
+                    shot.video_asset_id = vid.id
         elif ref_kind == "audio_spec":
             from app.models import AudioSpec, SpecStatus
 

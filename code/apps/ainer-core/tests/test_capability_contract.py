@@ -632,3 +632,57 @@ class TestFailoverOnUnreachable:
         gate = src[src.index("if pinned or exc_code not in"):][:220]
         assert "QUOTA_EXCEEDED" in gate and "TRANSPORT_ERROR" in gate
         assert "INVALID_REQUEST" not in gate
+
+
+class TestMediaLandsOnItsOwner:
+    """产物出来了，还得挂回去。
+
+    这个库栽过两次同样的跟头，都写在 service.py 的注释里：
+      · bust 视角：任务成功、图也出来了，回挂时判不出它是人物参考
+      · 分镜视频：任务成功、文件也出来了，Shot.video_asset_id 一直是空，
+        于是 videos:generate 每次都挑中同一镜（它按「还没有视频」找活），
+        跑八次实际只跑了一镜，而每一次都报成功
+
+    两次的共同点是**没有任何一步会报错** —— 提交成功、产物登记也对，
+    只是没接线。所以判据只能落在「挂上了没有」。
+    """
+
+    def _attach(self, ref_kind, ref_id, assets, obj):
+        from app.capability import service
+
+        class _DB:
+            def get(self, model, oid):
+                return obj if oid == ref_id else None
+
+        class _Task:
+            id = "gt_x"
+            result_json: dict = {}
+            ref_kind = None
+            ref_id = None
+
+        service._attach_to_ref(_DB(), _Task(), assets,
+                               ref_kind=ref_kind, ref_id=ref_id)
+
+    def test_shot_video_is_attached_to_the_shot(self):
+        from app.models import AssetKind, Shot
+
+        class _Asset:
+            id = "as_video"
+            kind = AssetKind.video
+
+        shot = Shot(id="sh_1")
+        self._attach("shot", "sh_1", [_Asset()], shot)
+        assert shot.video_asset_id == "as_video", (
+            "视频没挂回镜头 —— videos:generate 会一直挑中同一镜")
+
+    def test_a_still_does_not_become_the_shot_video(self):
+        """同一个任务里混着图时，只认视频那一个。"""
+        from app.models import AssetKind, Shot
+
+        class _Img:
+            id = "as_img"
+            kind = AssetKind.image
+
+        shot = Shot(id="sh_2")
+        self._attach("shot", "sh_2", [_Img()], shot)
+        assert shot.video_asset_id is None
