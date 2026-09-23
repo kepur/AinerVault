@@ -521,7 +521,18 @@ def compose_frame_prompt(
         who = cast_look(profile) if profile is not None else ""
         if who:
             positive.append(f"all characters are {who}")
-    for eid in (frame.entity_ids_json or []):
+    # **按表演单排序，不按 entity_names 的原序。**
+    # `entity_ids_json` 抄的是模型随手列的一串名字，不带主次语义；
+    # 而 `_split_identity_anchor` 却按「第一个就是这一镜的主角」取底图
+    # （那条注释自己也写着「那是个巧合，不是约束」）。
+    # 实跑的后果是整章 36 镜锚到了 offscreen／background 的人身上：
+    # 拿一个不在画面里的角色的脸去编辑这一镜，出来仍是一张合理的图，
+    # 没有任何一步报错。
+    #
+    # 谁是主体分镜早就写好了（speech_role + position），照着排即可 ——
+    # 不需要在 WorldEntity 上另加主次字段。
+    subject = shot_subject(db, shot)
+    for eid in _by_staging(db, shot, frame.entity_ids_json or [], subject):
         entity = db.get(WorldEntity, eid)
         if entity is None:
             continue
@@ -910,27 +921,102 @@ def _pos_key(value) -> str:
     return str(getattr(value, "value", value) or "").strip().lower()
 
 
-def _closeup_subject(db: Session, shot: Shot) -> str | None:
-    """这一镜的特写拍的是谁。
+#: 台词身份的主次。**这一镜拍的是谁，分镜早就写好了** ——
+#: 说话的人是主体，被说的人次之，旁听的再次，沉默的垫底。
+_SPEECH_RANK = {"speaker": 0, "addressee": 1, "listener": 2, "silent": 3}
 
-    取站位最靠近画面中心、且不是 offscreen/background 的那一个 ——
-    特写的主体本来就该在中心。
+
+def shot_subject(db: Session, shot: Shot) -> str | None:
+    """这一镜拍的是谁 —— 全流程唯一的判据。
+
+    **答案在表演单里，不用再猜，也不该各猜各的。**
+    ShotPerformance 每一条都带着 speech_role（speaker／addressee／
+    listener／silent／absent）和 position，是分镜阶段就定好的事实。
+
+    从前这件事有三套互不相干的答案，实跑的镜 2 里它们指向三个人：
+
+        身份锚（i2i 的底图）  entity_names 的第一个   → 李爽
+        特写裁切主体          站位最靠近中心           → 高个少年
+        表演单写的            speaker @ center        → 高个少年
+                              李爽 @ offscreen
+
+    第一套最糟：`entity_names` 是模型随手列的一串名字，不带任何主次
+    语义，而 `_split_identity_anchor` 却按「第一个就是主角」来取底图。
+    于是整章 36 镜把底图锚到了画面里根本没有的人身上 —— 拿一张
+    offscreen 角色的脸去编辑出这一镜，出来仍是一张合理的图，
+    没有任何一步报错。
+
+    判据：先排除不在画面里的（absent／offscreen／background），
+    再按台词身份排，同级才比谁更靠近画面中心。
     """
     from app.models import ShotPerformance
 
-    best, best_d = None, 9.0
+    best, best_key = None, None
     for p in db.execute(select(ShotPerformance).where(
             ShotPerformance.shot_id == shot.id)).scalars():
+        role = _pos_key(p.speech_role)
         pos = _pos_key(p.position)
-        if pos in _POSITION_ABSENT:
+        if role == "absent" or pos in _POSITION_ABSENT:
             continue
         x = _POSITION_X.get(pos)
         if x is None:
-            continue
-        d = abs(x - 0.5)
-        if d < best_d:
-            best, best_d = p.entity_id, d
+            # foreground 之类没有横向坐标的站位仍然在画面里，
+            # 只是比不出左右 —— 当成中心参与排序，别整条丢掉
+            x = 0.5
+        key = (_SPEECH_RANK.get(role, 4), abs(x - 0.5))
+        if best_key is None or key < best_key:
+            best, best_key = p.entity_id, key
     return best
+
+
+def _by_staging(db: Session, shot: Shot, entity_ids: list[str],
+                subject: str | None) -> list[str]:
+    """把这一镜的出场人物按表演单排序，主体排第一。
+
+    只重排，不增删 —— 提示词里每个人的相貌段都还要照出，
+    动的只是「谁当 i2i 的底图」这一个决定。
+    """
+    from app.models import ShotPerformance
+
+    rank: dict[str, tuple[int, float]] = {}
+    onscreen: list[str] = []
+    for p in db.execute(select(ShotPerformance).where(
+            ShotPerformance.shot_id == shot.id)).scalars():
+        pos = _pos_key(p.position)
+        x = _POSITION_X.get(pos, 0.5)
+        absent = (_pos_key(p.speech_role) == "absent"
+                  or pos in _POSITION_ABSENT)
+        rank[p.entity_id] = (
+            _SPEECH_RANK.get(_pos_key(p.speech_role), 4) + (10 if absent else 0),
+            abs(x - 0.5))
+        if not absent:
+            onscreen.append(p.entity_id)
+
+    # **出场名单要跟表演单对齐。** 两份是各出各的：名单抄自模型随手列的
+    # `entity_names`，表演单是另一次产出，谁也没校对谁。整章 21 镜里
+    # 名单上的人在表演单里压根不存在，另有几镜名单只写了一个 absent 的人。
+    #
+    # 而**提示词的站位句本来就出自表演单**（见 _blocking 那一段），
+    # 相貌段却出自名单 —— 于是同一条提示词自相矛盾：站位写着
+    # 「谢文东在画面中心」，相貌段描述的是一个这一镜里不在场的李爽。
+    # 出来的图既不报错也不缺东西，只是人不对。
+    #
+    # 站位、朝向、表演都只有表演单有，它才是「画面里有谁」的权威。
+    # 名单上多出来的人仍然保留（可能是表演单漏写），但排在在场的人后面，
+    # 绝不让它当上 i2i 的底图。
+    merged = list(dict.fromkeys([*onscreen, *entity_ids]))
+
+    def key(eid: str) -> tuple[int, int, float]:
+        # 主体绝对在前；表演单里没这个人的排到最后，别让它当上底图
+        head, tail = rank.get(eid, (9, 9.0))
+        return (0 if eid == subject else 1, head, tail)
+
+    return sorted(merged, key=key)
+
+
+def _closeup_subject(db: Session, shot: Shot) -> str | None:
+    """特写裁的是谁。与身份锚同源 —— 见 shot_subject。"""
+    return shot_subject(db, shot)
 
 
 def _crop_subject_from(path, position: str, out_w: int, out_h: int):

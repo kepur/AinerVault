@@ -571,3 +571,111 @@ class TestAppearanceIsRecastForTheTargetWorld:
         text = compose_anchor_prompt(epoch, self._profile())
         assert "small eyes" not in text
         assert "frail" in text
+
+
+class _Perf:
+    """一条表演单记录 —— 只带这条判据要读的三个字段。"""
+
+    def __init__(self, entity_id, speech_role, position):
+        self.entity_id = entity_id
+        self.speech_role = speech_role
+        self.position = position
+
+
+class _Scalars:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return iter(self._rows)
+
+
+class _DB:
+    """够 shot_subject／_by_staging 用的假会话。"""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, _stmt):
+        return _Scalars(self._rows)
+
+
+class _Shot:
+    id = "sh_x"
+
+
+class TestWhoThisShotIsAbout:
+    """**这一镜拍的是谁，分镜早就写好了。**
+
+    从前这件事有三套互不相干的答案，坏蛋实跑的镜 2 里它们指向三个人：
+
+        身份锚（i2i 的底图）  entity_names 的第一个   → 李爽
+        特写裁切主体          站位最靠近中心           → 高个少年
+        表演单写的            speaker @ center        → 高个少年
+                              李爽 @ offscreen
+
+    第一套最糟：`entity_names` 是模型随手列的一串名字，不带任何主次
+    语义，而取底图的那一步却按「第一个就是主角」来读。整章 37 镜因此
+    把底图锚到了画面里根本没有的人身上 —— 拿一张 offscreen 角色的脸
+    去编辑这一镜，出来仍是一张合理的图，没有任何一步报错。
+    """
+
+    def test_speaker_beats_whoever_the_model_listed_first(self):
+        from app.pipelines.frame_compose import shot_subject
+
+        db = _DB([_Perf("li", "silent", "offscreen"),
+                  _Perf("tall", "speaker", "center"),
+                  _Perf("xie", "addressee", "background")])
+        assert shot_subject(db, _Shot()) == "tall"
+
+    def test_offscreen_is_never_the_subject(self):
+        """镜 2 的原样：名单第一个是 offscreen 的李爽。"""
+        from app.pipelines.frame_compose import _by_staging, shot_subject
+
+        db = _DB([_Perf("li", "silent", "offscreen"),
+                  _Perf("tall", "speaker", "center")])
+        shot = _Shot()
+        order = _by_staging(db, shot, ["li", "tall"], shot_subject(db, shot))
+        assert order[0] == "tall", "底图不能锚在画面外的人身上"
+
+    def test_closeup_crop_and_identity_anchor_agree(self):
+        """两处必须同源 —— 各算各的就会裁一个人、锚另一个人。"""
+        from app.pipelines import frame_compose
+
+        db = _DB([_Perf("li", "silent", "offscreen"),
+                  _Perf("tall", "speaker", "center"),
+                  _Perf("xie", "addressee", "background")])
+        shot = _Shot()
+        subject = frame_compose.shot_subject(db, shot)
+        assert frame_compose._closeup_subject(db, shot) == subject
+        assert _first(frame_compose._by_staging(
+            db, shot, ["li", "xie", "tall"], subject)) == subject
+
+    def test_performance_sheet_outranks_the_cast_list(self):
+        """名单与表演单不一致时以表演单为准。
+
+        坏蛋镜 69 的原样：名单只写了 absent 的李爽，而表演单里
+        谢文东是 speaker@center。提示词的站位句本来就出自表演单，
+        相貌段却出自名单 —— 同一条提示词自相矛盾。
+        """
+        from app.pipelines.frame_compose import _by_staging, shot_subject
+
+        db = _DB([_Perf("xie", "speaker", "center"),
+                  _Perf("li", "absent", "offscreen")])
+        shot = _Shot()
+        order = _by_staging(db, shot, ["li"], shot_subject(db, shot))
+        assert order[0] == "xie"
+        assert "li" in order, "名单上多出来的人要保留，只是不当底图"
+
+    def test_no_blocking_at_all_falls_back_to_the_cast_list(self):
+        """表演单是空的就没有判据可用 —— 退回名单，不要抛。"""
+        from app.pipelines.frame_compose import _by_staging, shot_subject
+
+        db = _DB([])
+        shot = _Shot()
+        assert shot_subject(db, shot) is None
+        assert _by_staging(db, shot, ["a", "b"], None) == ["a", "b"]
+
+
+def _first(seq):
+    return seq[0] if seq else None
