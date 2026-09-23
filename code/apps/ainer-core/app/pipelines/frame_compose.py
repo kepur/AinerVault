@@ -553,7 +553,12 @@ def compose_frame_prompt(
             refs.append({
                 "ref": {"url": url}, "role": "character",
                 "weight": 0.8 if index == 0 else 0.68,
-                "identity": index == 0,
+                # **identity 只打在这一镜的主体身上。**
+                # 从前每个人的首张都标 identity，于是「谁是身份锚」
+                # 退化成「谁排在数组前面」—— 而那个顺序来自模型随手
+                # 列的 entity_names。现在主体由表演单定（见 shot_subject），
+                # 标记跟着它走，供应商侧照这个标记选第二张参考图。
+                "identity": index == 0 and eid == subject,
                 "tag": (entity.canonical_key if index == 0
                         else f"{entity.canonical_key}.view"),
             })
