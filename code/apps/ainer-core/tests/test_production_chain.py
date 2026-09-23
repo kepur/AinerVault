@@ -501,3 +501,22 @@ class TestRuleLayerOverridesWhatTheModelWontFix:
         src = inspect.getsource(translate.translate_chapter)
         after = src.split("repair_forbidden")[1]
         assert "check_translation" in after.split("record_violations")[0]
+
+
+def test_the_budget_is_spent_on_work_that_can_actually_be_done():
+    """先筛掉不该投的，再按 limit 截断 —— 顺序不是风格问题。
+
+    先截断的话，预算会被开头那几条「投不出去」的吃光：实跑里前三条
+    恰好都是本地 foley 做不了的音效，于是每次调用都是 submitted=0 /
+    skipped=3，后面二十五条可做的永远排不上队，而接口一直回 200。
+
+    这也是活锁的真实代价 —— 不只是白跑，是把能做的饿死了：三十轮下来
+    成功数停在 5/33，而其中二十条本来就在 foley 的词表里。
+    """
+    import inspect
+
+    from app.pipelines import audio_compose
+
+    src = inspect.getsource(audio_compose.generate_audio)
+    assert src.index("_unsupported_reason") < src.index("eligible[:limit]"), (
+        "limit 截断必须排在资格筛选之后，否则预算会被跳过的规格吃光")

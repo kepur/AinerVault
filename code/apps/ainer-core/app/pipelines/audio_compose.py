@@ -437,17 +437,20 @@ def generate_audio(
                      if AudioKind(k) != AudioKind.narration]
         q = q.where(AudioSpec.kind.in_(requested))
     specs = list(db.execute(q).scalars())
-    # **limit 要真的截断。** 加了参数不接线，等于没加 ——
-    # 而「没加」的后果是整章 94 条一次涌向本地 TTS，第 49 条之后服务就倒了。
-    # 先出对白（口型和时间线靠它），配乐与环境床一条能铺整场，排后面。
-    if limit and limit > 0 and len(specs) > limit:
-        order = {AudioKind.dialogue: 0, AudioKind.sfx: 1,
-                 AudioKind.ambience: 2, AudioKind.bgm: 3}
-        specs.sort(key=lambda x: order.get(x.kind, 9))
-        specs = specs[:limit]
 
     result = AudioGenResult()
-    pending = []
+
+    # ── 先筛掉不该投的，再截断 ──
+    #
+    # **limit 要花在真能做的规格上。** 这两步的顺序不是风格问题：
+    # 先截断的话，预算会被开头那几条「投不出去」的吃光 —— 实跑里
+    # 前三条恰好都是本地 foley 做不了的音效，于是每次调用都是
+    # submitted=0 / skipped=3，后面二十五条可做的永远排不上队，
+    # 而接口一直回 200。
+    #
+    # 这也是上一版活锁的真实代价：不只是白跑，是把能做的饿死了 ——
+    # 三十轮下来成功数停在 5/33，而其中二十条本来就在 foley 的词表里。
+    eligible = []
     for spec in specs:
         if spec.asset_id and not regenerate:
             result.skipped += 1
@@ -458,10 +461,9 @@ def generate_audio(
         #
         # 挑活的判据是「有没有产物」，而被明确拒绝的规格永远不会有产物 ——
         # 于是每调用一次 :generate 都把同一批重新投一遍，永远投不完。
-        # 实跑的样子：本地 foley 只做固定语义（脚步、衣料、撞击、纸张、
-        # 风雨雷、环境床），「汽车喇叭」「喉咙紧绷」这类直接回
-        # INVALID_REQUEST + retryable=false；三十轮下来每一轮都报
-        # 「提交 3 条」，成功数一直停在 5，而没有任何一步说过投不出去。
+        # 本地 foley 只做固定语义（脚步、衣料、撞击、纸张、风雨雷、
+        # 环境床），「汽车喇叭」「喉咙紧绷」这类直接回 INVALID_REQUEST
+        # + retryable=false，而没有任何一步说过投不出去。
         #
         # 这是「每一步都显示成功」的另一面：不是悄悄没做，是反复地做、
         # 反复地失败，而报表上看着一直在干活。
@@ -471,6 +473,19 @@ def generate_audio(
                 result.blocked.append(blocked_by)
             result.skipped += 1
             continue
+        eligible.append(spec)
+
+    # **limit 要真的截断。** 加了参数不接线，等于没加 ——
+    # 而「没加」的后果是整章 94 条一次涌向本地 TTS，第 49 条之后服务就倒了。
+    # 先出对白（口型和时间线靠它），配乐与环境床一条能铺整场，排后面。
+    if limit and limit > 0 and len(eligible) > limit:
+        order = {AudioKind.dialogue: 0, AudioKind.sfx: 1,
+                 AudioKind.ambience: 2, AudioKind.bgm: 3}
+        eligible.sort(key=lambda x: order.get(x.kind, 9))
+        eligible = eligible[:limit]
+
+    pending = []
+    for spec in eligible:
         # **没定音色的对白一律不出。**
         #
         # 不拦的话请求就不带 voice_id，方言回落到路由上配的那个默认模型
