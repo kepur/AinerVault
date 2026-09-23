@@ -875,8 +875,19 @@ def _mix_audio(tl: dict[str, Any], work: Path, timeout_sec: int,
     if not n:
         return None
     out = work / "mix.m4a"
+    # **normalize=0 不能省。** amix 默认把每一路都除以输入数 —— 它假设
+    # 这些路是同时在响的背景音。可这里的每一条都按时间码排在自己的位置上，
+    # 同一时刻真正重叠的最多三条（对白＋环境声＋配乐）。
+    #
+    # 于是片子越长、片段越多，声音越小：整章 232 镜有上百条片段，
+    # 每条被压掉 1/n，实测混出来 mean −57.4dB（源文件是 −16.3dB），
+    # 等于全片静音。而这一路上没有任何一步报错 —— ffmpeg 成功、
+    # 成片里有 aac 轨、时间线也报「四条轨就绪」，只是听不见。
+    #
+    # 两条镜头的小样反而是好的（n=2 只掉 6dB），所以试片时发现不了。
+    # 重叠处的削顶交给后面的 alimiter，不该由 amix 提前把整片压平。
     graph = ";".join(filters) + ";" + "".join(labels) + (
-        f"amix=inputs={n}:duration=longest:dropout_transition=0,"
+        f"amix=inputs={n}:duration=longest:dropout_transition=0:normalize=0,"
         f"alimiter=limit=0.95,apad,atrim=0:{total_s:.3f}[m]")
     _run(["ffmpeg", "-y", *inputs, "-filter_complex", graph,
           "-map", "[m]", "-c:a", "aac", "-b:a", "192k", str(out)], timeout_sec)
@@ -1079,13 +1090,15 @@ def generate_videos(
         # **把它为什么没动记下来。** 静帧不是失败，是省了 100 秒；
         # 但「尾帧和首帧几乎一样」是上游的问题，不说出来就没人去修，
         # 而成片里那一镜看起来只是「有点闷」
-        decision = str(out.get("motion_decision") or "")
+        # 判定在 result 顶层，不在 result["video"] 里
+        res = task.result_json or {}
+        decision = str(res.get("motion_decision") or "")
         if decision in ("hold", "kenburns"):
             still_shots.append({
                 "shot": shot.order_no,
                 "decision": decision,
-                "why": str(out.get("motion_reason") or ""),
-                "frame_delta": out.get("frame_delta"),
+                "why": str(res.get("motion_reason") or ""),
+                "frame_delta": res.get("frame_delta"),
                 "fix": "尾帧相对首帧几乎没变 —— 回「分镜调度」重写变化说明再出尾帧",
             })
         submitted.append({"shot": shot.order_no, "task": task.id,

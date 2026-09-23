@@ -6,6 +6,10 @@
 """
 from __future__ import annotations
 
+import pathlib
+
+import pytest
+
 from app.pipelines import cut
 
 
@@ -92,6 +96,55 @@ class TestRenderContract:
 
         src = inspect.getsource(cut._mix_audio)
         assert "adelay={delay}|{delay}" in src
+
+    def test_long_film_is_not_quieter_than_a_short_one(self, tmp_path,
+                                                        monkeypatch):
+        """**片子越长不该越小声。**
+
+        amix 默认把每一路都除以输入数 —— 它假设这些路是同时在响的
+        背景音。可时间线上的每一条都排在自己的时间码上，同一刻真正
+        重叠的最多三条（对白＋环境声＋配乐）。
+
+        于是整章 232 镜、上百条片段时，每条被压掉 1/n：实测混出来
+        mean −57.4dB，而源文件是 −16.3dB —— 整片等于静音。
+        这一路上没有任何一步报错：ffmpeg 成功、成片里有 aac 轨、
+        时间线报「四条轨就绪」，只是听不见。
+
+        两条镜头的小样反而是好的（n=2 只掉 6dB），所以试片时发现不了。
+        这条测试因此必须比出「多片段 vs 少片段」，光验一次电平没用。
+        """
+        import re
+        import subprocess
+
+        if not cut.ffmpeg_available():
+            pytest.skip("这台机器上没有 ffmpeg")
+
+        import app.capability.mediastore as mediastore
+
+        work = tmp_path
+        monkeypatch.setattr(mediastore, "media_root", lambda: str(work))
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "sine=frequency=440:duration=0.5", str(work / "tone.wav")],
+            check=True)
+
+        def mean_db(clip_count: int) -> float:
+            tl = {"tracks": [{"id": "dialogue", "layer": "audio", "clips": [
+                {"start_ms": i * 500, "url": "http://x/media/tone.wav"}
+                for i in range(clip_count)]}]}
+            outdir = work / f"m{clip_count}"
+            outdir.mkdir()
+            out = cut._mix_audio(tl, outdir, 120, clip_count * 0.5)
+            probe = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-i", str(out),
+                 "-af", "volumedetect", "-f", "null", "-"],
+                capture_output=True, text=True).stderr
+            return float(re.search(r"mean_volume: (-?[\d.]+) dB", probe)[1])
+
+        short, long = mean_db(2), mean_db(40)
+        assert abs(long - short) < 3.0, (
+            f"40 段混出来 {long:.1f}dB，2 段是 {short:.1f}dB —— "
+            "amix 又按输入数把整片压平了")
 
     def test_only_local_media_is_used(self):
         """外部地址一律不下载 —— 导出要在几分钟内跑完，
