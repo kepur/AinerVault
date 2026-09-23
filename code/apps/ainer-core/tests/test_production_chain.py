@@ -309,3 +309,64 @@ class TestCoverageSplit:
         src = inspect.getsource(shot_plan.build_shot_plan)
         assert "_coverage_slices(\n" in src or "_coverage_slices(" in src
         assert "for slice_idx, dur in enumerate(slices)" in src
+
+
+class TestSwearWordsAreNotRelatives:
+    """骂人的虚词被当成了亲属称谓。
+
+    中文的「妈的」「你妈」「草你妈」里那个「妈」是语气，不指任何人。
+    逐字译过去就凭空多出一个母亲 —— 而这一步不会报错，句子读着也通顺。
+
+    坏蛋实跑的样子：校园走廊抢劫那场，三句台词全变成了对「Mom」说话：
+        「草你妈的，别和我罗嗦」 → "Fuck you, Mom. Stop rambling"
+        「妈的，给你脸你不要脸」 → "Mom, we gave you a chance..."
+    整章 21 句剧本块中招。更麻烦的是这一章后面真有主角的妈妈，
+    下游再也分不出哪个 Mom 是人：选角把她排进出场名单、配音照念、
+    口型照对，最后成片里一群高中生在走廊里喊妈。
+    """
+
+    @pytest.mark.parametrize("line", [
+        "草你妈的，别和我罗嗦，快点",
+        "妈的，给你脸你不要脸",
+        "去你妈的，你有钱吗",
+        "他妈的真烦",
+        "行，操你妈的，你给我等着",
+    ])
+    def test_swearing_is_detected(self, line):
+        from app.pipelines.audit import _SWEAR_MOTHER
+
+        assert _SWEAR_MOTHER.search(line)
+
+    @pytest.mark.parametrize("line", [
+        "家里只有他的妈妈在",
+        "谢妈妈说：快点吃饭吧，一会都凉了",
+        "为了不引起妈妈的怀疑，谢文东拿起饭碗",
+        "妈妈是下岗工人",
+        "向妈妈要了十元钱上学去了",
+    ])
+    def test_a_real_mother_is_left_alone(self, line):
+        """**叠词「妈妈」永远是称谓。**
+
+        「为了不引起妈妈的怀疑」里含着「妈的」三个字 —— 不排掉叠词，
+        这句正经叙述会被报成骂人。同一章里两种用法都有，所以这条不能
+        靠「这本书脏话多」之类的整体判断来糊弄。
+        """
+        from app.pipelines.audit import _SWEAR_MOTHER
+
+        assert not _SWEAR_MOTHER.search(line)
+
+    def test_only_flagged_when_the_translation_actually_says_mom(self):
+        """原文骂人、译文也骂人 —— 那是对的，不该报。"""
+        from app.pipelines.audit import _MOTHER_WORD, _SWEAR_MOTHER
+
+        source, good = "草你妈的，别和我罗嗦", "Fuck off, stop rambling"
+        assert _SWEAR_MOTHER.search(source)
+        assert not _MOTHER_WORD.search(good)
+
+    def test_the_rule_is_in_the_translation_prompt_too(self):
+        """规则层是兜底，提示词里也要说 —— 拦下来不如一开始就别译错。"""
+        from app.pipelines import translate
+
+        assert "Mom" in translate._PROFANITY_RULE
+        for kind in ("dialogue", "narration", "inner_monolog"):
+            assert "语气助词" in translate._KIND_RULES[kind]

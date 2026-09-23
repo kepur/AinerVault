@@ -576,10 +576,11 @@ class TestAppearanceIsRecastForTheTargetWorld:
 class _Perf:
     """一条表演单记录 —— 只带这条判据要读的三个字段。"""
 
-    def __init__(self, entity_id, speech_role, position):
+    def __init__(self, entity_id, speech_role, position, action=None):
         self.entity_id = entity_id
         self.speech_role = speech_role
         self.position = position
+        self.action = action
 
 
 class _Scalars:
@@ -679,6 +680,49 @@ class TestWhoThisShotIsAbout:
 
 def _first(seq):
     return seq[0] if seq else None
+
+
+class TestActionShotsWithNobodySpeaking:
+    """动作镜里没人说话，speech_role 全是 silent。
+
+    坏蛋镜 5 的原样：三个人都是 silent，而 left 与 right 到画面中心
+    的距离相等 —— 前几项全打平，选谁就完全由数据库返回的行顺序决定。
+    同一份分镜重跑两次可能锚到不同的人，而两次都不报错。
+
+    这时候「谁在动手」才是主体：高个少年「猛地抬手扇耳光」是施事，
+    谢文东「头部被击打偏向一侧」是受事，挨打的那个不是主体。
+    """
+
+    def test_the_one_acting_beats_the_one_being_hit(self):
+        from app.pipelines.frame_compose import shot_subject
+
+        db = _DB([_Perf("xie", "silent", "right", "头部被击打偏向一侧"),
+                  _Perf("li", "listener", "background", "看着同伴施暴"),
+                  _Perf("tall", "silent", "left", "猛地抬手扇耳光")])
+        assert shot_subject(db, _Shot()) == "tall"
+
+    def test_the_answer_does_not_depend_on_row_order(self):
+        import itertools
+
+        from app.pipelines.frame_compose import shot_subject
+
+        rows = [_Perf("xie", "silent", "right", "头部被击打偏向一侧"),
+                _Perf("tall", "silent", "left", "猛地抬手扇耳光")]
+        picks = {shot_subject(_DB(list(order)), _Shot())
+                 for order in itertools.permutations(rows)}
+        assert picks == {"tall"}, f"换个行顺序就换了主体：{picks}"
+
+    def test_a_dead_tie_still_resolves_the_same_way_every_time(self):
+        """连施受都分不出时也要稳定 —— 靠 entity_id 收尾。"""
+        import itertools
+
+        from app.pipelines.frame_compose import shot_subject
+
+        rows = [_Perf("b_guy", "silent", "left", "站着"),
+                _Perf("a_guy", "silent", "right", "站着")]
+        picks = {shot_subject(_DB(list(order)), _Shot())
+                 for order in itertools.permutations(rows)}
+        assert len(picks) == 1
 
 
 class TestSceneHeadUsesTheLocationAsBase:

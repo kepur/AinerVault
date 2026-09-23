@@ -119,11 +119,67 @@ def audit_novel(db: Session, transform: WorldTransform) -> AuditReport:
     _audit_lexicon(db, transform, data, report)
     _audit_residue(data, lang, report)
     _audit_forbidden(profile, data, report)
+    _audit_profanity(data, report)
 
     report.findings.sort(
         key=lambda f: {"high": 0, "medium": 1, "low": 2}.get(f.severity, 3)
     )
     return report
+
+
+#: 骂人的虚词里的「妈」。这些说法里没有母亲，那个字是语气。
+#: **叠词「妈妈」永远是称谓，要排掉** —— 否则「为了不引起妈妈的怀疑」
+#: 会因为里面含着「妈的」被判成骂人，把一句正经叙述报成错。
+_SWEAR_MOTHER = re.compile(
+    r"(?:操|草|艹|肏|干|去|他|她|它|你|我)\s*[你他她它]?\s*妈(?!妈)"
+    r"|(?<!妈)妈\s*的"
+    r"|妈\s*了\s*个"
+    r"|奶奶\s*的")
+#: 译文里真的写出了称谓。
+_MOTHER_WORD = re.compile(r"\b(?:mom|mum|mommy|mother|mama)\b", re.I)
+
+
+def _audit_profanity(
+    data: list[tuple[Chapter, ScriptBlock, str]], report: AuditReport,
+) -> None:
+    """骂人的虚词被当成了亲属称谓。
+
+    中文的「妈的」「你妈」「草你妈」里那个「妈」是语气，不指任何人。
+    逐字译过去就凭空多出一个母亲 —— 而这一步不会报错，句子读着也通顺。
+
+    坏蛋实跑的样子：校园走廊抢劫那场，三句台词全变成了对「Mom」说话：
+        「草你妈的，别和我罗嗦」 → "Fuck you, Mom. Stop rambling"
+        「妈的，给你脸你不要脸」 → "Mom, we gave you a chance..."
+    整章 21 句剧本块中招。更麻烦的是这一章后面真有主角的妈妈，
+    下游再也分不出哪个 Mom 是人：选角把她当角色排进出场名单，
+    配音照念，口型照对，最后成片里一群高中生在走廊里喊妈。
+
+    **这条用规则查，不问模型。** 判据是可枚举的：原文命中骂人句式、
+    而译文里出现了称谓词 —— 两个条件都硬，不需要判断语气。
+    """
+    hits: list[dict] = []
+    chapters: set[str] = set()
+    for chapter, block, text in data:
+        source = as_text(block.source_text)
+        if not _SWEAR_MOTHER.search(source):
+            continue
+        if not _MOTHER_WORD.search(text or ""):
+            continue
+        chapters.add(chapter.id)
+        hits.append({"chapter": chapter.title or chapter.id,
+                     "source": source[:60], "translated": (text or "")[:60]})
+    if not hits:
+        return
+    report.findings.append(AuditFinding(
+        kind="profanity_as_kinship",
+        severity="high",
+        subject="骂人的虚词被译成了亲属称谓",
+        detail=(f"{len(hits)} 处原文是「妈的／你妈」这类骂人虚词，译文里却写出了"
+                "母亲的称谓 —— 那里没有母亲在场。下游会把它当成一个角色："
+                "排进出场名单、配上音、对上口型。改译成力度相当的脏话即可。"),
+        chapters=sorted(chapters),
+        samples=hits,
+    ))
 
 
 def _audit_names(

@@ -930,6 +930,18 @@ def _pos_key(value) -> str:
 #: 说话的人是主体，被说的人次之，旁听的再次，沉默的垫底。
 _SPEECH_RANK = {"speaker": 0, "addressee": 1, "listener": 2, "silent": 3}
 
+#: 受事标记。动作镜里没人说话，speech_role 全是 silent，
+#: 这时候「谁在动手」才是主体 —— 挨打的那个不是。
+#: 中文用「被」，英文用 is/are/gets + 过去分词那一类的说法。
+_PASSIVE_MARKS = ("被", "遭", " is hit", " is struck", " is pushed",
+                  " is slapped", " gets hit", " being hit", " is thrown")
+
+
+def _is_passive(action: str | None) -> bool:
+    """这条表演是挨的，不是做的。"""
+    text = (action or "").strip().lower()
+    return any(m.strip().lower() in text for m in _PASSIVE_MARKS)
+
 
 def shot_subject(db: Session, shot: Shot) -> str | None:
     """这一镜拍的是谁 —— 全流程唯一的判据。
@@ -968,7 +980,13 @@ def shot_subject(db: Session, shot: Shot) -> str | None:
             # foreground 之类没有横向坐标的站位仍然在画面里，
             # 只是比不出左右 —— 当成中心参与排序，别整条丢掉
             x = 0.5
-        key = (_SPEECH_RANK.get(role, 4), abs(x - 0.5))
+        # **最后一项是 entity_id，不能少。** 镜 5 三个人全是 silent，
+        # 而 left 与 right 到画面中心的距离相等 —— 前三项全打平，
+        # 选谁就完全由数据库返回的行顺序决定。那正是这条判据要消灭的
+        # 那种不确定性：同一份分镜重跑两次可能锚到不同的人，
+        # 而两次都不报错。
+        key = (_SPEECH_RANK.get(role, 4), 1 if _is_passive(p.action) else 0,
+               abs(x - 0.5), p.entity_id)
         if best_key is None or key < best_key:
             best, best_key = p.entity_id, key
     return best
@@ -993,7 +1011,8 @@ def _by_staging(db: Session, shot: Shot, entity_ids: list[str],
                   or pos in _POSITION_ABSENT)
         rank[p.entity_id] = (
             _SPEECH_RANK.get(_pos_key(p.speech_role), 4) + (10 if absent else 0),
-            abs(x - 0.5))
+            1 if _is_passive(p.action) else 0,
+            abs(x - 0.5), p.entity_id)
         if not absent:
             onscreen.append(p.entity_id)
 
@@ -1011,10 +1030,9 @@ def _by_staging(db: Session, shot: Shot, entity_ids: list[str],
     # 绝不让它当上 i2i 的底图。
     merged = list(dict.fromkeys([*onscreen, *entity_ids]))
 
-    def key(eid: str) -> tuple[int, int, float]:
+    def key(eid: str) -> tuple[Any, ...]:
         # 主体绝对在前；表演单里没这个人的排到最后，别让它当上底图
-        head, tail = rank.get(eid, (9, 9.0))
-        return (0 if eid == subject else 1, head, tail)
+        return (0 if eid == subject else 1, *rank.get(eid, (9, 9, 9.0, eid)))
 
     return sorted(merged, key=key)
 
