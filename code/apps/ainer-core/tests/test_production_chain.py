@@ -436,3 +436,68 @@ def _task(status, err):
     from app.models import TaskStatus
 
     return type("T", (), {"status": TaskStatus(status), "error_json": err})()
+
+
+class TestRuleLayerOverridesWhatTheModelWontFix:
+    """模型改不掉的禁用词，按词条表直接改掉。
+
+    **试过三次都不行。** 提示词里写了「骂人的虚词不是称谓」，词条表
+    登记了「草你妈的 → Fuck you，禁用 Mom」，strict 还带着违规反馈重译
+    了一次 —— 五个块里仍有四个把「妈」译成 Mom，其中一版把
+    「Fuck you, Mom」改成了「Shit, Mom」：换了脏话，留着妈。
+
+    到这一步该由规则接手。词条表已经写明正确译法，改法是确定的，
+    不必再赌模型这一次听不听。
+    """
+
+    def _fix(self, text, expected):
+        from app.worldview.validator import Violation, repair_forbidden
+
+        return repair_forbidden(text, [Violation(
+            kind="forbidden_token", severity="high",
+            detected="Mom", expected=expected)])
+
+    def test_a_spare_vocative_is_deleted(self):
+        """正确译法已经在句子里 —— 那个 Mom 是多出来的一声称呼。"""
+        out, fixes = self._fix('"Fuck you, Mom! Stop rambling."', "Fuck you")
+        assert out == '"Fuck you! Stop rambling."'
+        assert fixes
+
+    def test_an_em_dash_vocative_too(self):
+        out, _ = self._fix('"Fine. Fuck you, Mom—just wait!"', "Fuck you")
+        assert out == '"Fine. Fuck you—just wait!"'
+
+    def test_the_swear_itself_is_replaced_when_there_is_no_other(self):
+        """「Mom's」就是「妈的」被逐字搬过来了 —— 整段换成词条译法。"""
+        out, _ = self._fix('"Mom\'s, you don\'t know when to quit."', "Damn it")
+        assert out.startswith('"Damn it, you don')
+        assert "Mom" not in out
+
+    def test_a_real_mother_is_never_touched(self):
+        """真在跟母亲说话的句子命不中词条，走不到这里 ——
+        即便走到了，没有违规就什么都不改。"""
+        from app.worldview.validator import repair_forbidden
+
+        line = '"Mom, dinner is ready," she called from the kitchen.'
+        out, fixes = repair_forbidden(line, [])
+        assert out == line and not fixes
+
+    def test_medium_violations_are_left_to_the_model(self):
+        """只覆写 high 的禁用词。漏译那类要人看，不该被规则悄悄抹平。"""
+        from app.worldview.validator import Violation, repair_forbidden
+
+        line = '"Fuck you, Mom!"'
+        out, fixes = repair_forbidden(line, [Violation(
+            kind="lexicon_miss", severity="medium",
+            detected="Mom", expected="Fuck you")])
+        assert out == line and not fixes
+
+    def test_the_pipeline_rechecks_after_repairing(self):
+        """规则改完要复检 —— 改坏了得看得见，不能就地宣布干净。"""
+        import inspect
+
+        from app.pipelines import translate
+
+        src = inspect.getsource(translate.translate_chapter)
+        after = src.split("repair_forbidden")[1]
+        assert "check_translation" in after.split("record_violations")[0]

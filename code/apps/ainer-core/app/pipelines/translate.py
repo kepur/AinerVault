@@ -48,6 +48,8 @@ class TranslateResult:
     skipped_locked: int = 0
     retried: int = 0
     violations: int = 0
+    #: 规则层直接改掉的处数（模型改不掉的禁用词）
+    repaired: int = 0
     missing_names: list[str] = field(default_factory=list)
     blocks: list[dict] = field(default_factory=list)
     #: 译文里的结构垃圾（占位符残留、JSON 碎片）。
@@ -61,6 +63,7 @@ class TranslateResult:
             "skipped_locked": self.skipped_locked,
             "retried": self.retried,
             "violations": self.violations,
+            "repaired": self.repaired,
             "missing_names": self.missing_names,
             "blocks": self.blocks,
             "junk": self.junk,
@@ -329,6 +332,26 @@ def translate_chapter(
                     if len(retry_vs) < len(vs):
                         text, vs = retry_text, retry_vs
 
+            # ── 规则层覆写：模型改不掉的，按词条表直接改 ──
+            #
+            # **试过三次都不行。** 提示词里写了「骂人的虚词不是称谓」，
+            # 词条表登记了「草你妈的 → Fuck you，禁用 Mom」，strict 还带着
+            # 违规反馈重译了一次 —— 五个块里仍有四个把「妈」译成 Mom，
+            # 其中一版是「Fuck you, Mom」改成「Shit, Mom」，换了脏话留着妈。
+            #
+            # 到这一步该由规则接手：词条表已经写明了正确译法，改法是确定的，
+            # 不必再赌模型这一次会不会听。规则做完仍要复检，改动记进 meta。
+            repaired, fixes = validator.repair_forbidden(text, vs)
+            if fixes:
+                text = repaired
+                vs = validator.check_translation(
+                    translated_text=text, hits=block_hits,
+                    profile_forbidden=profile_forbidden,
+                    locked_names=locked_names, source_text=b.source_text,
+                    block_id=b.id,
+                )
+                result.repaired += len(fixes)
+
             if vs:
                 result.violations += pf.record_violations(
                     db, transform.id, vs, ref_id=b.id
@@ -351,7 +374,8 @@ def translate_chapter(
                 {"source": h.source_term, "target": h.target_term} for h in block_hits
             ]
             row.model_meta_json = {"transform_id": transform.id,
-                                   "violations": len(vs)}
+                                   "violations": len(vs),
+                                   "rule_repairs": fixes}
             result.translated += 1
             result.blocks.append({
                 "block_id": b.id, "seq_no": b.seq_no,

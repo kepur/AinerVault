@@ -144,3 +144,55 @@ def build_retry_feedback(violations: Sequence[Violation]) -> str:
         elif v.kind == "name_drift":
             lines.append(f"  · 「{v.detected}」的固定译名是「{v.expected}」，不可改动")
     return "\n".join(lines)
+
+
+#: 被当成称谓塞进来的那几个词。只处理呼语形态 —— 真的在跟母亲说话时
+#: 「Mom」是对的，那种句子不会命中「草你妈的」这类词条。
+_VOCATIVE = r"(?:Mom|Mum|Mommy|Mother|Mama)"
+
+
+def repair_forbidden(text: str, violations: Sequence[Violation]) -> tuple[str, list[str]]:
+    """把模型改不掉的禁用词按词条表直接改掉。
+
+    **模型不认这一条，试过三次。** 提示词里写了「骂人的虚词不是称谓」，
+    词条表里登记了「草你妈的 → Fuck you，禁用 Mom」，strict 还会带着
+    违规反馈重译一次 —— 五个块里仍有四个把「妈」译成了 Mom：
+
+        「草你妈的，别和我罗嗦」 → "Fuck you, Mom! Stop rambling"
+        「妈的，给你脸你不要脸」 → "Mom's, you don't know when..."
+        「我去你妈的吧」         → "Damn it, Mom! Set the other stuff aside"
+
+    改法是确定的，不需要再问模型 —— 词条表已经写明了正确译法：
+
+        译文里已经有正确译法（"Fuck you" 在）→ 那个 Mom 是多出来的呼语，
+                                              连同它的逗号一起删掉
+        没有正确译法（"Mom's" 就是 妈的 本身）→ 整段换成词条的译法
+
+    只动 high 级的 forbidden_token，且只动呼语形态。真在跟母亲说话的
+    句子不会命中「草你妈的」这类词条，也就走不到这里。
+    """
+    if not text:
+        return text, []
+    fixed = text
+    notes: list[str] = []
+    for v in violations:
+        if v.kind != "forbidden_token" or v.severity != "high":
+            continue
+        if not re.fullmatch(_VOCATIVE, v.detected, re.I):
+            continue
+        want = (v.expected or "").strip()
+        before = fixed
+        if want and contains_token(fixed, want):
+            # 正确译法已经在句子里了 —— Mom 是多出来的一声称呼
+            fixed = re.sub(rf",\s*{_VOCATIVE}\b", "", fixed)
+            fixed = re.sub(rf"\b{_VOCATIVE}\b\s*[,，]\s*", "", fixed)
+            fixed = re.sub(rf"\s*[—–-]\s*{_VOCATIVE}\b", "", fixed)
+            fixed = re.sub(rf"\s+{_VOCATIVE}\b(?=[!?.])", "", fixed)
+        elif want:
+            # 「Mom's」这类是「妈的」本身被逐字搬过来了，整段换掉
+            fixed = re.sub(rf"\b{_VOCATIVE}(?:'s)?\b", want, fixed, count=1)
+        if fixed != before:
+            notes.append(f"{v.detected} → {want or '（删去呼语）'}")
+    if fixed != text:
+        fixed = re.sub(r"\s{2,}", " ", fixed).replace(" !", "!").replace(" ?", "?")
+    return fixed, notes
