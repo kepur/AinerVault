@@ -55,6 +55,11 @@ class AudioGenIn(BaseModel):
     kinds: list[str] = Field(default_factory=list)
     regenerate: bool = False
     confirm_cost: bool = False
+    #: 只出这几镜的音频。不限范围的话整章一次提交近百条，
+    #: 本地 TTS 撑不住 —— 实跑里第 49 条之后服务就倒了
+    shot_ids: list[str] = Field(default_factory=list)
+    #: 一次最多提交几条
+    limit: int | None = None
 
 
 @router.post("/shot-plans/{plan_id}/audio:generate")
@@ -65,6 +70,7 @@ def generate_audio(plan_id: str, body: AudioGenIn,
     return ac.generate_audio(
         db, plan, kinds=body.kinds or None,
         regenerate=body.regenerate, confirm_cost=body.confirm_cost,
+        only_shot_ids=body.shot_ids or None, limit=body.limit,
     ).as_dict()
 
 

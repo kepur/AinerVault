@@ -411,11 +411,20 @@ def generate_audio(
     regenerate: bool = False,
     confirm_cost: bool = False,
     cost_threshold: float = 1.0,
+    only_shot_ids: Sequence[str] | None = None,
+    limit: int | None = None,
 ) -> AudioGenResult:
-    """提交音频生成。对白带上音色素材的参考音频作 voice reference。"""
-    shots = list(
-        db.execute(select(Shot).where(Shot.shot_plan_id == plan.id)).scalars()
-    )
+    """提交音频生成。对白带上音色素材的参考音频作 voice reference。
+
+    `only_shot_ids` / `limit` 限定范围。**这两个参数不是方便，是必需的**：
+    整章一次提交 94 条 TTS，本地 MLX 服务撑到第 49 条就倒了，剩下 37 条
+    全是 Connection refused —— 而看门狗把它拉起来之后，那 37 条已经失败了。
+    一次只交能跑得完的量，比事后重试便宜。
+    """
+    q0 = select(Shot).where(Shot.shot_plan_id == plan.id)
+    if only_shot_ids:
+        q0 = q0.where(Shot.id.in_(list(only_shot_ids)))
+    shots = list(db.execute(q0).scalars())
     shot_ids = [s.id for s in shots]
     scene_ids = [s.scene_id for s in shots if s.scene_id]
 
@@ -428,6 +437,14 @@ def generate_audio(
                      if AudioKind(k) != AudioKind.narration]
         q = q.where(AudioSpec.kind.in_(requested))
     specs = list(db.execute(q).scalars())
+    # **limit 要真的截断。** 加了参数不接线，等于没加 ——
+    # 而「没加」的后果是整章 94 条一次涌向本地 TTS，第 49 条之后服务就倒了。
+    # 先出对白（口型和时间线靠它），配乐与环境床一条能铺整场，排后面。
+    if limit and limit > 0 and len(specs) > limit:
+        order = {AudioKind.dialogue: 0, AudioKind.sfx: 1,
+                 AudioKind.ambience: 2, AudioKind.bgm: 3}
+        specs.sort(key=lambda x: order.get(x.kind, 9))
+        specs = specs[:limit]
 
     result = AudioGenResult()
     pending = []
@@ -497,7 +514,12 @@ def generate_audio(
         else:
             payload = {
                 "prompt": params.get("prompt") or spec.text,
-                "duration_ms": int(params.get("duration_ms") or 20000),
+                # 点音效的时长权威是 AudioSpec.duration_ms。以前这里只读
+                # params_json，650ms 的衣料声会被膨胀成 20 秒，混音时既浪费
+                # 生成时间，又把下一镜盖住。环境床没有时长才用 20 秒兜底。
+                "duration_ms": int(
+                    params.get("duration_ms") or spec.duration_ms or 20000
+                ),
             }
             cap, purpose = Capability.audio_sfx, spec.kind.value
 
@@ -554,7 +576,8 @@ def backfill_durations(db: Session, plan: ShotPlan) -> dict[str, Any]:
             total_after += shot.duration_ms
             continue
         # 留一点呼吸：配音前后各 200ms
-        target = voiced + 400
+        from app.pipelines.cut import dialogue_padding
+        target = voiced + sum(dialogue_padding(shot))
         if target != shot.duration_ms:
             shot.duration_ms = max(target, 1200)
             updated += 1

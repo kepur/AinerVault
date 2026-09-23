@@ -855,16 +855,130 @@ def _plan_scope(db: Session, plan: ShotPlan) -> tuple[str | None, str | None]:
             chapter.id if chapter else None)
 
 
+#: 站位 → 画面横向位置（0 左边缘，1 右边缘）。
+#: 表演单里本来就有这一项，不需要再上人脸检测。
+_POSITION_X = {
+    "far_left": 0.12, "left": 0.24, "center_left": 0.38, "center": 0.50,
+    "center_right": 0.62, "right": 0.76, "far_right": 0.88,
+}
+#: 这些站位说明这个人不在画面主体里，裁他没有意义
+_POSITION_ABSENT = frozenset({"offscreen", "background", "off_screen"})
+
+
+#: 走这条裁切路径的景别。中近景也算 —— 它同样是从宽景里挑一个人
+_CLOSE_SIZES = frozenset({"ecu", "cu", "mcu"})
+
+
+def _position_in_previous(db: Session, plan: ShotPlan, shot: Shot,
+                          entity_id: str) -> str | None:
+    """这个人在上一镜里站在哪。裁切要按那一镜的站位裁，不是按本镜的。"""
+    from app.models import ShotPerformance
+
+    prev = db.execute(select(Shot).where(
+        Shot.shot_plan_id == plan.id, Shot.scene_id == shot.scene_id,
+        Shot.order_no < shot.order_no).order_by(Shot.order_no.desc()).limit(1)
+    ).scalars().first()
+    if prev is None:
+        return None
+    row = db.execute(select(ShotPerformance).where(
+        ShotPerformance.shot_id == prev.id,
+        ShotPerformance.entity_id == entity_id)).scalars().first()
+    pos = _pos_key(row.position) if row else ""
+    return pos if pos in _POSITION_X else None
+
+
+def _local_path_of(db: Session, asset):
+    """产物的本地文件路径。取不到就返回 None，调用方退回整张。"""
+    from pathlib import Path
+
+    from app.capability.mediastore import media_root
+
+    url = getattr(asset, "url", "") or ""
+    if "/media/" not in url:
+        return None
+    path = Path(media_root()) / url.rsplit("/media/", 1)[-1].split("?")[0]
+    return path if path.exists() else None
+
+
+def _pos_key(value) -> str:
+    """站位枚举 → 查表用的字符串。
+
+    **position 是枚举，str() 出来是 'StagePosition.center' 而不是
+    'center'。** 直接拿去查表全部落空 —— 而这一层不会报错，
+    只是裁切永远不触发，看起来像「这个功能没写」。
+    """
+    return str(getattr(value, "value", value) or "").strip().lower()
+
+
+def _closeup_subject(db: Session, shot: Shot) -> str | None:
+    """这一镜的特写拍的是谁。
+
+    取站位最靠近画面中心、且不是 offscreen/background 的那一个 ——
+    特写的主体本来就该在中心。
+    """
+    from app.models import ShotPerformance
+
+    best, best_d = None, 9.0
+    for p in db.execute(select(ShotPerformance).where(
+            ShotPerformance.shot_id == shot.id)).scalars():
+        pos = _pos_key(p.position)
+        if pos in _POSITION_ABSENT:
+            continue
+        x = _POSITION_X.get(pos)
+        if x is None:
+            continue
+        d = abs(x - 0.5)
+        if d < best_d:
+            best, best_d = p.entity_id, d
+    return best
+
+
+def _crop_subject_from(path, position: str, out_w: int, out_h: int):
+    """从上一镜的成品里裁出这个人所在的区域。
+
+    **宽景切特写是 i2i 做不好的事。** 整张宽景当底图时，模型要同时
+    重构图和换景别，实跑的结果是它挑错了人：首领留在背景里，前景换成了
+    一个没出现过的人。
+
+    裁过去就不用它重构图了 —— 底图本身就是那个人的近景，模型只要把它
+    画清楚。人在哪由表演单的站位说了算，那是分镜阶段就定好的。
+    """
+    from PIL import Image
+
+    img = Image.open(path).convert("RGB")
+    W, H = img.size
+    cx = _POSITION_X.get(str(position or "").lower(), 0.5) * W
+    # 裁一块符合输出画幅的区域，宽度取原图的 45% —— 再窄就只剩一张脸，
+    # 模型失去「他站在走廊里」这个上下文，背景又会自己编
+    cw = max(64, int(W * 0.45))
+    ch = max(64, int(cw * out_h / max(1, out_w)))
+    if ch > H:
+        ch = H
+        cw = max(64, int(ch * out_w / max(1, out_h)))
+    left = int(min(max(0, cx - cw / 2), W - cw))
+    # 纵向偏上：脸在上半部分，从正中裁会把头切掉
+    top = int(min(max(0, H * 0.18), H - ch))
+    return img.crop((left, top, left + cw, top + ch))
+
+
 def _continuity_anchor(db: Session, plan: ShotPlan, shot: Shot) -> Asset | None:
     """Use an earlier finished frame from this plan and scene as the set anchor."""
     if not shot.scene_id:
         return None
+    target = db.execute(select(FrameSpec).where(
+        FrameSpec.shot_id == shot.id, FrameSpec.role == FrameRole.first
+    )).scalars().first()
+    target_cast = set(target.entity_ids_json or []) if target else set()
     rows = db.execute(select(FrameSpec).join(Shot, Shot.id == FrameSpec.shot_id).where(
         Shot.shot_plan_id == plan.id, Shot.scene_id == shot.scene_id,
         Shot.order_no < shot.order_no, FrameSpec.role == FrameRole.first,
         FrameSpec.status == SpecStatus.ready, FrameSpec.asset_id.isnot(None),
     ).order_by(Shot.order_no)).scalars()
     for frame in rows:
+        # A reverse shot of another speaker must keep that speaker's identity.
+        # Single-reference editors otherwise turn the previous speaker into them.
+        if not target_cast.issubset(set(frame.entity_ids_json or [])):
+            continue
         if not (frame.params_json or {}).get("needs_regeneration"):
             asset = db.get(Asset, frame.asset_id)
             if asset and asset.url:
@@ -935,21 +1049,48 @@ def generate_first_frames(
             "prompt": frame.prompt,
             "negative_prompt": frame.negative_prompt or "",
             "width": width, "height": height,
-            "params": {"seed": params.get("seed")},
+            "params": {"seed": params.get("seed"),
+                       "style": _plan_style(db, plan)},
         }
         refs = list(params.get("reference_images") or [])
         cap = Capability.image_t2i
         continuity = _continuity_anchor(db, plan, shot)
         if continuity:
             anchor = {"url": continuity.url}
-            # The established shot already contains the set and cast. Close
-            # coverage can explicitly use it alone to avoid duplicate subjects.
+            crop_note = None
+            # **特写用上一镜里那个人的局部，不用整张宽景。**
+            #
+            # 整张宽景当底图时，模型要同时重构图和换景别 —— 实跑的结果是
+            # 它挑错了人：首领留在了背景里，前景换成一个没出现过的人。
+            # 裁过去就不必重构图，底图本身就是那个人的近景。
+            # 他站在哪由表演单的站位说了算，那是分镜阶段就定好的，
+            # 不需要再上人脸检测。
+            size = str(params.get("shot_size") or shot.shot_size or "").lower()
+            if size in _CLOSE_SIZES:
+                who = _closeup_subject(db, shot)
+                prev_pos = _position_in_previous(db, plan, shot, who) if who else None
+                src = _local_path_of(db, continuity)
+                if prev_pos and src is not None:
+                    try:
+                        from io import BytesIO
+
+                        from app.capability import mediastore
+
+                        crop = _crop_subject_from(src, prev_pos, width, height)
+                        buf = BytesIO()
+                        crop.save(buf, format="JPEG", quality=94)
+                        item = mediastore.store_bytes(buf.getvalue(), mime="image/jpeg")
+                        anchor = {"url": item["url"]}
+                        crop_note = f"{prev_pos}@上一镜"
+                    except Exception as exc:      # noqa: BLE001 —— 裁不了就用整张
+                        log.warning("特写裁切失败，退回整张连贯锚：%s", exc)
             if params.get("continuity_only"):
                 refs = []
             else:
                 refs = [r for r in refs if r.get("role") != "scene"]
             frame.params_json = {**params, "continuity_anchor_asset_id": continuity.id,
-                                 "continuity_anchor_url": continuity.url}
+                                 "continuity_anchor_url": continuity.url,
+                                 "continuity_crop": crop_note}
         else:
             anchor, refs = _split_identity_anchor(refs)
         if anchor is not None:
@@ -962,19 +1103,43 @@ def generate_first_frames(
             #
             # 编辑模型的语义恰好就是这件事：给你这个人，把他放进这个场景。
             # 底图取主要人物的锚，其余人物的锚作为附加参考一并传下去。
+            # **两种底图语义不同，参数不能共用。**
+            #   身份锚：一张人物肖像 —— 语义是「把这个人放进这个场景」，
+            #           整段场景描述 + 高强度是对的
+            #   连贯锚：上一镜的画面 —— 里面已经有正确的场景、人和光，
+            #           要动的只是机位和这一拍的动作
+            #
+            # 从前两种都发整段画面描述、都用 0.75，于是连贯锚被整张重画：
+            # 镜 2 从走廊换成了临街的另一条走廊，人也换成了一个没出现过的
+            # 金发少年 —— 而连贯锚明明传进去了。
+            if continuity:
+                shot_text = str((params.get("content") or "")).strip() or frame.prompt or ""
+                prompt_text = (
+                    f"Reframe this same scene to: {shot_text}. "
+                    "Keep the same location and set, the same people with identical "
+                    "faces, hair and clothing, and the same lighting. "
+                    "Change only the framing and the described action.")
+                strength_used = CONTINUITY_EDIT_STRENGTH
+            else:
+                prompt_text = frame.prompt
+                strength_used = IDENTITY_EDIT_STRENGTH
             payload = {
                 "image": anchor,
-                "prompt": frame.prompt,
+                "prompt": prompt_text,
                 "negative_prompt": frame.negative_prompt or "",
-                "strength": IDENTITY_EDIT_STRENGTH,
+                "strength": strength_used,
                 # 画幅必须显式带上：编辑模型不传就跟随底图，
                 # 而锚是方形头肩像，出来的整批镜头会是 1:1
                 "width": width, "height": height,
-                "params": {"seed": params.get("seed")},
+                "params": {"seed": params.get("seed"),
+                           "style": _plan_style(db, plan),
+                           "ref_megapixels": 0.4},
             }
             cap = Capability.image_i2i
         if refs:
             payload["reference_images"] = refs
+        if params.get("style") or cfg.get("style"):
+            payload["style"] = params.get("style") or cfg["style"]
 
         task = submit_task(
             db, cap, payload, purpose="first_frame",
@@ -1087,12 +1252,17 @@ def generate_last_frames(
             "negative_prompt": frame.negative_prompt or "",
             "strength": strength,
             "width": width_last, "height": height_last,
-            "params": {"seed": params.get("seed")},
+            "params": {"seed": params.get("seed"),
+                       "style": _plan_style(db, plan),
+                       "ref_megapixels": 0.4},
         }
         refs = ([] if params.get("continuity_only") else
                 params.get("reference_images") or [])
         if refs:
             payload["reference_images"] = refs
+        style = params.get("style") or (plan.config_json or {}).get("style")
+        if style:
+            payload["style"] = style
 
         task = submit_task(
             db, Capability.image_i2i, payload, purpose="last_frame",
@@ -1220,6 +1390,11 @@ def sync_frame_assets(db: Session, plan: ShotPlan) -> dict[str, int]:
 #: 尾帧那种 0.35 会把人留在灰背景棚里。
 #: 但也不能给到 1：那等于重画，脸就丢了。
 IDENTITY_EDIT_STRENGTH = 0.75
+#: 连贯锚的重绘强度。**比身份锚低得多** —— 那一张里已经有正确的场景、
+#: 正确的人、正确的光，要动的只是机位和这一拍的动作。
+#: 0.75 等于整张重画：实跑时镜 2 从走廊换成了临街的另一条走廊，
+#: 人也换成了一个没出现过的金发少年。
+CONTINUITY_EDIT_STRENGTH = 0.42
 
 
 def _split_identity_anchor(
@@ -1250,14 +1425,39 @@ def _split_identity_anchor(
 #: 各画幅在「短边 = 480」这一档的尺寸。本机模型的原生档位是 832×480，
 #: 不是 854×480 —— 报一个它没有的尺寸只会被它自己对齐回去，
 #: 而对齐之后首帧与尾帧未必落在同一个尺寸上
+#: 工作台现在报的档位是 800×480 / 512×768 / 1536×768 / 1280×720。
+#: **报一个它没有的尺寸只会被它自己对齐回去**，而对齐之后首帧与尾帧
+#: 未必落在同一个结果上 —— 那正是 i2v 拉伸或裁切的由来
 _SIZE_480 = {
-    "16:9": (832, 480), "9:16": (480, 832),
+    "16:9": (800, 480), "9:16": (480, 800),
     "4:3": (640, 480), "1:1": (512, 512), "2.39:1": (1152, 480),
 }
 _SIZE_720 = {
     "16:9": (1280, 720), "9:16": (720, 1280),
     "4:3": (1152, 864), "1:1": (1024, 1024), "2.39:1": (1280, 536),
 }
+
+
+def _render_style(profile) -> str:
+    """这一版是写实还是动漫，由档案说了算。见 identity.render_style。"""
+    from app.pipelines.identity import render_style
+    return render_style(profile)
+
+
+def _plan_style(db: Session, plan: ShotPlan) -> str:
+    """出帧那两个函数手上没有档案，从计划顺着映射取一次。
+
+    取不到就按写实 —— 宁可锚错一次画风，也不要不锚：
+    不锚的话提示词里的 character sheet 这类词会把它推向动漫，
+    而那正是上一批素材出成动漫风的原因。
+    """
+    try:
+        tf = db.get(WorldTransform, plan.transform_id) if plan.transform_id else None
+        prof = db.get(WorldProfile, tf.target_profile_id) if tf else None
+        return _render_style(prof)
+    except Exception as exc:          # noqa: BLE001
+        log.warning("取不到出图画风，按写实处理：%s", exc)
+        return "photoreal"
 
 
 def _size_for(aspect: str) -> tuple[int, int]:
