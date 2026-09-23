@@ -531,7 +531,19 @@ def generate_audio(
             force=regenerate,
         )
         spec.gen_task_id = task.id
-        spec.status = SpecStatus.generating
+        # **同步方言在 submit_task 内部就把产物挂好了。** 那一刻 spec
+        # 已经是 ready 并且 asset_id 有值；这里再无条件写 generating，
+        # 等于把刚挂上的结果盖掉。
+        #
+        # 盖掉之后没有任何一条路能修回来：任务已是终态，回调不会再送，
+        # poll_task 见终态直接返回，而 regenerate=False 的提交只挑
+        # pending —— 于是这条规格永远停在「生成中」，尽管 wav 就在
+        # 库里、任务也写着成功。实测一次整章跑完卡住 125 条，
+        # 其中 69 条是这么来的。
+        #
+        # 只有确实还没有产物时才置「生成中」。
+        if spec.asset_id is None:
+            spec.status = SpecStatus.generating
         result.submitted += 1
         checkpoint(db)   # 这一条已经付过费了，先落库
 

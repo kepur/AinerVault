@@ -89,6 +89,30 @@ def test_film_audio_never_generates_narration():
         delivery.build_manifest)
 
 
+def test_sync_dialect_result_is_not_overwritten_by_generating():
+    """提交后不能无条件把规格写回「生成中」。
+
+    同步方言在 submit_task **内部**就完成了回挂：那一刻规格已经是
+    ready、asset_id 也有值。提交方返回后再写一次 generating，就把刚
+    挂上的结果盖掉了。
+
+    盖掉之后没有任何一条路能修回来 —— 任务已是终态，回调不会再送，
+    poll_task 见终态直接返回，而 regenerate=False 的提交只挑 pending。
+    于是规格永远停在「生成中」，尽管 wav 就在库里、任务也写着成功，
+    界面上每一步都显示成功。实测一次整章跑完卡住 125 条。
+    """
+    from app.pipelines import audio_compose
+
+    src = inspect.getsource(audio_compose.generate_audio)
+    marker = "spec.status = SpecStatus.generating"
+    assert marker in src
+    before = src.split(marker)[0]
+    guard = before.rstrip().rsplit("\n", 1)[-1].strip()
+    assert guard == "if spec.asset_id is None:", (
+        f"「生成中」写在了 {guard!r} 下面 —— 它必须被"
+        "「确实还没有产物」这一条挡住，否则同步方言的结果会被盖掉")
+
+
 class TestScreenplayProjectionGuard:
     """有了锁定译本就不能再照原文出剧本。
 
