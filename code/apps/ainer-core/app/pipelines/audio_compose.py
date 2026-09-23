@@ -26,9 +26,9 @@ from app.capability.service import estimate_cost, submit_task
 from app.ids import new_id
 from app.models import (
     Asset, AssetKindSpec, AssetSpec, AssetVariant, AudioKind, AudioSpec, Chapter,
-    DocMode,
-    Scene, ScriptBlock, ScriptDoc, Shot, ShotPlan, SpecStatus, TranslationBlock,
-    WorldEntity, WorldProfile, WorldTransform,
+    DocMode, GenTask,
+    Scene, ScriptBlock, ScriptDoc, Shot, ShotPlan, SpecStatus, TaskStatus,
+    TranslationBlock, WorldEntity, WorldProfile, WorldTransform,
 )
 from app.models.script import BlockType
 from app.worldview import resolve
@@ -454,6 +454,23 @@ def generate_audio(
             continue
         if not (spec.text or "").strip():
             continue
+        # **供应商说了不可重试，就别再投第二次。**
+        #
+        # 挑活的判据是「有没有产物」，而被明确拒绝的规格永远不会有产物 ——
+        # 于是每调用一次 :generate 都把同一批重新投一遍，永远投不完。
+        # 实跑的样子：本地 foley 只做固定语义（脚步、衣料、撞击、纸张、
+        # 风雨雷、环境床），「汽车喇叭」「喉咙紧绷」这类直接回
+        # INVALID_REQUEST + retryable=false；三十轮下来每一轮都报
+        # 「提交 3 条」，成功数一直停在 5，而没有任何一步说过投不出去。
+        #
+        # 这是「每一步都显示成功」的另一面：不是悄悄没做，是反复地做、
+        # 反复地失败，而报表上看着一直在干活。
+        blocked_by = _unsupported_reason(db, spec, regenerate)
+        if blocked_by:
+            if blocked_by not in result.blocked:
+                result.blocked.append(blocked_by)
+            result.skipped += 1
+            continue
         # **没定音色的对白一律不出。**
         #
         # 不拦的话请求就不带 voice_id，方言回落到路由上配的那个默认模型
@@ -549,6 +566,26 @@ def generate_audio(
 
     db.flush()
     return result
+
+
+def _unsupported_reason(db: Session, spec: AudioSpec,
+                        regenerate: bool) -> str | None:
+    """上一次是被明确拒绝的吗。是的话返回一句人话，调用方据此跳过。
+
+    只认 retryable=false —— 超时、掉线、服务重启那些都该再试，
+    这里挡的是「这个请求本身供应商就做不了」。
+    重出（regenerate=True）是人明确要求的，不挡。
+    """
+    if regenerate or not spec.gen_task_id:
+        return None
+    task = db.get(GenTask, spec.gen_task_id)
+    if task is None or task.status is not TaskStatus.failed:
+        return None
+    err = task.error_json or {}
+    if err.get("retryable") is not False:
+        return None
+    msg = str(err.get("message") or err.get("code") or "供应商拒绝了这个请求")
+    return f"{spec.kind.value}「{(spec.text or '')[:24]}」：{msg[:80]}"
 
 
 def backfill_durations(db: Session, plan: ShotPlan) -> dict[str, Any]:

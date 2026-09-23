@@ -370,3 +370,69 @@ class TestSwearWordsAreNotRelatives:
         assert "Mom" in translate._PROFANITY_RULE
         for kind in ("dialogue", "narration", "inner_monolog"):
             assert "语气助词" in translate._KIND_RULES[kind]
+
+
+class TestRejectedRequestsAreNotResubmittedForever:
+    """供应商说了不可重试，就别再投第二次。
+
+    挑活的判据是「有没有产物」，而被明确拒绝的规格永远不会有产物 ——
+    于是每调用一次 :generate 都把同一批重新投一遍，永远投不完。
+
+    坏蛋实跑的样子：本地 foley 只做固定语义（脚步、衣料、撞击、纸张、
+    风雨雷、环境床），「汽车喇叭」「喉咙紧绷」这类直接回 INVALID_REQUEST
+    且 retryable=false。三十轮下来每一轮都报「提交 3 条」，成功数一直
+    停在 5，而没有任何一步说过投不出去 —— 报表上看着一直在干活。
+
+    只挡 retryable=false：超时、掉线、服务重启那些都该再试。
+    """
+
+    def test_a_flat_refusal_is_skipped_with_a_reason(self):
+        from app.pipelines.audio_compose import _unsupported_reason
+
+        spec, task = _spec(), _task(
+            "failed", {"code": "INVALID_REQUEST", "retryable": False,
+                       "message": "audio.sfx 暂不支持这个音效语义"})
+        why = _unsupported_reason(_Sess(task), spec, regenerate=False)
+        assert why and "暂不支持" in why
+
+    def test_a_retryable_failure_is_tried_again(self):
+        from app.pipelines.audio_compose import _unsupported_reason
+
+        task = _task("failed", {"code": "TIMEOUT", "retryable": True,
+                                "message": "上游超时"})
+        assert _unsupported_reason(_Sess(task), _spec(), regenerate=False) is None
+
+    def test_a_failure_with_no_retryable_flag_is_tried_again(self):
+        """没表态就当可以重试 —— 宁可多试一次，不要漏掉能做的。"""
+        from app.pipelines.audio_compose import _unsupported_reason
+
+        task = _task("failed", {"code": "UPSTREAM_ERROR", "message": "崩了"})
+        assert _unsupported_reason(_Sess(task), _spec(), regenerate=False) is None
+
+    def test_an_explicit_regenerate_overrides_the_refusal(self):
+        """重出是人明确要求的，不挡 —— 也许换了供应商。"""
+        from app.pipelines.audio_compose import _unsupported_reason
+
+        task = _task("failed", {"retryable": False, "message": "做不了"})
+        assert _unsupported_reason(_Sess(task), _spec(), regenerate=True) is None
+
+
+class _Sess:
+    def __init__(self, task):
+        self._task = task
+
+    def get(self, _model, _id):
+        return self._task
+
+
+def _spec():
+    from app.models import AudioKind
+
+    return type("S", (), {"gen_task_id": "gt_x", "kind": AudioKind.sfx,
+                          "text": "car horn in the distance"})()
+
+
+def _task(status, err):
+    from app.models import TaskStatus
+
+    return type("T", (), {"status": TaskStatus(status), "error_json": err})()
