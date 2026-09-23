@@ -66,6 +66,13 @@ _BEAT_MAX = 5200
 _PAD_MS = 200
 
 
+def dialogue_padding(shot: Shot) -> tuple[int, int]:
+    """Explicit acting beats around speech; defaults preserve existing timing."""
+    camera = shot.camera_json or {}
+    return tuple(max(0, min(3000, int(camera.get(key, _PAD_MS))))
+                 for key in ("dialogue_lead_ms", "dialogue_tail_ms"))
+
+
 def runtime_window(text: str) -> dict[str, int]:
     """按原著信息量给电影章节一个节奏窗。
 
@@ -92,14 +99,42 @@ def _assets(db: Session, ids: Iterable[str | None]) -> dict[str, Asset]:
 def _beat_ms(shot: Shot, motion: ShotMotion | None) -> int:
     """无对白镜头的画面拍子。
 
-    有运动的镜头需要多一点时间把运动走完；静止镜头短一点。
+    优先用动作导演判的 action_ms —— 它看着首尾帧在判断「这个动作在现实里
+    要多久」，比任何词表都准。
+
+    ## 那个运动下限为什么不能无条件加
+
+    原来是「有运动就至少 _BEAT_MS + 700（3.3 秒）」。它当初是防止视觉
+    叙事镜被一律砍成 2.6 秒，但分镜现在已经按内容分档了（打斗 2 秒、
+    对话 8 秒），下限就反过来跟分镜打架：
+
+    实跑的镜 1 是一个 1.2 秒的动作拍子，被撑到 3.3 秒 —— 画面是 1.7 秒
+    动作加 1.6 秒定格，而**声音是按撑过的槽排的**，于是整段听起来
+    和看起来对不上。「打脸不需要五秒」正是在这里被撑回去的。
+
+    所以下限只兜「分镜没给时长」的情况；分镜给了就信它。
     """
-    # 分镜时已经按锁定译本的信息量估过时长，不能把每个视觉叙事镜头
-    # 一律砍成 2.6 秒，否则 1000 字章节会被压成一分钟预告片。
-    base = int(shot.duration_ms or _BEAT_MS)
+    natural = getattr(motion, "action_ms", None) if motion is not None else None
+    if natural:
+        return max(_BEAT_MIN, min(int(natural), _BEAT_MAX))
+    planned = int(shot.duration_ms or 0)
+    if planned:
+        return max(_BEAT_MIN, min(planned, _BEAT_MAX))
+    base = _BEAT_MS
     if motion is not None and (motion.camera_move or motion.subject_move):
-        base = max(base, _BEAT_MS + 700)
+        base = _BEAT_MS + 700
     return max(_BEAT_MIN, min(base, _BEAT_MAX))
+
+
+def _motion_kind(shot: Shot) -> str:
+    """读取新版三态动静标记，并兼容已经落库的 first_only 镜头。"""
+    camera = shot.camera_json or {}
+    kind = str(camera.get("motion_kind") or "").strip().lower()
+    if kind in {"hold", "camera", "animate"}:
+        return kind
+    if camera.get("frame_mode") == "first_only":
+        return "hold" if camera.get("held_reason") else "camera"
+    return "animate"
 
 
 def build_timeline(
@@ -178,12 +213,19 @@ def build_timeline(
         # 不能沿用 shot.duration_ms —— 它是按「对白+旁白」回填的，
         # 拿掉旁白后一个只有旁白的镜头会剩下九秒空画面
         motion = motions.get(shot.id)
-        action_beat = sp.is_action_beat(
+        # held 是分镜阶段模型明示的「这一镜不动」。
+        # **它优先于 is_action_beat 的关键词猜测** —— 后者是词表兜底
+        # （打斗/挥刀/奔…），「他推开门走出去」一个词都不命中，
+        # 会被判成静态给到 8 秒。模型的标注是判断，词表是猜。
+        motion_kind = _motion_kind(shot)
+        held = motion_kind == "hold"
+        camera_only = motion_kind == "camera"
+        action_beat = (not held) and sp.is_action_beat(
             shot.description, motion.subject_move if motion else None,
             motion.camera_move if motion else None)
 
         if voiced_ms:
-            dur = voiced_ms + _PAD_MS * 2
+            dur = voiced_ms + sum(dialogue_padding(shot))
             why = "按台词真实时长"
         else:
             dur = _beat_ms(shot, motion)
@@ -197,7 +239,7 @@ def build_timeline(
         #
         # 台词比上限还长时**不砍台词** —— 砍了话就说不完。
         # 那种镜头要拆成两镜，而拆镜是分镜那一步的事，这里只报出来。
-        capped, cap_why = sp.clamp_shot_ms(dur, action=action_beat)
+        capped, cap_why = sp.clamp_shot_ms(dur, action=action_beat, held=held)
         if capped != dur and not voiced_ms:
             dur, why = capped, cap_why or why
         # 有台词且超上限的不在这里砍 —— 砍了话就说不完。
@@ -214,7 +256,7 @@ def build_timeline(
         first = pair.get(FrameRole.first.value)
         last = pair.get(FrameRole.last.value)
         first_url = _url(assets, first)
-        last_url = (None if (shot.camera_json or {}).get("frame_mode") == "first_only"
+        last_url = (None if motion_kind in {"hold", "camera"}
                     else _url(assets, last))
         video_url = _url_by_id(assets, shot.video_asset_id)
 
@@ -229,12 +271,19 @@ def build_timeline(
         # 缺图会黑屏（看得出来），缺变化只是「有点闷」（看不出原因）。
         vis_ok, vis_why = sp.is_visible_change(
             last.derive_instruction if last else None)
-        if (shot.camera_json or {}).get("frame_mode") == "first_only":
-            camera = (motions.get(shot.id).camera_move or "") if motions.get(shot.id) else ""
-            # A single reference may support a planned camera move; it does not
-            # need a second generated still to prove that move exists.
-            vis_ok = bool(re.search(r"dolly|push.in|downward tilt|slow pan|lateral arc|推进|推近|横摇|下移", camera, re.I))
-            vis_why = "单首帧模式需要明确的连续运镜"
+        if held:
+            # 真静态镜的目标就是保持。不能再把「没有首尾变化」当质量缺陷。
+            vis_ok = True
+            vis_why = "分镜明确指定真正静态镜"
+        elif camera_only:
+            planned = motions.get(shot.id)
+            camera = planned.camera_move if planned else ""
+            # 单首帧的动态镜靠连续运镜／口型／微表演，不需要伪造第二张静帧。
+            vis_ok, _ = sp.is_camera_motion(
+                camera, planned.motion_prompt_en if planned else None,
+                planned.subject_move if planned else None,
+            )
+            vis_why = "camera 镜需要明确的连续运镜／口型／微表演"
         if not vis_ok:
             still_shots.append({
                 "shot": shot.order_no,
@@ -253,7 +302,16 @@ def build_timeline(
         # 每段独立走一次 i2v。**切点数量报出来** ——
         # 它等于「这一镜缺几个机位」，是回头补分镜的依据。
         n_seg = 1
-        seg_cap = sp.ACTION_MAX_MS if action_beat else sp.STATIC_MAX_MS
+        # A hand gesture during a short line is still one dialogue shot. Using
+        # the action cap here repeats the same video from its first frame.
+        if voiced_ms:
+            seg_cap = sp.STATIC_MAX_MS          # 有台词：按台词切，声音连续
+        elif held:
+            seg_cap = sp.HELD_MAX_MS            # 无声定格，4 秒以上观众以为卡了
+        elif action_beat:
+            seg_cap = sp.ACTION_MAX_MS
+        else:
+            seg_cap = sp.STATIC_MAX_MS
         if dur > seg_cap:
             n_seg = -(-dur // seg_cap)      # 向上取整
             needs_coverage.append({
@@ -276,12 +334,13 @@ def build_timeline(
                          + (f" · 第 {k+1}/{n_seg} 段" if n_seg > 1 else ""),
                 "shot_size": shot.shot_size,
                 "motion": (motion.motion_prompt_en if motion else None),
+                "motion_kind": motion_kind,
                 "scene": (scenes.get(shot.scene_id or "").title
                           if scenes.get(shot.scene_id or "") else None),
                 "kind": "video" if video_url else ("stills" if first_url else "black"),
             })
 
-        local = _PAD_MS if voiced_ms else 0
+        local = dialogue_padding(shot)[0] if voiced_ms else 0
         for spec in specs:
             track = spec.kind.value
             if track not in clips:
@@ -352,8 +411,13 @@ def build_timeline(
         })
 
     video_items = clips["video"]
+    intentional_static_shots = sorted({
+        int(c["shot"]) for c in video_items
+        if c.get("kind") == "stills" and c.get("motion_kind") == "hold"
+    })
     placeholder_shots = sorted({
-        int(c["shot"]) for c in video_items if c.get("kind") != "video"
+        int(c["shot"]) for c in video_items
+        if c.get("kind") != "video" and c.get("motion_kind") != "hold"
     })
     duplicate = sp.duplicate_changes(
         [(s_.order_no,
@@ -502,7 +566,8 @@ def build_timeline(
         "production_ready": not blockers,
         "blockers": blockers,
         "placeholder_shots": placeholder_shots,
-        "actual_video_shots": len(shots) - len(set(placeholder_shots)),
+        "actual_video_shots": sum(1 for s in shots if s.video_asset_id),
+        "intentional_static_shots": intentional_static_shots,
         "total_shots": len(shots),
         "runtime_window": pace,
         "incomplete_crew_shots": incomplete_crew,
@@ -875,10 +940,17 @@ def generate_videos(
     doc = db.get(ScriptDoc, plan.script_doc_id)
     chapter = db.get(Chapter, doc.chapter_id) if doc else None
 
-    todo: list[tuple[Shot, str, str, int]] = []
+    todo: list[tuple[Shot, str, str, int, str]] = []
     skipped: list[dict[str, Any]] = []
     for shot in shots:
         if shot.video_asset_id and not regenerate:
+            continue
+        motion_kind = _motion_kind(shot)
+        if motion_kind == "hold":
+            skipped.append({
+                "shot": shot.order_no,
+                "why": "真正静态镜由最终渲染器直接保持首帧，不调用视频模型",
+            })
             continue
         pair = frames.get(shot.id, {})
         a = _url(assets, pair.get(FrameRole.first.value))
@@ -886,7 +958,7 @@ def generate_videos(
         if not a:
             skipped.append({"shot": shot.order_no, "why": "没有首帧"})
             continue
-        if not b and (shot.camera_json or {}).get("frame_mode") != "first_only":
+        if not b and motion_kind != "camera":
             # 只有首帧也能出，但那是「从一张图生一段运动」，
             # 模型自己编运动 —— 与分镜算好的首尾差异无关，说清楚
             skipped.append({"shot": shot.order_no,
@@ -922,8 +994,7 @@ def generate_videos(
         revision = _production_revision(prompts, motion)
         if any(
             (frame.params_json or {}).get("production_revision") != revision
-            for frame in ([pair[FrameRole.first.value]] if
-                          (shot.camera_json or {}).get("frame_mode") == "first_only" else
+            for frame in ([pair[FrameRole.first.value]] if motion_kind == "camera" else
                           [pair[FrameRole.first.value], pair[FrameRole.last.value]])
         ):
             skipped.append({
@@ -944,23 +1015,50 @@ def generate_videos(
         if natural:
             dur = max(400, min(int(natural), shot.duration_ms))
         else:
-            action = sp.is_action_beat(shot.description, motion.subject_move)
-            cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
+            # 同上：分镜标了静态就按静态，不让词表覆盖模型的判断
+            if motion_kind == "camera":
+                cap = max_ms or sp.STATIC_MAX_MS
+            else:
+                action = sp.is_action_beat(shot.description, motion.subject_move)
+                cap = max_ms or (sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
             dur = min(shot.duration_ms, cap)
-        todo.append((shot, a, b, dur))
+        todo.append((shot, a, b, dur, motion_kind))
 
     if limit:
         todo = todo[:limit]
 
+    #: 交给工作台的 auto 档：让它**按实测像素差**判，而不是按我们的标签判。
+    #:
+    #: LTXV 是忠实插值器 —— 首尾帧一样，它会老老实实还你一段静止视频，
+    #: 白烧 100 秒。auto 会先量差异，低于阈值就改走 ffmpeg 静帧（约 1 秒），
+    #: 并在 motion_reason 里说明为什么。那句说明正是「这一镜的尾帧没改动，
+    #: 该回炉重做」的依据 —— 比我们自己猜准。
+    #:
+    #: camera 档不映射成 kenburns：那是静帧缓推，会丢掉对白口型与呼吸，
+    #: 而 camera 镜恰恰承担这些。只有下面「没有尾帧」那一支才强制 animate。
+    _MOTION_MODE = {"camera": "auto", "animate": "auto"}
+
     submitted = []
-    for shot, a, b, dur in todo:
+    still_shots: list[dict[str, Any]] = []
+    for shot, a, b, dur, motion_kind in todo:
         motion = motions.get(shot.id)
+        # **每镜重算，别用上面那个循环留下的 motion_kind。**
+        # 那是构建 todo 的循环里的变量，跑到这里只剩最后一镜的值，
+        # 于是全部镜头共用同一个类型：最后一镜是 camera 就全体丢尾帧
+        # （首尾帧控制整批失效），是 animate 就给 camera 镜塞上不该有的尾帧。
+        # 两种都不会报错，只会让成片整体不对，而数据看着完全正常。
+        motion_kind = _motion_kind(shot)
         # 这里不再回落到只有一个运镜词的 prompt。上面的门禁保证了
         # 每支视频都有主动作、惯性、受力、光影、面部与连续性约束。
         prompt = motion.motion_prompt_en or ""
-        payload = {"first_frame": {"url": a}, "prompt": prompt, "duration_ms": dur}
-        if b and (shot.camera_json or {}).get("frame_mode") != "first_only":
+        payload = {"first_frame": {"url": a}, "prompt": prompt, "duration_ms": dur,
+                   "motion": _MOTION_MODE.get(motion_kind, "auto")}
+        if b and motion_kind == "animate":
             payload["last_frame"] = {"url": b}
+        else:
+            # camera 镜只有首帧，但必须真的跑单帧驱动视频：它承担对白口型、
+            # 呼吸和连续运镜。不能把首帧复制成尾帧，否则模型最终会回到原位。
+            payload["motion"] = "animate"
         task = submit_task(
             db, Capability.video_i2v, payload,
             purpose="shot_video", ref_kind="shot", ref_id=shot.id,
@@ -978,15 +1076,33 @@ def generate_videos(
             if asset is not None:
                 shot.video_asset_id = asset.id
                 shot.status = SpecStatus.ready
+        # **把它为什么没动记下来。** 静帧不是失败，是省了 100 秒；
+        # 但「尾帧和首帧几乎一样」是上游的问题，不说出来就没人去修，
+        # 而成片里那一镜看起来只是「有点闷」
+        decision = str(out.get("motion_decision") or "")
+        if decision in ("hold", "kenburns"):
+            still_shots.append({
+                "shot": shot.order_no,
+                "decision": decision,
+                "why": str(out.get("motion_reason") or ""),
+                "frame_delta": out.get("frame_delta"),
+                "fix": "尾帧相对首帧几乎没变 —— 回「分镜调度」重写变化说明再出尾帧",
+            })
         submitted.append({"shot": shot.order_no, "task": task.id,
                           "status": task.status.value,
-                          "duration_ms": dur, "prompt": prompt[:60]})
+                          "duration_ms": dur, "prompt": prompt[:60],
+                          "motion_decision": decision or None})
         checkpoint(db)      # 一支视频两三分钟且按次计费，出一支落一支
 
     return {
         "submitted": len(submitted), "items": submitted,
         "skipped": skipped,
-        "remaining": max(0, len([s for s in shots if not s.video_asset_id])),
+        # 被判成静帧的镜头。省了钱，但每一条都是一个该修的尾帧
+        "still_shots": still_shots,
+        "remaining": max(0, len([
+            s for s in shots
+            if not s.video_asset_id and _motion_kind(s) != "hold"
+        ])),
     }
 
 
