@@ -1145,6 +1145,7 @@ def generate_first_frames(
         }
         refs = list(params.get("reference_images") or [])
         cap = Capability.image_t2i
+        scene_head = False
         continuity = _continuity_anchor(db, plan, shot)
         if continuity:
             anchor = {"url": continuity.url}
@@ -1183,7 +1184,12 @@ def generate_first_frames(
                                  "continuity_anchor_url": continuity.url,
                                  "continuity_crop": crop_note}
         else:
-            anchor, refs = _split_identity_anchor(refs)
+            # **场景首镜也走「底图＋身份参考」，不再拿人物肖像当底图。**
+            # 底图给场景，脸给参考图 —— 和连贯镜同一条路子。
+            anchor, refs = _split_scene_anchor(refs)
+            scene_head = anchor is not None
+            if anchor is None:
+                anchor, refs = _split_identity_anchor(refs)
         if anchor is not None:
             # **带身份锚就走编辑能力，锚本身当底图。**
             #
@@ -1211,6 +1217,16 @@ def generate_first_frames(
                     "faces, hair and clothing, and the same lighting. "
                     "Change only the framing and the described action.")
                 strength_used = CONTINUITY_EDIT_STRENGTH
+            elif scene_head:
+                # 底图是这个场景的空景，要做的是把人摆进去。
+                # **祈使句**，和连贯镜一致 —— 供应商自述写着
+                # 「提示词要写成指令，而不是画面描述」。
+                prompt_text = (
+                    "Keep this location exactly as it is — same architecture, "
+                    "fixtures, furniture and lighting — and stage this shot in it. "
+                    "Give each person the face, hair and clothing of the "
+                    f"reference images. {_instruct_head(frame.prompt)}")
+                strength_used = SCENE_EDIT_STRENGTH
             else:
                 prompt_text = frame.prompt
                 strength_used = IDENTITY_EDIT_STRENGTH
@@ -1486,6 +1502,57 @@ IDENTITY_EDIT_STRENGTH = 0.75
 #: 0.75 等于整张重画：实跑时镜 2 从走廊换成了临街的另一条走廊，
 #: 人也换成了一个没出现过的金发少年。
 CONTINUITY_EDIT_STRENGTH = 0.42
+#: 场景锚的重绘强度。场景图里场景是对的、但一个人也没有，
+#: 要往里加人 —— 比「换机位」动得多，比「把一张肖像铺成整场戏」动得少。
+#:
+#: **本机 FLUX.2 编辑根本不读这个值。** 它靠 ReferenceLatent 把参考图
+#: 当条件注入，没有「重绘幅度」这个概念（工作流自述：「不是靠重绘幅度
+#: 去蒙，而是把原图作为参考条件注入」），网关的参数映射里也没有 strength。
+#: 留着是给按强度工作的云端供应商；本机上两条分支的真实差别只有提示词。
+SCENE_EDIT_STRENGTH = 0.60
+
+#: 发给编辑模型的提示词预算。契约写的是 max_prompt_chars=2000。
+#: 从前场景首镜把整段 7162 字的提示词原样发出去 —— 超限 3.5 倍，
+#: 而这一路上没有任何一步截断或报错，多出来的部分去哪了无从得知。
+_PROMPT_BUDGET = 1900
+
+
+def _instruct_head(prompt: str, budget: int = _PROMPT_BUDGET) -> str:
+    """按逗号边界把提示词裁到预算内。
+
+    提示词是按重要性排的（这一镜是什么 → 机位 → 调度 → 光 → 制作单
+    → 相貌），所以从尾部裁掉的是最可替代的那部分 —— 而相貌这一轮
+    由身份参考图负责，本来就不该再靠文字描述去赌。
+    """
+    text = (prompt or "").strip()
+    if len(text) <= budget:
+        return text
+    cut = text[:budget]
+    comma = cut.rfind(", ")
+    return (cut[:comma] if comma > budget // 2 else cut).rstrip(" ,")
+
+
+def _split_scene_anchor(
+    refs: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """场景首镜的底图取**场景图**，人物留作身份参考。
+
+    从前这里取的是主体的人物肖像当底图，等于让模型把一张头肩像铺成
+    一整场戏：场景全靠文字重新长出来，而人物的细节反被重画掉。
+    实跑里高个少年的多色染发在镜 1 被画成了纯红，同一个人在镜 2
+    （连贯锚＋身份参考）却还原得一丝不差 —— 差别就在这里。
+
+    场景图当底图没这个问题：场景是现成的，脸由第二张参考带进来，
+    和连贯镜走的是同一条路子。取不到场景图才退回旧路径。
+    """
+    def usable(r: Any) -> bool:
+        return isinstance(r, dict) and isinstance(r.get("ref"), dict)
+
+    base = next((r for r in refs if usable(r) and str(r.get("role")) == "scene"),
+                None)
+    if base is None:
+        return None, refs
+    return base["ref"], [r for r in refs if r is not base]
 
 
 def _split_identity_anchor(

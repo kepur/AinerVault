@@ -679,3 +679,64 @@ class TestWhoThisShotIsAbout:
 
 def _first(seq):
     return seq[0] if seq else None
+
+
+class TestSceneHeadUsesTheLocationAsBase:
+    """场景首镜的底图取场景图，不取人物肖像。
+
+    拿一张头肩像当底图，等于让模型把它铺成一整场戏：场景全靠文字重新
+    长出来，而人物的细节反被重画掉。实跑里高个少年的多色染发在镜 1
+    被画成了纯红，同一个人在镜 2（连贯锚＋身份参考）却还原得一丝不差
+    —— 差别就在底图是谁。
+    """
+
+    def test_scene_reference_wins_over_the_portrait(self):
+        from app.pipelines.frame_compose import _split_scene_anchor
+
+        refs = [
+            {"ref": {"url": "style.png"}, "role": "style"},
+            {"ref": {"url": "corridor.png"}, "role": "scene"},
+            {"ref": {"url": "face.png"}, "role": "character", "identity": True},
+        ]
+        base, rest = _split_scene_anchor(refs)
+        assert base == {"url": "corridor.png"}
+        assert any(r.get("identity") for r in rest), (
+            "脸要留在参考图里 —— 底图给场景，身份由第二张参考带进来")
+
+    def test_without_a_scene_image_it_declines(self):
+        """取不到场景图就交回调用方，让它退回旧路径。"""
+        from app.pipelines.frame_compose import _split_scene_anchor
+
+        refs = [{"ref": {"url": "face.png"}, "role": "character",
+                 "identity": True}]
+        base, rest = _split_scene_anchor(refs)
+        assert base is None
+        assert rest == refs
+
+
+class TestPromptStaysWithinTheDeclaredBudget:
+    """契约写着 max_prompt_chars=2000，从前场景首镜原样发 7162 字。
+
+    超限 3.5 倍，而这一路上没有任何一步截断或报错 —— 多出来的部分
+    去哪了无从得知，图照出，看不出少了什么。
+    """
+
+    def test_long_prompt_is_cut_to_budget(self):
+        from app.pipelines.frame_compose import _PROMPT_BUDGET, _instruct_head
+
+        text = ", ".join([f"clause number {i}" for i in range(400)])
+        assert len(text) > _PROMPT_BUDGET
+        assert len(_instruct_head(text)) <= _PROMPT_BUDGET
+
+    def test_it_cuts_on_a_clause_boundary(self):
+        from app.pipelines.frame_compose import _instruct_head
+
+        text = ", ".join([f"clause number {i}" for i in range(400)])
+        out = _instruct_head(text)
+        assert not out.endswith(","), "别断在半个从句上"
+        assert out in text
+
+    def test_short_prompt_is_left_alone(self):
+        from app.pipelines.frame_compose import _instruct_head
+
+        assert _instruct_head("a short instruction") == "a short instruction"
