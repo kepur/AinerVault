@@ -725,6 +725,41 @@ class TestActionShotsWithNobodySpeaking:
         assert len(picks) == 1
 
 
+class TestBothLeadsGetAFaceReference:
+    """参考图预算内的人都要标 identity。
+
+    供应商现在收三张：底图＋两张脸。只标主体的话，多人镜里另一个人
+    仍然只有文字描述 —— 实跑八镜里谢文东在自己当主体的那两镜和设定图
+    完全一致（脸、棕发、灰衬衫都对得上），在别人当主体的四镜里换了发色
+    换了衣服，因为那几镜他一张参考都没进去。
+    """
+
+    def test_the_top_two_are_marked(self):
+        from app.pipelines.frame_compose import _by_staging, shot_subject
+
+        db = _DB([_Perf("tall", "speaker", "center"),
+                  _Perf("xie", "addressee", "center_right"),
+                  _Perf("li", "listener", "far_left")])
+        shot = _Shot()
+        staged = _by_staging(db, shot, ["li", "xie", "tall"],
+                             shot_subject(db, shot))
+        assert staged[:2] == ["tall", "xie"], (
+            "第二张脸要给这一镜里第二重要的人，不是名单里排第二的")
+
+    def test_the_third_person_is_still_in_the_prompt(self):
+        """只是没有参考图，人不能从名单里消失 ——
+        画面里有三个人，提示词就得说三个人。"""
+        from app.pipelines.frame_compose import _by_staging, shot_subject
+
+        db = _DB([_Perf("tall", "speaker", "center"),
+                  _Perf("xie", "addressee", "center_right"),
+                  _Perf("li", "listener", "far_left")])
+        shot = _Shot()
+        staged = _by_staging(db, shot, ["li", "xie", "tall"],
+                             shot_subject(db, shot))
+        assert set(staged) == {"tall", "xie", "li"}
+
+
 class TestSceneHeadUsesTheLocationAsBase:
     """场景首镜的底图取场景图，不取人物肖像。
 

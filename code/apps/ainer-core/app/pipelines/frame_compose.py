@@ -532,7 +532,18 @@ def compose_frame_prompt(
     # 谁是主体分镜早就写好了（speech_role + position），照着排即可 ——
     # 不需要在 WorldEntity 上另加主次字段。
     subject = shot_subject(db, shot)
-    for eid in _by_staging(db, shot, frame.entity_ids_json or [], subject):
+    staged = _by_staging(db, shot, frame.entity_ids_json or [], subject)
+    # **参考图预算内的人都要标 identity。** 供应商现在收三张：
+    # 底图＋两张脸，第二张脸给的是这一镜里第二重要的人。
+    # 只标主体的话，多人镜里另一个人仍然只有文字描述 —— 实跑八镜里
+    # 谢文东在自己当主体的那两镜和设定图完全一致，在别人当主体的四镜
+    # 里换了发色换了衣服，因为那几镜他一张参考都没进去。
+    #
+    # 预算是供应商声明的 max_ref_images 减去底图那一张。这里写死 2，
+    # 是因为契约层还没有把这个数透到管线；多标几张也不会更糟 ——
+    # 供应商侧按声明的张数自己截断。
+    identity_ids = set(staged[:2])
+    for eid in staged:
         entity = db.get(WorldEntity, eid)
         if entity is None:
             continue
@@ -558,7 +569,7 @@ def compose_frame_prompt(
                 # 退化成「谁排在数组前面」—— 而那个顺序来自模型随手
                 # 列的 entity_names。现在主体由表演单定（见 shot_subject），
                 # 标记跟着它走，供应商侧照这个标记选第二张参考图。
-                "identity": index == 0 and eid == subject,
+                "identity": index == 0 and eid in identity_ids,
                 "tag": (entity.canonical_key if index == 0
                         else f"{entity.canonical_key}.view"),
             })
