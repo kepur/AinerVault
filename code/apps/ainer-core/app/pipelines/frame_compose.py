@@ -783,6 +783,11 @@ def bind_and_compose(
                 merged["needs_regeneration"] = True
             merged["reference_images"] = refs
             merged["production_revision"] = revision
+            # 3D 台手摆过的站位不能被自动摆位盖掉
+            if (params.get("regional") or {}).get("source") != "stage":
+                merged["regional"] = regional_plan(
+                    db, shot, frame, refs,
+                    profile_id=profile.id, chapter_order=chapter_order)
             # 完整参考集是生成闸门，不是提示性徽章。一个镜头即使只用正脸，
             # 后续反打/侧移也一定会需要转角图；临到那时再独立生成，衣服和体型
             # 已经漂了。先把人物基础素材做完，再允许烧图像额度。
@@ -897,10 +902,7 @@ def _plan_scope(db: Session, plan: ShotPlan) -> tuple[str | None, str | None]:
 
 #: 站位 → 画面横向位置（0 左边缘，1 右边缘）。
 #: 表演单里本来就有这一项，不需要再上人脸检测。
-_POSITION_X = {
-    "far_left": 0.12, "left": 0.24, "center_left": 0.38, "center": 0.50,
-    "center_right": 0.62, "right": 0.76, "far_right": 0.88,
-}
+from app.pipelines.blocking import POSITION_X as _POSITION_X  # noqa: E402 —— 站位表只存一份
 #: 这些站位说明这个人不在画面主体里，裁他没有意义
 _POSITION_ABSENT = frozenset({"offscreen", "background", "off_screen"})
 
@@ -1188,7 +1190,15 @@ def generate_first_frames(
         refs = list(params.get("reference_images") or [])
         cap = Capability.image_t2i
         scene_head = False
-        continuity = _continuity_anchor(db, plan, shot)
+        # **多人镜走分区身份**：底图是空景上的人偶（管站位），每人只带自己的脸、
+        # 限在自己的区域（管身份）。坏蛋镜 3 同一 seed：连贯锚＋叠两张脸 0/3，
+        # 分区 3/3。有分区计划就不再取连贯锚 —— 连贯锚里站着上一镜画错的人，
+        # 分区要和那些人较劲（实测只对了中间一个）。
+        regional = _regional_payload(
+            frame, params, width=width, height=height,
+            style=_plan_style(db, plan),
+            shot_size=str(params.get("shot_size") or shot.shot_size or "fs"))
+        continuity = None if regional else _continuity_anchor(db, plan, shot)
         if continuity:
             anchor = {"url": continuity.url}
             crop_note = None
@@ -1285,6 +1295,8 @@ def generate_first_frames(
                            "ref_megapixels": 0.4},
             }
             cap = Capability.image_i2i
+        if regional is not None:
+            payload, cap, refs = regional, Capability.image_i2i, []
         if refs:
             payload["reference_images"] = refs
         if params.get("style") or cfg.get("style"):
@@ -1572,6 +1584,167 @@ def _instruct_head(prompt: str, budget: int = _PROMPT_BUDGET) -> str:
     cut = text[:budget]
     comma = cut.rfind(", ")
     return (cut[:comma] if comma > budget // 2 else cut).rstrip(" ,")
+
+
+def regional_plan(
+    db: Session, shot: Shot, frame: FrameSpec, refs: list[dict[str, Any]],
+    *, profile_id: str, chapter_order: int | None,
+) -> dict[str, Any] | None:
+    """多人镜首帧的分区身份计划：人偶站位 + 每人的外观、动作与脸。
+
+    **叠参考图会把脸摊到全画面**（坏蛋镜 3 同一 seed：两张脸 0/3，三张更串）；
+    分区身份每人只带自己的脸、限在自己的区域，配合「空景 + 灰人偶」底图 3/3。
+    见 blocking 模块的说明。
+
+    返回 None 表示这一镜不走分区（单人、特写、缺空景或缺人物参考），
+    调用方照走原来的路径 —— 分区是加法，不是替换。
+    """
+    from app.models import ShotPerformance
+
+    from app.pipelines import blocking
+
+    if frame.role is not FrameRole.first:
+        return None
+    size = str((frame.params_json or {}).get("shot_size") or shot.shot_size or "").lower()
+    if size not in blocking.REGIONAL_SIZES:
+        return None
+    plate = next((r["ref"].get("url") for r in refs
+                  if str(r.get("role")) == "scene" and isinstance(r.get("ref"), dict)), None)
+    if not plate:
+        return None
+
+    perf = {p.entity_id: p for p in db.execute(select(ShotPerformance).where(
+        ShotPerformance.shot_id == shot.id)).scalars()}
+    subject = shot_subject(db, shot)
+    faces = {str(r.get("tag")): r["ref"].get("url") for r in refs
+             if str(r.get("role")) == "character" and isinstance(r.get("ref"), dict)}
+    rows: list[dict[str, Any]] = []
+    for eid in _by_staging(db, shot, list(perf), subject):
+        p = perf[eid]
+        pos = _pos_key(p.position)
+        if _pos_key(p.speech_role) == "absent" or pos in blocking.OFF_FRAME:
+            continue
+        entity = db.get(WorldEntity, eid)
+        if entity is None:
+            continue
+        face = faces.get(entity.canonical_key)
+        if not face:
+            # 有人没参考脸：宁可整镜不走分区，也不要让这个人在自己的区域里被瞎编
+            return None
+        epoch = resolve_epoch(db, eid, profile_id, chapter_order)
+        elements = ((epoch.reference_set_json or {}).get("elements") or {}) if epoch else {}
+        wardrobe = str((elements.get("wardrobe") or {}).get("en") or "").strip()
+        build = str((elements.get("identity") or {}).get("en") or "").strip()
+        en = p.en_json or {}
+        action = ", ".join(x for x in (en.get("action"), en.get("expression")) if x)
+        rows.append({
+            "entity_id": eid, "name": entity.display_name, "position": pos,
+            "build_text": build,
+            # 每人的区域提示词：外观（发型＋服装）＋这一镜的动作表情。
+            # 不写别人 —— 写了就又是一次「把别人的特征带进我的区域」
+            "prompt": ". ".join(x for x in (wardrobe, action)
+                                if x and not _CJK.search(x))[:600],
+            "face_url": face,
+        })
+    if len(rows) < 2:
+        return None
+    rows = rows[:blocking.MAX_FIGURES]
+    figures = blocking.auto_block(rows, size)
+    by_id = {r["entity_id"]: r for r in rows}
+    return {
+        "source": "auto",            # 3D 台手摆的结果会写 "stage"，并覆盖这里
+        "plate_url": plate,
+        "scene_prompt": _location_prompt(db, refs, profile_id),
+        "figures": [
+            {**f.as_dict(), "prompt": by_id[f.entity_id]["prompt"],
+             "face_url": by_id[f.entity_id]["face_url"]}
+            for f in figures
+        ],
+    }
+
+
+def _location_prompt(db: Session, refs: list[dict[str, Any]], profile_id: str) -> str:
+    """空景那张图对应的英文环境描述（场景资产的 visual_prompt）。
+
+    Scene 上的地点／时间／天气是中文，进提示词前会被去中文那一步剥光；
+    场景资产本来就配着空景图，描述是现成的英文。
+    """
+    from app.models import AssetSpec, AssetVariant
+
+    tag = next((str(r.get("tag")) for r in refs if str(r.get("role")) == "scene"), "")
+    if not tag:
+        return ""
+    spec = db.execute(select(AssetSpec).where(AssetSpec.canonical_key == tag)).scalars().first()
+    if spec is None:
+        return ""
+    var = db.execute(select(AssetVariant).where(
+        AssetVariant.asset_spec_id == spec.id,
+        AssetVariant.world_profile_id == profile_id)).scalars().first()
+    return (var.visual_prompt or "").strip() if var else ""
+
+
+def _media_bytes(url: str | None) -> bytes | None:
+    """本地媒体库里的文件内容。取不到返回 None。"""
+    from pathlib import Path
+
+    from app.capability.mediastore import media_root
+
+    if not url or "/media/" not in url:
+        return None
+    path = Path(media_root()) / url.rsplit("/media/", 1)[-1].split("?")[0]
+    return path.read_bytes() if path.exists() else None
+
+
+def _regional_payload(
+    frame: FrameSpec, params: dict[str, Any], *, width: int, height: int,
+    style: str | None, shot_size: str,
+) -> dict[str, Any] | None:
+    """按分区计划渲染「空景＋人偶」与每人的 mask，拼成分区身份的请求。
+
+    **全局提示词只写环境，不写人。** 全局条件管的正是人物区域之外的背景 ——
+    在那里写「一个低着头的瘦男孩」，模型就会在背景里再画一个男孩。
+    spike 里背景走廊尽头冒出来的路人就是这么来的。人的外观与动作各自写在
+    自己的区域里。
+    """
+    from app.capability import mediastore
+    from app.pipelines import blocking
+    from app.pipelines.shot_plan import SHOT_SIZE_PROMPT
+
+    plan = params.get("regional") or {}
+    raw = plan.get("figures") or []
+    if len(raw) < 2:
+        return None
+    plate = _media_bytes(plan.get("plate_url"))
+    if plate is None:
+        return None
+    figures = [blocking.Figure.of(f) for f in raw]
+    preview = mediastore.store_bytes(
+        blocking.render_preview(plate, figures, width, height), mime="image/png")
+    regions = []
+    for fig, row in zip(figures, raw):
+        mask = mediastore.store_bytes(
+            blocking.render_mask(fig, width, height), mime="image/png")
+        regions.append({"mask": {"url": mask["url"]},
+                        "identity": {"url": row["face_url"]},
+                        "prompt": row["prompt"]})
+    # 含中文的整段丢掉，与 compose_frame_prompt 同一规矩（图像模型不认中文）
+    scene = " ".join(x for x in (
+        SHOT_SIZE_PROMPT.get(shot_size, "full shot") + ".",
+        plan.get("scene_prompt") or "",
+        "Keep this location exactly as it is: same architecture, fixtures and lighting.",
+        f"Exactly {len(regions)} people, already standing where they are; "
+        "no bystanders, the rest of the space is empty.",
+    ) if x and not _CJK.search(x))
+    payload: dict[str, Any] = {
+        "image": {"url": preview["url"]},
+        "prompt": scene,
+        "negative_prompt": frame.negative_prompt or "",
+        "width": width, "height": height,
+        "params": {"seed": params.get("seed"), "style": style},
+        "regions": regions,
+    }
+    frame.params_json = {**params, "regional_preview_url": preview["url"]}
+    return payload
 
 
 def _split_scene_anchor(
