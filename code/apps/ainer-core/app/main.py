@@ -28,9 +28,21 @@ log = logging.getLogger("ainer-core")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
+    from app.workers.poller import run_forever
+
     ensure_schema()
     log.info("ainer-core 启动 schema=%s port=%s", settings.db_schema, settings.port)
-    yield
+    poller = None
+    if settings.poll_loop_sec > 0:
+        poller = asyncio.create_task(run_forever(settings.poll_loop_sec))
+        log.info("后台轮询已启动，每 %ds 一轮", settings.poll_loop_sec)
+    try:
+        yield
+    finally:
+        if poller is not None:
+            poller.cancel()
 
 
 app = FastAPI(

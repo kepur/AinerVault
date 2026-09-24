@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # 轮询兜底：submitted_at + estimated_ms * factor 之后主动查询
     poll_fallback_factor: float = 3.0
     poll_fallback_min_sec: int = 30
+    #: 后台轮询间隔（秒）。回调丢了的任务靠它收尾；0 = 关闭
+    poll_loop_sec: int = 60
 
     redis_url: str = "redis://localhost:16379/1"
 
