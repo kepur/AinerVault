@@ -2206,7 +2206,7 @@ const Staging = {
       return;
     }
     const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`).catch(()=>null);
-    const pid = plan && plan.plan_id;
+    const pid = plan && plan.shot_plan_id;
     const d = pid ? await api("GET", `/shot-plans/${pid}/performance`).catch(()=>null) : null;
 
     v.innerHTML = `
@@ -2279,7 +2279,7 @@ const Staging = {
   async extract(btn) {
     const plan = await api("GET", `/chapters/${State.chapterId}/shot-plan`);
     await run(btn, async () => {
-      const r = await api("POST", `/shot-plans/${plan.plan_id}/performance:extract`, {});
+      const r = await api("POST", `/shot-plans/${plan.shot_plan_id}/performance:extract`, {});
       logOk(`${r.shots} 镜，${r.performances} 条调度`);
       (r.static_shots||[]).forEach(x => logWarn(`镜 ${x.shot}：${x.note}`));
       (r.position_jumps||[]).forEach(x =>
