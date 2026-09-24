@@ -41,6 +41,7 @@ from app.models import (
 from app.ids import new_id
 
 from app.pipelines import screenplay as sp
+from app.pipelines.base import PipelineError
 
 log = logging.getLogger(__name__)
 
@@ -551,6 +552,17 @@ def build_timeline(
         blockers.append(f"{len(stale_prompts)} 镜的提示词早于最新制作单，必须重新拼装")
     if soundscape_gaps:
         blockers.append(f"{len(soundscape_gaps)} 处声音制作单尚未编译成可生成规格")
+    # **场记检查早就写好了，只是没人用。** crew_sheets.check_continuity 能查
+    # 光位跳变、越轴、视线、道具凭空出现／消失，一直只挂在 GET /continuity 上，
+    # 结果不进任何闸 —— 查出来也照样出片。
+    #
+    # 只拦 high（现在是越轴）：medium／low 照报不拦。道具出没、色温漂移那几类
+    # 规则太粗，全拦的话告警立刻变成噪声，人就不看了。
+    continuity = _continuity_report(db, plan)
+    hard = [i for i in continuity.get("items", []) if i.get("severity") == "high"]
+    if hard:
+        blockers.append(
+            f"{len(hard)} 处场记硬伤（越轴等），相邻镜头会让观众以为人物换了位置")
     if cursor < pace["min_ms"]:
         blockers.append(
             f"成片仅 {cursor/60000:.1f} 分钟，低于本章信息量的紧凑下限 "
@@ -575,6 +587,7 @@ def build_timeline(
         "invalid_motion_shots": invalid_motion,
         "stale_prompt_shots": stale_prompts,
         "soundscape_gaps": soundscape_gaps,
+        "continuity": continuity,
     }
 
     return {
@@ -596,6 +609,16 @@ def build_timeline(
         "quality": quality,
         "notes": "电影投影：无旁白；小说叙述由动作、反应、环境与视觉转场承担。",
     }
+
+
+def _continuity_report(db: Session, plan: ShotPlan) -> dict[str, Any]:
+    """场记检查。查不了（没镜头、缺数据）就如实返回空，不让时间线跟着失败。"""
+    from app.pipelines.crew_sheets import check_continuity
+
+    try:
+        return check_continuity(db, plan)
+    except PipelineError:
+        return {"total": 0, "items": [], "by_severity": {}, "by_kind": {}}
 
 
 def _cn(track: str) -> str:

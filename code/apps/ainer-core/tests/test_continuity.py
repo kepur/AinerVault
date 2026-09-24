@@ -105,6 +105,29 @@ class TestAxis:
         )
         assert not issues
 
+    @pytest.mark.parametrize("depth", ["background", "foreground", "offscreen"])
+    def test_depth_positions_have_no_left_or_right(self, depth):
+        """background／foreground／offscreen 没有左右坐标，不参与比较。
+
+        从前 `_STAGE_ORDER.get(pos, 0)` 把它们默认成 0，也就是当成「中央」
+        去比左右。坏蛋 215 镜跑出 21 处翻轴，头一条是「上一镜 right/center，
+        这一镜 background/right」—— 人退到背景里，被报成和别人换了边。
+        修掉之后剩 6 处，都是真的左右互换。
+        """
+        issues = check_axis(
+            _shot(1, positions={"甲": "right", "乙": "center_left"}),
+            _shot(2, positions={"甲": depth, "乙": "right"}),
+        )
+        assert not issues
+
+    def test_a_real_swap_is_still_caught_after_the_fix(self):
+        """镜 8→9 的原样：两人真的左右互换了，这一种必须照报。"""
+        issues = check_axis(
+            _shot(8, positions={"高个": "center_right", "胖子": "center_left"}),
+            _shot(9, positions={"高个": "center_left", "胖子": "center_right"}),
+        )
+        assert [i.kind for i in issues] == ["axis_flip"]
+
     def test_only_shared_characters_compared(self):
         """只比两镜都有的人 —— 新入画的人没有「上一镜的位置」。"""
         issues = check_axis(

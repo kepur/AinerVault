@@ -442,3 +442,18 @@ class TestAtMs:
 
     def test_garbage_does_not_raise(self):
         assert cut._at_ms(self._Spec("早一点"), 4000) == 0
+
+
+def test_continuity_hard_errors_block_the_final_grade():
+    """场记检查早就写好了，只是没人用。
+
+    crew_sheets.check_continuity 能查越轴、光位跳变、视线、道具出没，
+    一直只挂在 GET /continuity 上，结果不进任何闸 —— 查出来也照样出片。
+    只拦 high：道具出没、色温漂移那几类规则太粗，全拦的话告警变成噪声。
+    """
+    import inspect
+
+    src = inspect.getsource(cut.build_timeline)
+    assert "_continuity_report" in src
+    assert '"severity") == "high"' in src
+    assert '"continuity": continuity' in src

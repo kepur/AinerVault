@@ -123,8 +123,16 @@ def check_axis(prev: dict, cur: dict) -> list[Issue]:
     shared = [n for n in pa if n in ca]
     for i, a in enumerate(shared):
         for b in shared[i + 1:]:
-            p_rel = _STAGE_ORDER.get(pa[a], 0) - _STAGE_ORDER.get(pa[b], 0)
-            c_rel = _STAGE_ORDER.get(ca[a], 0) - _STAGE_ORDER.get(ca[b], 0)
+            # **没有左右坐标的站位不参与比较。** background／foreground／
+            # offscreen 不在序位表里，从前 .get(…, 0) 把它们默认成 0 ——
+            # 也就是当成了「中央」去比左右。坏蛋 215 镜跑出 21 处翻轴，
+            # 头一条就是「上一镜 right/center，这一镜 background/right」：
+            # 人退到了背景里，被报成和别人换了边。
+            quad = (pa[a], pa[b], ca[a], ca[b])
+            if any(pos not in _STAGE_ORDER for pos in quad):
+                continue
+            p_rel = _STAGE_ORDER[pa[a]] - _STAGE_ORDER[pa[b]]
+            c_rel = _STAGE_ORDER[ca[a]] - _STAGE_ORDER[ca[b]]
             if p_rel == 0 or c_rel == 0:
                 continue
             if (p_rel > 0) != (c_rel > 0):
