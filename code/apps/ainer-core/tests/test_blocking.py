@@ -119,3 +119,19 @@ def test_regional_prompt_has_no_people_in_the_background():
     src = inspect.getsource(frame_compose._regional_payload)
     assert "no bystanders" in src
     assert "frame.prompt" not in src.split("scene = ")[1].split("payload")[0]
+
+
+def test_neighbouring_regions_meet_at_the_midline():
+    """相邻两人的区域不许大片重叠 —— 镜 1 的李爽就是被重叠带里
+    更高更大的高个少年压下去的。"""
+    from PIL import Image
+
+    rows = [_row("li", "left", "short stature"), _row("tall", "center_left", "tall")]
+    figs = auto_block(rows, "ms")
+    limits = blocking.neighbour_limits(figs)
+    a, b = sorted(figs, key=lambda f: f.x)
+    ma = Image.open(io.BytesIO(render_mask(a, 800, 480, feather=0, limits=limits[a.entity_id])))
+    mb = Image.open(io.BytesIO(render_mask(b, 800, 480, feather=0, limits=limits[b.entity_id])))
+    y = 400
+    both = [x for x in range(800) if ma.getpixel((x, y)) > 0 and mb.getpixel((x, y)) > 0]
+    assert len(both) <= 2, f"两块区域在 y={y} 重叠了 {len(both)} 个像素"

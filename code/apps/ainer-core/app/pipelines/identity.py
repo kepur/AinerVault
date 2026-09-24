@@ -47,7 +47,7 @@ from app.models import (
     WorldEntity, WorldProfile,
 )
 from app.pipelines.base import PipelineError, checkpoint
-from app.pipelines.entity_epochs import AGE_EN_KEY, EN_KEY
+from app.pipelines.entity_epochs import AGE_EN_KEY, EN_KEY, without_handheld
 
 log = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ def reference_elements(epoch: AssetEpoch) -> dict[str, dict[str, str]]:
     inv = dict(epoch.invariant_json or {})
     var = dict(epoch.variant_json or {})
     inv_en = str(inv.get(EN_KEY) or "").strip()
-    var_en = str(var.get(EN_KEY) or "").strip()
+    var_en = without_handheld(var.get(EN_KEY))
     age_en = str(var.get(AGE_EN_KEY) or "").strip()
     return {
         "identity": {
@@ -344,7 +344,7 @@ def compose_character_reference_prompt(
         )
 
     var = dict(epoch.variant_json or {})
-    wardrobe = str(var.get(EN_KEY) or "").strip()
+    wardrobe = without_handheld(var.get(EN_KEY))
     age = str(var.get(AGE_EN_KEY) or "").strip()
     era = era_phrase(profile) if profile is not None else ""
     who = demonym(profile) if profile is not None else ""

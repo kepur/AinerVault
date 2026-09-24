@@ -24,6 +24,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.ids import new_id
+from app.pipelines.entity_epochs import without_handheld
 from app.models import (
     INVARIANT_FIELDS, VARIANT_FIELDS, AssetEpoch, AssetSpec, AssetVariant,
     Chapter, EpochBinding, EpochKind, ReviewStatus, ScriptDoc, Shot, ShotPlan,
@@ -112,14 +113,14 @@ def compose_epoch_prompt(
     # 「a man seated behind a door」加六十个词的脸型体型，
     # 场景四个词对人物六十个词，出来的是一张灰底棚拍立姿。
     # 只留 sex：锚里看得出性别，但写出来能防模型跑偏（§4.3）。
+    var_en = without_handheld(var.get("_en")) if kind == "character" else str(var.get("_en") or "")
     if has_anchor and kind == "character":
-        bits = [str(inv.get("sex") or "").strip(),
-                str(var.get("_en") or "").strip()]
+        bits = [str(inv.get("sex") or "").strip(), var_en.strip()]
         joined = ", ".join(b for b in bits if b)
         if joined:
             return joined
-    elif inv.get("_en") or var.get("_en"):
-        joined = ", ".join(str(x).strip() for x in (inv.get("_en"), var.get("_en"))
+    elif inv.get("_en") or var_en:
+        joined = ", ".join(str(x).strip() for x in (inv.get("_en"), var_en)
                            if str(x or "").strip())
         if joined:
             return joined

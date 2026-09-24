@@ -1405,11 +1405,13 @@ def generate_last_frames(
         instruction, why = _derive_en(frame, deltas.get(shot.id))
         if why:
             result.thin_derive.append({"shot": shot.order_no, "why": why})
+        cast = _regional_headcount(db, shot)
         payload: dict[str, Any] = {
             "image": {"url": first_url},
             # 写法由路由声明：祈使句式只说改什么，描述式给整段画面。
             # 同 seed 提升连贯度
-            "prompt": _last_frame_prompt(frame.prompt or "", instruction, prompt_style),
+            "prompt": _last_frame_prompt(frame.prompt or "", instruction, prompt_style,
+                                         headcount=cast),
             "negative_prompt": frame.negative_prompt or "",
             "strength": strength,
             "width": width_last, "height": height_last,
@@ -1419,6 +1421,11 @@ def generate_last_frames(
         }
         refs = ([] if params.get("continuity_only") else
                 params.get("reference_images") or [])
+        if cast >= 2:
+            # **首帧是分区画的，人已经对了，尾帧只写变化，不再塞脸。**
+            # 带着脸去编辑就回到了叠参考那条路：脸被摊到全画面，
+            # 没带脸的人还会被删掉（镜 8 背景里的谢文东就是这样没的）
+            refs = []
         if refs:
             payload["reference_images"] = refs
         style = params.get("style") or (plan.config_json or {}).get("style")
@@ -1463,7 +1470,8 @@ PROMPT_STYLE_DESCRIBE = "describe"      # 整段画面描述（文生图式的�
 PROMPT_STYLE_INSTRUCT = "instruct"      # 只说改什么（祈使句式的编辑模型）
 
 
-def _last_frame_prompt(scene_prompt: str, instruction: str, style: str) -> str:
+def _last_frame_prompt(scene_prompt: str, instruction: str, style: str,
+                       headcount: int = 0) -> str:
     """尾帧发给编辑模型的那一句。
 
     **本机 FLUX-edit 的自述原话：「提示词要写成祈使句指令
@@ -1480,15 +1488,28 @@ def _last_frame_prompt(scene_prompt: str, instruction: str, style: str) -> str:
     """
     instruction = (instruction or "").strip(" ;.")
     if style != PROMPT_STYLE_INSTRUCT:
-        return f"{scene_prompt or ''} ; {instruction}".strip(" ;")
+        keep = _keep_everyone(headcount)
+        return f"{scene_prompt or ''} ; {instruction}{keep}".strip(" ;")
     if not instruction:
         return "Keep the image unchanged."
     # 「别动什么」和「改什么」一样重要 —— 不写死的话编辑模型会顺手
     # 把脸、衣服、机位一起重画，那就是漂移
-    return (f"{instruction}. "
+    return (f"{instruction}.{_keep_everyone(headcount)} "
             "Keep the same people with identical faces, hair and clothing, "
             "the same location, the same camera angle and framing, "
             "and the same lighting. Change nothing else.")
+
+
+def _keep_everyone(headcount: int) -> str:
+    """多人镜的尾帧要把人数说死。
+
+    坏蛋镜 8：首帧分区画出了三个人（背景里背对镜头的谢文东也在），尾帧派生
+    时只带了另外两人的参考脸 —— 编辑模型顺手把没带脸的那个人删掉了。
+    「保持同样的人」不够，得说「这 N 个人都还在」。
+    """
+    if headcount < 2:
+        return ""
+    return f" All {headcount} people stay in the frame, each where they already stand."
 
 
 def _derive_en(frame: FrameSpec, deltas: list[str] | None) -> tuple[str, str]:
@@ -1629,7 +1650,15 @@ def regional_plan(
             continue
         face = faces.get(entity.canonical_key)
         if not face:
-            # 有人没参考脸：宁可整镜不走分区，也不要让这个人在自己的区域里被瞎编
+            # 拼提示词那一步只给「在画面主体里」的人组装参考图，站在 background
+            # 的人不在其列 —— 坏蛋镜 8 的谢文东就是这样没拿到脸，整镜退回了
+            # 叠参考的老路径（正是会串的那条）。直接从设定里按朝向与景别取他的视图
+            _look, look_refs = _entity_look(
+                db, entity, profile_id, chapter_order,
+                _facing_for(db, shot.id, entity.id), size)
+            face = next(iter(_asset_urls(db, look_refs)), None)
+        if not face:
+            # 设定里也没有：宁可整镜不走分区，也不要让这个人在自己的区域里被瞎编
             return None
         epoch = resolve_epoch(db, eid, profile_id, chapter_order)
         elements = ((epoch.reference_set_json or {}).get("elements") or {}) if epoch else {}
@@ -1721,9 +1750,11 @@ def _regional_payload(
     preview = mediastore.store_bytes(
         blocking.render_preview(plate, figures, width, height), mime="image/png")
     regions = []
+    limits = blocking.neighbour_limits(figures)
     for fig, row in zip(figures, raw):
         mask = mediastore.store_bytes(
-            blocking.render_mask(fig, width, height), mime="image/png")
+            blocking.render_mask(fig, width, height, limits=limits[fig.entity_id]),
+            mime="image/png")
         regions.append({"mask": {"url": mask["url"]},
                         "identity": {"url": row["face_url"]},
                         "prompt": row["prompt"]})
@@ -1745,6 +1776,15 @@ def _regional_payload(
     }
     frame.params_json = {**params, "regional_preview_url": preview["url"]}
     return payload
+
+
+def _regional_headcount(db: Session, shot: Shot) -> int:
+    """这一镜的首帧是不是分区画的、画了几个人。不是返回 0。"""
+    first = db.execute(select(FrameSpec).where(
+        FrameSpec.shot_id == shot.id, FrameSpec.role == FrameRole.first,
+    )).scalars().first()
+    plan = ((first.params_json or {}).get("regional") or {}) if first else {}
+    return len(plan.get("figures") or [])
 
 
 def _split_scene_anchor(

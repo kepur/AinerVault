@@ -120,9 +120,34 @@ def auto_block(
             top=max(0.0, top), bottom=bottom, width=width,
         ))
 
+    _fit_side_by_side(figures, anchor_top=scale >= 1.3)
     _place_depth_only(figures)
     _separate(figures)
     return figures
+
+
+def _fit_side_by_side(figures: list[Figure], *, anchor_top: bool,
+                      room: float = 0.92, gap: float = 0.02) -> None:
+    """并排排不下就整体缩小。
+
+    坏蛋镜 1 是三人中景：人偶放大 1.7 倍后三个人加起来比画面还宽，
+    _separate 推不开，李爽被高个少年整个挡住 —— 分区里他那块区域
+    只剩别人的后背，出图时这个人就没了。
+
+    中景以头顶为锚缩（头的高度不变，腰线往上收）；全景以脚底为锚
+    （人还站在地上，只是离镜头远了一点）。
+    """
+    need = sum(f.width for f in figures) + gap * max(0, len(figures) - 1)
+    if need <= room or not figures:
+        return
+    k = (room - gap * (len(figures) - 1)) / sum(f.width for f in figures)
+    for f in figures:
+        h = (f.bottom - f.top) * k
+        if anchor_top:
+            f.bottom = f.top + h
+        else:
+            f.top = f.bottom - h
+        f.width *= k
 
 
 def _place_depth_only(figures: list[Figure]) -> None:
@@ -199,18 +224,39 @@ def _mannequin(d, f: Figure, width: int, height: int) -> None:
     d.rounded_rectangle([cx + 2, t1 - 4, cx + w / 2 - 2, bottom], radius=lw * 0.3, fill=shade)
 
 
+def neighbour_limits(figures: list[Figure]) -> dict[str, tuple[float, float]]:
+    """每个人的区域左右不越过与邻居的中线。
+
+    坏蛋镜 1（三人中景）：每人四周各留 35% 余量给手臂，相邻两人的区域
+    大片重叠 —— 重叠带正好压在矮个李爽的头和肩上，而高个少年的区域
+    更高更大，在那里压过了他：出图时李爽整个被挡在后面。
+    """
+    order = sorted(figures, key=lambda f: f.x)
+    out: dict[str, tuple[float, float]] = {}
+    for i, f in enumerate(order):
+        lo = (order[i - 1].x + f.x) / 2 if i > 0 else 0.0
+        hi = (f.x + order[i + 1].x) / 2 if i + 1 < len(order) else 1.0
+        out[f.entity_id] = (lo, hi)
+    return out
+
+
 def render_mask(f: Figure, width: int, height: int, *, pad: float = 0.35,
-                feather: int = 18) -> bytes:
+                feather: int = 18,
+                limits: tuple[float, float] | None = None) -> bytes:
     """这个人的区域：人偶外框加一圈余量，边缘羽化。
 
     余量给手臂和姿态留空间 —— 框卡得太死，模型只能画一个立正的人；
-    羽化让相邻区域平滑过渡，不出硬边。
+    羽化让相邻区域平滑过渡，不出硬边。limits 是左右界（见 neighbour_limits），
+    余量不许伸进邻居那一半。
     """
     from PIL import Image, ImageDraw, ImageFilter
 
     m = Image.new("L", (width, height), 0)
     half = f.width * (0.5 + pad)
-    x0, x1 = (f.x - half) * width, (f.x + half) * width
+    left, right = f.x - half, f.x + half
+    if limits is not None:
+        left, right = max(left, limits[0]), min(right, limits[1])
+    x0, x1 = left * width, right * width
     y0 = max(0.0, f.top - 0.04) * height
     y1 = min(1.0, f.bottom) * height
     ImageDraw.Draw(m).rectangle([x0, y0, x1, y1], fill=255)

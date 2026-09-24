@@ -819,3 +819,47 @@ class TestPromptStaysWithinTheDeclaredBudget:
         from app.pipelines.frame_compose import _instruct_head
 
         assert _instruct_head("a short instruction") == "a short instruction"
+
+
+class TestHandheldItemsAreNotAppearance:
+    """手里拿着什么是这一镜的道具，不是这个人长什么样。
+
+    坏蛋的谢文东，基准期的服装英文末尾是「holding a cheap utility knife」
+    （第一章原文里一把刀都没有，是拿后文填的）。它进了设定图正面，转角图
+    又从正面派生 —— 于是这个在走廊里被抢钱的受害者，每一镜手里都攥着刀。
+    """
+
+    @pytest.mark.parametrize("text,gone", [
+        ("grey school shirt, worn sneakers, holding a cheap utility knife", "knife"),
+        ("dark armor, katana in hand, straw hat", "katana"),
+        ("denim jacket, gripping a baseball bat", "bat"),
+        ("school uniform, with a phone in her hand", "phone"),
+    ])
+    def test_the_held_item_is_dropped(self, text, gone):
+        from app.pipelines.entity_epochs import without_handheld
+
+        assert gone not in without_handheld(text)
+
+    def test_the_rest_of_the_look_survives(self):
+        from app.pipelines.entity_epochs import without_handheld
+
+        out = without_handheld(
+            "messy dark brown hair, grey school shirt, holding a knife, worn sneakers")
+        assert out == "messy dark brown hair, grey school shirt, worn sneakers"
+
+    def test_a_pose_is_not_an_item(self):
+        """「手插兜」是姿势，不是拿着东西 —— 不能一并删掉。"""
+        from app.pipelines.entity_epochs import without_handheld
+
+        assert "hands in pockets" in without_handheld("baggy jeans, hands in pockets")
+
+    def test_every_consumer_of_the_look_strips_it(self):
+        """设定图、镜头提示词、分区外观三处读的是同一段英文，三处都要剥。"""
+        import inspect
+
+        from app.pipelines import epochs, identity
+
+        assert "without_handheld" in inspect.getsource(identity.reference_elements)
+        assert "without_handheld" in inspect.getsource(
+            identity.compose_character_reference_prompt)
+        assert "without_handheld" in inspect.getsource(epochs.compose_epoch_prompt)

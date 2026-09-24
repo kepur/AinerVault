@@ -63,6 +63,32 @@ CHAR_INVARIANT = INVARIANT_FIELDS["character"]
 EN_KEY = "_en"
 #: 这一期年龄的英文。单独存是因为锚图要用它，而混在 visual_en 里取不出来
 AGE_EN_KEY = "_age_en"
+
+#: 「手里拿着什么」的从句。可变字段里有 carried（随身携带物），抽取时会被
+#: 写进这一期的英文整段 —— 而这段英文会原样喂给设定图、每一镜的人物提示词
+#: 和分区身份的外观描述。
+_HANDHELD = re.compile(
+    r"\b(holding|gripping|clutching|clasping|wielding|brandishing|carrying)\b"
+    r"|\b(in|with)\s+(his|her|their|one|both)\s+hands?\b|\bin hand\b",
+    re.I,
+)
+
+
+def without_handheld(text: str | None) -> str:
+    """去掉「手里拿着什么」—— 那是这一镜的道具，不是这个人长什么样。
+
+    坏蛋的谢文东，基准期的服装英文末尾是「holding a cheap utility knife」
+    （第一章原文里一把刀都没有，是拿后文填的）。它进了设定图正面，转角图
+    又从正面派生 —— 于是这个在走廊里被抢钱的受害者，每一镜手里都攥着刀。
+
+    手持物走道具资产（AssetKindSpec.prop）和表演单的 props，按镜头出现；
+    设定图只画人。按逗号／分号拆开，整条丢掉含手持动词的从句。
+    """
+    if not text:
+        return ""
+    clauses = re.split(r"\s*[,;，；]\s*", str(text).strip())
+    kept = [c for c in clauses if c and not _HANDHELD.search(c)]
+    return ", ".join(kept)
 CHAR_VARIANT = VARIANT_FIELDS["character"]
 
 _FIELD_CN = {
