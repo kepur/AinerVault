@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.requests import Request
@@ -69,11 +69,12 @@ async def capability_error_handler(_: Request, exc: CapabilityError) -> JSONResp
 
 from app.api.v2 import (  # noqa: E402
     asset_pack, audio, blocking, console, culture, gen_tasks, handoff, library,
-    prose, script, settings_api, shots, translation, worldview,
+    prose, script, settings_api, shots, studio, translation, worldview,
 )
 
 app.include_router(console.router)
 app.include_router(blocking.router)
+app.include_router(studio.router)
 app.include_router(library.router)
 app.include_router(script.router)
 app.include_router(worldview.router)
@@ -105,6 +106,26 @@ def media_file(name: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(path)
+
+
+#: 画布前端（code/apps/ainer-studio）构建产物。和 /admin 一样读盘即生效，
+#: 重新 npm run build 之后刷新页面就是新版本，不用重启服务
+_STUDIO = Path(__file__).resolve().parents[2] / "ainer-studio" / "dist"
+
+
+@app.get("/studio", include_in_schema=False)
+@app.get("/studio/{path:path}", include_in_schema=False)
+def studio_page(path: str = "") -> FileResponse:
+    if path:
+        target = (_STUDIO / path).resolve()
+        if target.is_file() and _STUDIO.resolve() in target.parents:
+            return FileResponse(target)
+    index = _STUDIO / "index.html"
+    if not index.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="画布前端还没构建：cd code/apps/ainer-studio && npm install && npm run build")
+    return FileResponse(index)
 
 
 @app.get("/admin", include_in_schema=False)
