@@ -23,7 +23,9 @@ from app.models.narrative_device import (
     NarrativeDevice, PlotLoad, STRATEGY_BRIEF, Volatility, choose_strategy,
     strategy_brief,
 )
+from app.models.preset import Preset, PresetMark
 from app.models.primer import PrimerKind, WorldPrimer
+from app.models.scene3d import SceneMessage, SceneProject
 from app.models.performance import (
     Facing, ShotPerformance, SpeechRole, StagePosition,
 )
@@ -55,6 +57,7 @@ from app.models.world import (
 
 __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
+    "Preset", "PresetMark", "SceneMessage", "SceneProject",
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",
     "AssetEpoch", "EpochBinding", "EpochKind",

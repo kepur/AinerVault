@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import type { Board, CastMember, PlanSummary } from "./types";
@@ -19,7 +20,7 @@ function remember(key: string, value: string) {
   history.replaceState(null, "", u);
 }
 
-export default function App() {
+export default function App({ nav }: { nav?: ReactNode }) {
   const [novels, setNovels] = useState<NovelRow[]>([]);
   const [novelId, setNovelId] = useState(q.get("novel") ?? "");
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
@@ -110,6 +111,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">Ainer <b>Studio</b></div>
+        {nav}
         <select value={novelId} onChange={e => setNovelId(e.target.value)}>
           {novels.map(n => <option key={n.id} value={n.id}>{n.title}</option>)}
         </select>

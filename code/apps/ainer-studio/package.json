@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:runtime": "rolldown src/scene/iife.ts --format iife --platform neutral -o ../ainer-core/app/scene3d/vendor/scene-runtime.iife.js"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",
