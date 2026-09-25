@@ -783,11 +783,17 @@ def bind_and_compose(
                 merged["needs_regeneration"] = True
             merged["reference_images"] = refs
             merged["production_revision"] = revision
-            # 3D 台手摆过的站位不能被自动摆位盖掉
-            if (params.get("regional") or {}).get("source") != "stage":
-                merged["regional"] = regional_plan(
-                    db, shot, frame, refs,
-                    profile_id=profile.id, chapter_order=chapter_order)
+            auto = regional_plan(db, shot, frame, refs,
+                                 profile_id=profile.id, chapter_order=chapter_order)
+            kept = params.get("regional") or {}
+            if kept.get("source") != "stage":
+                merged["regional"] = auto
+            elif auto:
+                # 3D 台手摆过的站位不能被自动摆位盖掉 —— 但只保留几何。
+                # 脸、外观、动作跟设定和表演单走，照新算的刷新；表演单里删掉的人
+                # 从画面里拿掉。自动摆位照算一份存着：表演单加了人，导演台里才摆
+                # 得到他，「恢复自动」也回到按最新表演单的摆位
+                merged["regional"] = stage_plan_refreshed(kept, auto)
             # 完整参考集是生成闸门，不是提示性徽章。一个镜头即使只用正脸，
             # 后续反打/侧移也一定会需要转角图；临到那时再独立生成，衣服和体型
             # 已经漂了。先把人物基础素材做完，再允许烧图像额度。
@@ -1197,7 +1203,7 @@ def generate_first_frames(
         regional = _regional_payload(
             frame, params, width=width, height=height,
             style=_plan_style(db, plan),
-            shot_size=str(params.get("shot_size") or shot.shot_size or "fs"))
+            shot_size=framed_size(params, shot))
         continuity = None if regional else _continuity_anchor(db, plan, shot)
         if continuity:
             anchor = {"url": continuity.url}
@@ -1406,6 +1412,9 @@ def generate_last_frames(
         if why:
             result.thin_derive.append({"shot": shot.order_no, "why": why})
         cast = _regional_headcount(db, shot)
+        change = camera_change((shot.camera_json or {}).get("rig"))
+        if change:
+            instruction = f"{change} {instruction}".strip()
         payload: dict[str, Any] = {
             "image": {"url": first_url},
             # 写法由路由声明：祈使句式只说改什么，描述式给整段画面。
@@ -1668,6 +1677,7 @@ def regional_plan(
         action = ", ".join(x for x in (en.get("action"), en.get("expression")) if x)
         rows.append({
             "entity_id": eid, "name": entity.display_name, "position": pos,
+            "facing": _pos_key(p.facing),
             "build_text": build,
             # 每人的区域提示词：外观（发型＋服装）＋这一镜的动作表情。
             # 不写别人 —— 写了就又是一次「把别人的特征带进我的区域」
@@ -1686,7 +1696,9 @@ def regional_plan(
         "scene_prompt": _location_prompt(db, refs, profile_id),
         "figures": [
             {**f.as_dict(), "prompt": by_id[f.entity_id]["prompt"],
-             "face_url": by_id[f.entity_id]["face_url"]}
+             "face_url": by_id[f.entity_id]["face_url"],
+             "facing": by_id[f.entity_id]["facing"],
+             "build": list(blocking.build_of(by_id[f.entity_id]["build_text"]))}
             for f in figures
         ],
     }
@@ -1722,6 +1734,73 @@ def _media_bytes(url: str | None) -> bytes | None:
         return None
     path = Path(media_root()) / url.rsplit("/media/", 1)[-1].split("?")[0]
     return path.read_bytes() if path.exists() else None
+
+
+def stage_cast(db: Session, shot: Shot) -> list[dict[str, Any]]:
+    """没有分区计划的镜头（单人、特写、缺空景……）在导演台上也要有人可看。
+
+    按表演单自动摆位，只给导演台看、不进出图 —— 这类镜头的首帧照旧走主体参考，
+    导演台在这里只定运镜。排序、出画的判定与 regional_plan 同一套。
+    """
+    from app.models import ShotPerformance
+
+    from app.pipelines import blocking
+
+    perf = {p.entity_id: p for p in db.execute(select(ShotPerformance).where(
+        ShotPerformance.shot_id == shot.id)).scalars()}
+    rows: list[dict[str, Any]] = []
+    for eid in _by_staging(db, shot, list(perf), shot_subject(db, shot)):
+        p = perf[eid]
+        pos = _pos_key(p.position)
+        if _pos_key(p.speech_role) == "absent" or pos in blocking.OFF_FRAME:
+            continue
+        entity = db.get(WorldEntity, eid)
+        if entity is None:
+            continue
+        rows.append({"entity_id": eid, "name": entity.display_name, "position": pos,
+                     "facing": _pos_key(p.facing), "build_text": ""})
+    rows = rows[:blocking.MAX_FIGURES]
+    by_id = {r["entity_id"]: r for r in rows}
+    # 景别只影响人偶在画面里的大小；特写、大特写没有专门的缩放，按全景摆，
+    # 导演台打开时再按分镜景别把相机推上去
+    return [{**f.as_dict(), "facing": by_id[f.entity_id]["facing"]}
+            for f in blocking.auto_block(rows, str(shot.shot_size or "fs"))]
+
+
+def framed_size(params: dict[str, Any], shot: Shot) -> str:
+    """首帧提示词里写的景别。
+
+    导演台摆过机位时以台上的取景为准：人偶是按台上的相机投影出来的，
+    提示词却还写分镜的「close-up」，就是两路条件互相打架 —— 人偶占半个画面，
+    文字要特写。台上的景别由前端按主体在画面里露出多少身体算出（rig.shot_size）。
+    """
+    rig = (shot.camera_json or {}).get("rig") or {}
+    if (params.get("regional") or {}).get("source") == "stage" and rig.get("shot_size"):
+        return str(rig["shot_size"])
+    return str(params.get("shot_size") or shot.shot_size or "fs")
+
+
+def camera_change(rig: dict[str, Any] | None) -> str:
+    """尾帧指令的第一句：落幅的构图由相机决定。
+
+    不写的话编辑模型只会在原构图上改动作 —— 推、环绕、摇臂之后的画面
+    和首帧一个机位。静止和手持的落幅与起幅同一构图，不写。
+    """
+    rig = rig or {}
+    if rig.get("description_en") and rig.get("move") not in (None, "static", "handheld"):
+        return f"Camera change: {rig['description_en']}"
+    return ""
+
+
+def stage_plan_refreshed(kept: dict[str, Any], auto: dict[str, Any]) -> dict[str, Any]:
+    """手摆的站位（几何）＋ 最新的身份（脸、外观、动作）。"""
+    fresh = {f["entity_id"]: f for f in auto.get("figures") or []}
+    figures = [
+        {**fresh[f["entity_id"]], **{k: f[k] for k in ("x", "top", "bottom", "width")}}
+        for f in kept.get("figures") or [] if f.get("entity_id") in fresh
+    ]
+    return {**auto, "source": "stage", "figures": figures,
+            "auto_figures": auto.get("figures") or []}
 
 
 def _regional_payload(

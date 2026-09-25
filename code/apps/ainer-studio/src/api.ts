@@ -38,6 +38,15 @@ export const api = {
       figures: figures.map(({ entity_id, x, top, bottom, width }) => ({ entity_id, x, top, bottom, width })),
     }),
   resetBlocking: (shotId: string) => call<{ source: string }>("DELETE", `/shots/${shotId}/blocking`),
+  /** 导演台保存：起幅投影出的屏幕站位＋完整 3D 场面＋编译好的运镜 */
+  saveStage: (shotId: string, body: {
+    figures: { entity_id: string; x: number; top: number; bottom: number; width: number }[];
+    stage3d: unknown;
+    camera: Record<string, unknown>;
+  }) => call<Blocking>("PUT", `/shots/${shotId}/blocking`, {
+    ...body,
+    figures: body.figures.map(({ entity_id, x, top, bottom, width }) => ({ entity_id, x, top, bottom, width })),
+  }),
 
   // 出图都是异步的：提交后靠后台轮询把结果挂回来，画布定时刷新看状态
   firstFrame: (planId: string, shotId: string) =>

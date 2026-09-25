@@ -332,7 +332,7 @@ class TestRenderContract:
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
              "-i", "sine=frequency=440:duration=0.5", str(work / "tone.wav")],
-            check=True)
+            check=True, stdin=subprocess.DEVNULL)
 
         def mean_db(clip_count: int) -> float:
             tl = {"tracks": [{"id": "dialogue", "layer": "audio", "clips": [
@@ -346,13 +346,28 @@ class TestRenderContract:
             probe = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-i", str(out),
                  "-af", "volumedetect", "-f", "null", "-"],
-                capture_output=True, text=True).stderr
+                capture_output=True, text=True, stdin=subprocess.DEVNULL).stderr
             return float(re.search(r"mean_volume: (-?[\d.]+) dB", probe)[1])
 
         short, long = mean_db(2), mean_db(40)
         assert abs(long - short) < 3.0, (
             f"40 段混出来 {long:.1f}dB，2 段是 {short:.1f}dB —— "
             "amix 又按输入数把整片压平了")
+
+    def test_ffmpeg_never_listens_to_the_terminal(self, monkeypatch):
+        """ffmpeg 默认读 stdin（按 q 退出）。服务在后台跑时它去读终端会被挂起，
+        一直挂到超时 —— 全量测试里实测挂满 600 秒，单独跑 1.8 秒就完。
+        导出整章时就是「卡住、不报错、不动」。"""
+        import subprocess as sp
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setattr(cut.subprocess, "run", fake_run)
+        cut._run(["ffmpeg", "-version"], 5)
+        assert seen.get("stdin") is sp.DEVNULL
 
     def test_only_local_media_is_used(self):
         """外部地址一律不下载 —— 导出要在几分钟内跑完，
@@ -411,6 +426,25 @@ class TestVideoGenerationGate:
         src = inspect.getsource(cut.generate_videos)
         assert "真正静态镜由最终渲染器直接保持首帧" in src
         assert 'payload["motion"] = "animate"' in src
+
+
+class TestStageCameraMove:
+    """导演台定的运镜怎么进视频请求。"""
+
+    def test_only_real_camera_moves_count(self):
+        assert cut.rig_moves_camera({"move": "orbit_left"})
+        assert cut.rig_moves_camera({"move": "custom"})
+        assert not cut.rig_moves_camera({"move": "static"})
+        assert not cut.rig_moves_camera({"move": "handheld"})
+        assert not cut.rig_moves_camera(None)
+
+    def test_a_moving_camera_is_not_pinned_by_the_last_frame(self):
+        """本机尾帧是编辑首帧得来的，编辑模型不挪机位（镜 3 实测左环绕 40°
+        的尾帧与首帧同一构图）。拿它当尾帧约束，视频结尾会被拉回起幅构图。"""
+        import inspect
+
+        src = inspect.getsource(cut.generate_videos)
+        assert 'motion_kind == "animate" and not rig_moves_camera(rig)' in src
 
 
 class TestFilmProjection:

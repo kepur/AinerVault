@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, media } from "../api";
 import type { ShotCard } from "../types";
+import { moveLabel, type MoveKind } from "../stage/moves";
 
 interface Props {
   planId: string;
@@ -51,8 +52,8 @@ export default function Inspector({ planId, shot, onStage, onChanged }: Props) {
       {shot.video_url && <video key={shot.video_url} src={media(shot.video_url)} controls loop muted />}
 
       <div className="actions">
-        <button className="primary" onClick={onStage} disabled={!shot.regional}
-          title={shot.regional ? "" : "单人、特写，或缺空景／参考脸的镜头没有人偶可摆"}>
+        <button className="primary" onClick={onStage}
+          title={shot.regional ? "摆站位、定机位与运镜" : "这一镜首帧走单主体路径：导演台在这里只定运镜"}>
           3D 导演台
         </button>
         <button disabled={!!busy} onClick={() => run("重出首帧", () => api.firstFrame(planId, shot.id))}>
@@ -72,7 +73,8 @@ export default function Inspector({ planId, shot, onStage, onChanged }: Props) {
           ? <>这一镜是<b>分区身份</b>出的图：{shot.regional.people} 个人各自带着自己的参考脸，
               站位{shot.regional.source === "stage" ? "由导演在 3D 台上手摆" : "按表演单自动摆位"}。</>
           : <>这一镜走单主体路径（特写或单人）。</>}
-        {" "}运镜：{shot.camera.move ?? "—"} · 运动：{shot.camera.motion_decision ?? shot.camera.motion_kind ?? "—"}
+        {" "}运镜：{shot.camera.rig?.move ? `${moveLabel(shot.camera.rig.move as MoveKind)}（导演台）` : shot.camera.move ?? "—"}
+        {" "}· 运动：{shot.camera.motion_decision ?? shot.camera.motion_kind ?? "—"}
         {shot.dialogue_lines > 0 && <> · 台词 {shot.dialogue_lines} 句</>}
       </div>
     </div>

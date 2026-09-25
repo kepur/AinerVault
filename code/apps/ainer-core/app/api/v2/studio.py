@@ -97,7 +97,7 @@ def plan_board(plan_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
             "shot_size": s.shot_size, "duration_ms": s.duration_ms,
             "description": s.description,
             "camera": {k: (s.camera_json or {}).get(k)
-                       for k in ("move", "motion_kind", "motion_decision")},
+                       for k in ("move", "motion_kind", "motion_decision", "rig")},
             "first": frame_out(first),
             "last": frame_out(fs.get("last")),
             "video_url": urls.get(s.video_asset_id) if s.video_asset_id else None,

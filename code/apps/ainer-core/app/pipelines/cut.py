@@ -917,8 +917,35 @@ def _mix_audio(tl: dict[str, Any], work: Path, timeout_sec: int,
     return out
 
 
+def apply_rig(payload: dict[str, Any], rig: dict[str, Any] | None) -> dict[str, Any]:
+    """**导演台定的运镜要真的交给视频模型。**
+
+    从前 i2v 请求里根本没有 camera —— 工作台认 camera.move（推拉摇、环绕、
+    手持），core 却一次都没发过，运镜只剩运动描述里的一句话。
+    结构化参数给认得的词；英文描述放在最前面，补认不得的（横移、升降、
+    摇臂抛物线、贝塞尔轨迹、推轨变焦、荷兰角、移焦）。静止镜只发结构化的
+    static，不再写一句「不动」去和动作描述抢位置。
+    """
+    rig = rig or {}
+    if rig.get("video_move"):
+        payload["camera"] = {"move": rig["video_move"]}
+    if rig.get("description_en") and rig.get("move") != "static":
+        payload["prompt"] = f"{rig['description_en']} {payload.get('prompt') or ''}".strip()
+    return payload
+
+
+def rig_moves_camera(rig: dict[str, Any] | None) -> bool:
+    """导演台定的是真正的机位运动（不是静止，也不是原地手持）。"""
+    move = (rig or {}).get("move")
+    return bool(move) and move not in ("static", "handheld")
+
+
 def _run(cmd: list[str], timeout_sec: int) -> None:
-    proc = subprocess.run(cmd, capture_output=True, timeout=timeout_sec)
+    # **stdin 必须关掉。** ffmpeg 默认监听键盘（按 q 退出）；服务在后台跑时
+    # 它去读终端就会被挂起，一直挂到超时 —— 测试里实测挂满 600 秒，
+    # 单独跑却 1.8 秒就完。渲染整章时遇上就是「导出卡住、不报错、不动」
+    proc = subprocess.run(cmd, capture_output=True, timeout=timeout_sec,
+                          stdin=subprocess.DEVNULL)
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace")[-600:]
         raise RuntimeError(f"ffmpeg 失败（{cmd[-1]}）：{tail}")
@@ -1087,7 +1114,14 @@ def generate_videos(
         prompt = motion.motion_prompt_en or ""
         payload = {"first_frame": {"url": a}, "prompt": prompt, "duration_ms": dur,
                    "motion": _MOTION_MODE.get(motion_kind, "auto")}
-        if b and motion_kind == "animate":
+        rig = (shot.camera_json or {}).get("rig")
+        apply_rig(payload, rig)
+        # **导演台定了真运镜，就不拿尾帧去钉视频的结尾。** 本机的尾帧是在首帧上
+        # 编辑出来的，编辑模型不会挪机位：坏蛋镜 3 实测，指令开头写着
+        # 「Camera change: 左环绕 40°」，出来的尾帧与首帧同一构图，只改了表情。
+        # 拿它当尾帧约束，视频结尾会被拉回起幅构图 —— 运镜被压掉，和下面
+        # camera 镜「不能把首帧复制成尾帧」是同一个道理
+        if b and motion_kind == "animate" and not rig_moves_camera(rig):
             payload["last_frame"] = {"url": b}
         else:
             # camera 镜只有首帧，但必须真的跑单帧驱动视频：它承担对白口型、
