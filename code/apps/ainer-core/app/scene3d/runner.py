@@ -82,3 +82,17 @@ def shot_reports(doc: dict[str, Any], shots: list[dict[str, Any]]) -> list[str]:
         return []
     r = _call({"mode": "shot", "doc": doc, "shots": shots}, wall_timeout=20)
     return list(r.get("reports") or [])
+
+
+def bake_scene(doc: dict[str, Any], *, fps: int | None = None, camera: str | None = None,
+               frames: int | None = None, t0: float = 0.0, timeout_ms: int = 60000) -> dict[str, Any]:
+    """逐帧解算渲染场景（给 Blender／UE）：几何部件表、逐帧位姿、人偶关节、机位。
+
+    在沙箱里算 —— 文档出自不可信的场景脚本，求值时照样不给它宿主对象。
+    """
+    options = {k: v for k, v in {"fps": fps, "camera": camera, "frames": frames, "t0": t0}.items() if v is not None}
+    r = _call({"mode": "bake", "doc": doc, "options": options, "timeoutMs": timeout_ms},
+              wall_timeout=timeout_ms / 1000 + 20)
+    if "errors" in r and not r.get("objects"):
+        raise SceneRunError("烘焙失败：" + "；".join(e.get("message", "") for e in r["errors"]))
+    return r

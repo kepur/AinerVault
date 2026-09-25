@@ -62,6 +62,24 @@ export interface PoseKey {
   pose: string;
 }
 
+/** 人物动作（动作库 scene/rig.ts 的 MOTIONS）：t 开始、duration 时长、target 出拳踢腿时面向谁 */
+export interface ActionKey {
+  t: number;
+  name: string;
+  duration: number;
+  target?: string;
+}
+
+/**
+ * 脚本里的语义动作：move_to、play_action、camera.follow……（Ainer Scene Protocol 的 timeline）。
+ * 预览和渲染不读它（它们读算好的轨迹、动作）；给协议导出、UE 映射、智能体回看用。
+ */
+export interface TimelineOp {
+  op: string;
+  t: number;
+  [k: string]: unknown;
+}
+
 export type PrimKind = "box" | "sphere" | "cylinder" | "cone" | "plane" | "torus" | "capsule" | "prism";
 
 export type ParamValue = number | string | boolean;
@@ -80,6 +98,8 @@ export interface SceneObject {
   /** 人物：体型与姿势 */
   body?: string;
   poses?: PoseKey[];
+  /** 人物：动作片段（出拳、闪避、倒地……） */
+  actions?: ActionKey[];
   /** 关联的角色（角色库里的实体 id） */
   ref?: string;
   /** 局部包围盒（未缩放，米） */
@@ -141,6 +161,8 @@ export interface SceneDoc {
   /** 主机位时间表：t 秒起切到哪台机位 */
   cuts: Cut[];
   notes: string[];
+  /** 语义时间线（见 TimelineOp） */
+  timeline?: TimelineOp[];
 }
 
 /** 导演台上的手动改动：只存与脚本不同的部分，脚本重跑后按 id 覆盖回去。 */

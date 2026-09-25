@@ -1,0 +1,9 @@
+# Blender 无头 worker
+binary: /Applications/Blender.app/Contents/MacOS/Blender   # 找不到就用 PATH 里的 blender
+timeout_sec: 1800        # 整个渲染任务的墙钟上限
+stall_sec: 180           # 这么久没有新进度 = 卡死：杀掉进程，换一个新进程重来
+retries: 1               # 卡死／崩溃后重来的次数
+resolution: [1024, 576]  # 16:9；视频模型要 32 的倍数
+passes: [preview, clay, depth, pose, canny]
+preview_samples: 16      # EEVEE 采样；控制素材不需要很高
+save_blend: true         # 同时存一份 scene.blend，美术可以直接打开接着改

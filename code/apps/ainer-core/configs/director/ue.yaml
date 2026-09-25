@@ -1,0 +1,12 @@
+# Unreal Engine 适配（V1 关闭：feature_flags.ue_enabled=false）
+remote_control:
+  http: http://127.0.0.1:30010        # Remote Control API（HTTP）
+  websocket: ws://127.0.0.1:30020     # Remote Control API（WebSocket）
+  timeout_sec: 30
+level: /Game/Ainer/Maps/Previs
+sequence_root: /Game/Ainer/Sequences
+mannequin_asset: /Game/Characters/Mannequins/Meshes/SKM_Quinn_Simple
+unit_scale: 100            # 协议是米，UE 是厘米
+movie_render_queue:
+  output_dir: ""           # 空 = 项目的 Saved/MovieRenders
+  preset: ""               # MRQ 预设资产路径；空 = 默认

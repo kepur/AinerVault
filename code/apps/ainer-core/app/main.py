@@ -69,13 +69,14 @@ async def capability_error_handler(_: Request, exc: CapabilityError) -> JSONResp
 
 from app.api.v2 import (  # noqa: E402
     asset_pack, audio, blocking, console, culture, gen_tasks, handoff, library,
-    characters, presets, prose, scene3d, script, settings_api, shots, studio, translation, worldview,
+    characters, director, presets, prose, scene3d, script, settings_api, shots, studio, translation, worldview,
 )
 
 app.include_router(console.router)
 app.include_router(blocking.router)
 app.include_router(studio.router)
 app.include_router(scene3d.router)
+app.include_router(director.router)
 app.include_router(presets.router)
 app.include_router(characters.router)
 app.include_router(library.router)

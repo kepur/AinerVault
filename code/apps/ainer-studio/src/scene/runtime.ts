@@ -7,11 +7,12 @@
  */
 import type {
   CamKey, CameraDef, Cut, Diagnostics, Environment, GroundKind, LightDef, MoveKey, MoveTrack, Overrides,
-  ParamValue, PrimKind, SceneDoc, SceneObject, SceneSummary, Sky, Vec2, Vec3,
+  ParamValue, PrimKind, SceneDoc, SceneObject, SceneSummary, Sky, TimelineOp, Vec2, Vec3,
 } from "./types";
 import { BODIES, POSES, PREFABS, partsBounds, prefabDefaults } from "./prefabs";
 import { CAMERA_PRESETS, PRESET_IDS, shotDistance } from "./cameraPresets";
-import { SceneEval } from "./evaluate";
+import { localPose, SceneEval } from "./evaluate";
+import { MOTION_IDS, MOTIONS } from "./rig";
 import * as M from "./math";
 
 export class SceneError extends Error {}
@@ -21,6 +22,8 @@ type Ref = Handle | string;
 type Pos = Vec2 | Vec3;
 
 const MAX_OBJECTS = 5000;
+/** 会「朝运动方向」的东西：车、船、动物 */
+const STEERED = new Set(["car", "police_car", "truck", "bus", "motorcycle", "bicycle", "boat", "horse", "horse_cart", "helicopter", "bird", "dog", "cart"]);
 const SKIES: Sky[] = ["day", "dawn", "dusk", "night", "overcast", "studio"];
 const GROUNDS: GroundKind[] = ["grid", "asphalt", "grass", "sand", "snow", "water", "stone", "floor", "dirt"];
 const ACTIONS = ["walk", "run", "drive", "fly", "swim"] as const;
@@ -52,6 +55,8 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
   const notes: string[] = [];
   const warnings: string[] = [];
   const presetJobs: { cam: CameraDef; preset: string; opts: Record<string, unknown> }[] = [];
+  /** 语义时间线：每个动画调用记一条（协议导出、UE 映射用） */
+  const timeline: TimelineOp[] = [];
   const counters = new Map<string, number>();
   let env: Environment = { sky: "day", ground: "grid", groundSize: 120, fog: 0 };
   let duration: number | null = null;
@@ -257,6 +262,61 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       if (o.kind !== "character") fail("S.pose", `「${o.id}」不是人物`);
       if (!(pose in POSES)) fail("S.pose", `pose 只能是 ${Object.keys(POSES).join(" / ")}`);
       o.poses = [...(o.poses ?? []).filter(p => Math.abs(p.t - t) > 1e-6), { t: num(t, "S.pose", "t"), pose }].sort((a, b) => a.t - b.t);
+      timeline.push({ op: "actor.set_pose", t, actor: o.id, pose });
+    },
+
+    /**
+     * 人物动作（动作库）：right_punch 右直拳、left_punch、front_kick 前踢、dodge_left/right 闪避、block_high 格挡、
+     * hit_react_back 受击后仰、hit_react_left、fall_backward 倒地、stand_up 起身、look_back 回头、turn_left/right 转身、
+     * walk_forward/run_forward 向前走跑、idle 待机。t 开始（秒）、duration 时长、target 出拳踢腿时面向谁
+     */
+    action(who: Ref, name: string, o: { t?: number; duration?: number; target?: Ref } = {}) {
+      const where = `S.action("${name}")`;
+      const obj = get(who, where);
+      if (obj.kind !== "character") fail(where, `「${obj.id}」不是人物，动作只给人物用`);
+      const def = MOTIONS[name];
+      if (!def) {
+        // 动作库就十几个：全列出来（带中文），比按拼写猜「最接近的」有用 —— uppercut 猜出来是 idle
+        const zh = Object.fromEntries(Object.entries(MOTIONS).map(([k, m]) => [k, m.zh]));
+        const near = suggest(name, MOTION_IDS, zh).filter(k => zh[k] && (zh[k].includes(name) || name.includes(zh[k])));
+        fail(where, `没有这个动作${near.length ? `（是不是 ${near.join("、")}？）` : ""}。动作库：${MOTION_IDS.filter(k => k !== "turn_to").map(k => `${k} ${zh[k]}`).join("、")}`);
+      }
+      const t0 = num(o.t, where, "t", 0);
+      const dur = num(o.duration, where, "duration", def.duration);
+      if (dur <= 0) fail(where, "duration 要大于 0");
+      let target: string | undefined;
+      if (def.locomotion) {
+        const here = localPose(obj, t0);
+        const dest = M.add(here.pos, M.scale(M.forwardOf(here.rot[1]), def.locomotion.speed * dur));
+        appendMove(obj, t0, dest, { duration: dur, action: def.locomotion.action }, where);
+      } else {
+        target = o.target !== undefined ? get(o.target, where).id : undefined;
+        if (target === obj.id) fail(where, "target 不能是自己");
+        obj.actions = [...(obj.actions ?? []), { t: t0, name, duration: dur, ...(target ? { target } : {}) }].sort((a, b) => a.t - b.t);
+      }
+      timeline.push({ op: "actor.play_action", t: t0, actor: obj.id, action: name, duration: dur, ...(target ? { target_actor: target } : {}) });
+    },
+
+    /** 走到／跑到某处：to 目的地，t 出发时间，duration 或 speed（米/秒），action walk｜run。可以连着写好几段 */
+    moveTo(what: Ref, to: Pos, o: { t?: number; duration?: number; speed?: number; action?: string; face?: string } = {}) {
+      const where = "S.moveTo";
+      const obj = get(what, where);
+      const t0 = num(o.t, where, "t", 0);
+      const dest = vec(to, where, "to");
+      const dur = appendMove(obj, t0, dest, o, where);
+      timeline.push({ op: `${roleOf(obj)}.move_to`, t: t0, [roleOf(obj)]: obj.id, to: dest, duration: +dur.toFixed(3), action: obj.track?.action });
+    },
+
+    /** 转身面向目标（人或物），t 开始，duration 默认 0.5 秒 */
+    face(who: Ref, target: Ref, o: { t?: number; duration?: number } = {}) {
+      const where = "S.face";
+      const obj = get(who, where);
+      if (obj.kind !== "character") fail(where, `「${obj.id}」不是人物`);
+      const tg = get(target, where);
+      const t0 = num(o.t, where, "t", 0);
+      const dur = num(o.duration, where, "duration", MOTIONS.turn_to.duration);
+      obj.actions = [...(obj.actions ?? []), { t: t0, name: "turn_to", duration: dur, target: tg.id }].sort((a, b) => a.t - b.t);
+      timeline.push({ op: "actor.look_at", t: t0, actor: obj.id, target_actor: tg.id, duration: dur });
     },
 
     // ── 批量摆放 ──
@@ -374,6 +434,8 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       }));
       // 第一帧之前物体停在第一帧的位置；第一帧没写 at 的，从摆放位置出发（见 track）
       obj.track = track(obj, mk, o, where);
+      timeline.push({ op: `${roleOf(obj)}.move`, t: obj.track.keys[0].t, [roleOf(obj)]: obj.id,
+        keys: obj.track.keys.map(k => ({ t: k.t, at: k.pos, rot: k.rot })), action: obj.track.action });
     },
 
     /** 沿路径匀速走：path 点列、start 开始时间、speed（米/秒）或 duration */
@@ -399,6 +461,8 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       obj.transform = { ...obj.transform, pos: pts[0] };
       // 这里的 o.path 是点列，不是插值方式：路径已经加密过，按折线走
       obj.track = track(obj, keys, { face: o.face ?? "path", ease: o.ease ?? "linear", path: "linear", action: o.action }, where);
+      timeline.push({ op: `${roleOf(obj)}.move_along`, t: start, [roleOf(obj)]: obj.id,
+        path: (o.path as Pos[]).map((p, i) => vec(p, where, `path[${i}]`)), duration: +dur.toFixed(3), action: obj.track.action });
     },
 
     // ── 机位 ──
@@ -424,9 +488,11 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       const where = "S.cameraKeys";
       const c = cam(which, where);
       if (!Array.isArray(keys) || !keys.length) fail(where, "keys 至少一个");
-      for (const [i, k] of keys.entries()) addKey(c, normKey(k as unknown as Record<string, unknown>, `${where} keys[${i}]`));
+      const norm = keys.map((k, i) => normKey(k as unknown as Record<string, unknown>, `${where} keys[${i}]`));
+      for (const k of norm) addKey(c, k);
       if (o.ease) c.ease = o.ease;
       if (o.path) c.path = o.path;
+      timeline.push({ op: "camera.keys", t: Math.min(...norm.map(k => k.t)), camera: c.id, keys: norm });
     },
 
     /** 跟拍：mode = back 背跟／front 正面跟／side 侧跟／top 顶拍／first 第一视角 */
@@ -449,6 +515,8 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       addKey(c, { t: s0, follow: t.id, offset: offsets[mode], lens: o.lens, look });
       addKey(c, { t: s1 ?? s0 + 0.001, follow: t.id, offset: offsets[mode], lens: o.lens, look, ...(s1 === null ? { __open: true } : {}) } as CamKey);
       c.ease = "linear";
+      timeline.push({ op: "camera.follow", t: s0, camera: c.id, target_actor: t.id, style: mode, distance: d, height: h, side,
+        ...(s1 !== null ? { duration: +(s1 - s0).toFixed(3) } : {}) });
     },
 
     /** 用预设运镜（见 camera_presets 目录）：target 目标、start/duration 时间段、side 1 右 -1 左、angle 起始角 */
@@ -462,6 +530,10 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       if (o.target !== undefined && !Array.isArray(o.target)) get(o.target as Ref, where);
       presetJobs.push({ cam: c, preset, opts: o });
       c.presets.push(preset);
+      const tg = o.target === undefined ? undefined : Array.isArray(o.target) ? o.target : get(o.target as Ref, where).id;
+      timeline.push({ op: "camera.move", t: typeof o.start === "number" ? o.start : 0, camera: c.id, preset,
+        ...(tg !== undefined ? { target: tg } : {}), duration: typeof o.duration === "number" ? o.duration : 4,
+        ...(o.side !== undefined ? { side: o.side } : {}), ...(o.angle !== undefined ? { angle: o.angle } : {}) });
     },
 
     /** 景别取景：在 t 秒给机位一个对准 target 的关键帧。size：els/ws/fs/mls/ms/mcu/cu/ecu */
@@ -474,12 +546,14 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
       const radius = shotDistance(size, { size: sz, lens });
       const aim = obj.kind === "character" ? obj.size[1] * 0.9 : Math.max(0.6, obj.size[1] * 0.55);
       addKey(c, { t: num(t, where, "t"), orbit: obj.id, angle: o.angle ?? 15, radius, height: o.height ?? aim, lens: o.lens });
+      timeline.push({ op: "camera.frame", t, camera: c.id, target: obj.id, size, angle: o.angle ?? 15 });
     },
 
     /** 主机位时间表：从 t 秒起切到这台机位 */
     cut(t: number, which: Ref) {
       const c = cam(which, "S.cut");
       cuts.push({ t: Math.max(0, num(t, "S.cut", "t")), camera: c.id });
+      timeline.push({ op: "camera.cut", t: Math.max(0, t), camera: c.id });
     },
 
     /** 给导演看的说明（会出现在场景概要里） */
@@ -525,6 +599,38 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
     return M.yawTo(from, o.transform.pos);
   }
 
+  /** 协议里的角色：人、车、动物是 actor，其余是 prop */
+  function roleOf(obj: SceneObject): "actor" | "prop" {
+    return obj.kind === "character" || STEERED.has(obj.prefab ?? "") ? "actor" : "prop";
+  }
+
+  /**
+   * 在已有轨迹上接一段「从 t0 此刻所在处 → dest」：这段时间里的旧关键帧作废，之前的保留，之后的原样保留。
+   * 返回这段的时长。
+   */
+  function appendMove(obj: SceneObject, t0: number, dest: Vec3, o: Record<string, unknown>, where: string): number {
+    const here = localPose(obj, t0).pos;
+    const act = (o.action as string | undefined) ?? obj.track?.action ?? (obj.kind === "character" ? "walk" : undefined);
+    const dist = M.dist(here, dest);
+    const speed = num(o.speed, where, "speed", act === "run" ? 4.5 : obj.kind === "character" ? 1.4 : 10);
+    const dur = o.duration !== undefined ? num(o.duration, where, "duration") : dist / Math.max(0.05, speed);
+    if (dur <= 0) fail(where, "duration 要大于 0");
+    const old = obj.track?.keys ?? [];
+    const keys: MoveKey[] = [
+      ...old.filter(k => k.t < t0 - 1e-6),
+      { t: t0, pos: here }, { t: t0 + dur, pos: dest },
+      ...old.filter(k => k.t > t0 + dur + 1e-6),
+    ];
+    // 跑过一段就按跑记（步态按瞬时速度算，走跑混着也不乱）
+    const action = act === "run" || obj.track?.action === "run" ? "run" : act;
+    obj.track = track(obj, keys, {
+      face: o.face ?? obj.track?.face, action,
+      // 多段移动不能整段缓动：smooth 会把整条轨迹的时间一起重映射，段与段之间的停顿被吃掉
+      ease: keys.length > 2 ? "linear" : "smooth", path: "linear",
+    }, where);
+    return dur;
+  }
+
   function track(obj: SceneObject, keys: MoveKey[], o: Record<string, unknown>, where: string): MoveTrack {
     const action = o.action as MoveTrack["action"] | undefined;
     if (action !== undefined && !ACTIONS.includes(action)) fail(where, `action 只能是 ${ACTIONS.join(" / ")}`);
@@ -532,7 +638,7 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
     if (sorted.length > 800) fail(where, "关键帧太多（>800）");
     // 第一帧没写位置的，从物体当前位置出发
     if (!sorted[0].pos) sorted[0] = { ...sorted[0], pos: obj.transform.pos };
-    const steered = obj.kind === "character" || ["car", "police_car", "truck", "bus", "motorcycle", "bicycle", "boat", "horse", "horse_cart", "helicopter", "bird", "dog", "cart"].includes(obj.prefab ?? "");
+    const steered = obj.kind === "character" || STEERED.has(obj.prefab ?? "");
     const face = (o.face ?? (steered ? "path" : "none")) as MoveTrack["face"];
     return {
       keys: sorted,
@@ -584,6 +690,7 @@ export function makeBuilder(opts: { seed?: number; overrides?: Overrides } = {})
 
     const draft: SceneDoc = {
       version: 1, duration: dur, fps, aspect, seed, env, lights: lights.slice(), objects, cameras, cuts: [], notes,
+      timeline: timeline.slice().sort((a, b) => a.t - b.t),
     };
     const ev = new SceneEval(draft);
 

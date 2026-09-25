@@ -224,3 +224,28 @@ S.note("三段：全景交代追逐 → 侧跟推近警车 → 逃犯车尾特�
 
 def listing() -> list[dict[str, str]]:
     return [{k: v for k, v in t.items() if k != "script"} for t in TEMPLATES.values()]
+
+_t("alley_fight", "【官方示例】夜巷打斗", "示例", "A 冲过去右拳，B 闪开反踢，A 被踢退倒地；侧跟一镜到底，接渲染成片", """
+// 夜巷打斗（Director V1 验收用例）：动作全部来自动作库，Blender 渲染与这里的预览是同一份动作
+S.setup({ duration: 6 });
+S.environment({ sky: "night", ground: "asphalt", fog: 0.2 });
+S.row("building", { from: [-13, -14], to: [-13, 14], count: 4, rot: 90 });
+S.row("building", { from: [13, -14], to: [13, 14], count: 4, rot: -90 });
+S.row("streetlamp", { from: [-7, -12], to: [-7, 12], count: 3, rot: 90 });
+S.light("point", { at: [0, 4, 0], color: "#ffd9a0", intensity: 2, range: 14 });
+
+const A = S.character("A", { body: "male", at: [0, -6], facing: [0, 1] });
+const B = S.character("B", { body: "muscular", at: [0, 1], facing: [0, -6] });
+S.pose(B, "fight");
+
+S.moveTo(A, [0, 0], { t: 0, action: "run" });          // 冲过去（约 1.3 秒）
+S.action(A, "right_punch", { t: 1.5, target: B });
+S.action(B, "dodge_left", { t: 1.6 });
+S.action(B, "front_kick", { t: 2.4, target: A });
+S.action(A, "hit_react_back", { t: 2.75 });
+S.action(A, "fall_backward", { t: 3.4 });
+
+const cam = S.camera("侧跟", { lens: 35 });
+S.cameraPreset(cam, "side_follow", { target: A, start: 0, duration: 6 });
+S.cut(0, cam);
+""")

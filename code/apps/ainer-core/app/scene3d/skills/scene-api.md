@@ -63,6 +63,22 @@ S.move(hero, [{ t: 0, at: [0, 5] }, { t: 2, at: [0, 0] }, { t: 4, at: [3, -2] }]
 //   action: walk / run / drive / fly / swim（人物会摆臂迈腿）；车和人默认朝运动方向
 //   人走 1.4m/s，跑 4.5m/s，车 10–30m/s
 S.move(door, [{ t: 1, rot: 0 }, { t: 2, rot: 90 }]);   // 也能转、能缩放
+S.moveTo(hero, [0, 0], { t: 0, action: "run" });      // 走到/跑到某处（按步速算时长，或给 duration）；可以一段段接着写
+```
+
+## 人物动作（动作库，打斗、受击都用它；Blender 渲染和预览是同一份动作）
+```js
+S.action(A, "right_punch", { t: 1.5, target: B });   // 出拳、踢腿写 target：先转身面向对手
+S.action(B, "dodge_left", { t: 1.6 });               // 闪避会真的挪开 0.6 米
+S.action(B, "front_kick", { t: 2.4, target: A });
+S.action(A, "hit_react_back", { t: 2.75 });          // 被打退 0.4 米
+S.action(A, "fall_backward", { t: 3.4 });            // 倒地后一直躺着，直到 stand_up
+S.face(A, B, { t: 0.5 });                            // 原地转身面向某人
+// 动作：idle 待机 / walk_forward 向前走 / run_forward 向前跑 / turn_left / turn_right / look_back 回头
+//       right_punch / left_punch / front_kick / dodge_left / dodge_right / block_high 格挡
+//       hit_react_back 受击后仰 / hit_react_left 受击侧偏 / fall_backward 倒地 / stand_up 起身
+// 时长默认：出拳 0.6、前踢 0.8、闪避 0.5、受击 0.7、倒地 1.2、起身 1.4 秒；动作之间别挤在一起
+// 对打起手：两人面对面（朝向差 180°）、相距 1–1.5 米；侧面机位离人约 5 米，别被两边的楼挡住
 ```
 
 ## 机位（每台机位 = 一串关键帧）
@@ -75,6 +91,7 @@ S.cameraKeys(cam, [
 ], { path: "curve", ease: "smooth" });                        // path: curve 平滑曲线 / linear 折线
 S.cameraFollow(cam2, car, { mode: "back", distance: 8, height: 3, start: 2, end: 6 }); // back / front / side / top / first
 S.cameraPreset(cam3, "orbit_left", { target: hero, start: 0, duration: 4, side: 1, angle: 15 });  // 预设运镜，见 camera_presets
+//   打斗常用：side_follow 侧跟、follow_back 背跟、orbit_left/right 环绕、dolly_in/dolly_out 推轨、crane_up/crane_down 摇臂
 S.frame(cam4, 2.5, hero, "cu", { angle: 20 });        // 在 2.5 秒给机位一个景别关键帧：els/ws/fs/mls/ms/mcu/cu/ecu
 S.cut(0, cam); S.cut(3, cam2); S.cut(6, cam3);         // 主机位时间表：几秒切到哪台
 ```

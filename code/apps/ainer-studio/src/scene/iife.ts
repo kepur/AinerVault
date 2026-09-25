@@ -7,10 +7,13 @@ import { applyOverrides, makeBuilder } from "./runtime";
 import { catalogDoc } from "./prefabs";
 import { presetDoc } from "./cameraPresets";
 import { shotReport } from "./shot";
+import { bake } from "./bake";
+import { motionDoc } from "./rig";
 
 (globalThis as unknown as { SceneRuntime: unknown }).SceneRuntime = {
   makeBuilder,
   applyOverrides,
   shotReport,
-  catalog: () => ({ ...catalogDoc(), cameraPresets: presetDoc() }),
+  bake,
+  catalog: () => ({ ...catalogDoc(), cameraPresets: presetDoc(), motions: motionDoc() }),
 };

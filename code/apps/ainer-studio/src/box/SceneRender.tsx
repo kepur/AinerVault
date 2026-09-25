@@ -11,6 +11,7 @@ import * as THREE from "three";
 import type { SceneDoc, SceneObject } from "../scene/types";
 import { PREFABS } from "../scene/prefabs";
 import { localPose, type SceneEval } from "../scene/evaluate";
+import { jointsAt, mannequinDims, type MannequinDims } from "../scene/rig";
 import type { Clock } from "./clock";
 import { dashGeometry, GROUND, material, partColor, partScale, SKY, STRIP_COLOR, stripGeometry, unitGeometry } from "./geom";
 import { Mannequin, type MannequinHandle } from "./Mannequin";
@@ -27,7 +28,7 @@ export interface RenderOpts {
   shadows?: boolean;
 }
 
-interface Anim { obj: SceneObject; group: THREE.Group | null; man: MannequinHandle | null }
+interface Anim { obj: SceneObject; group: THREE.Group | null; man: MannequinHandle | null; dims?: MannequinDims }
 
 /** 正在被变换手柄拖着的物体：动画别在拖的时候把它拽回轨道上 */
 export const DRAGGING = new Set<string>();
@@ -67,10 +68,8 @@ function Animator({ ev, clock, anims }: { ev: SceneEval; clock: Clock; anims: Ma
         a.group.scale.set(lp.scale[0], lp.scale[1], lp.scale[2]);
       }
       if (a.man) {
-        let pose = o.poses?.[0]?.pose ?? "stand";
-        for (const p of o.poses ?? []) if (p.t <= t + 1e-6) pose = p.pose;
-        const g = o.track ? ev.gait(id, t) : { phase: 0, speed: 0 };
-        a.man.animate(pose, g.phase, g.speed);
+        a.dims ??= mannequinDims(o.body ?? "male", o.size[1]);
+        a.man.animate(jointsAt(ev, o, t, a.dims));
       }
     }
   });

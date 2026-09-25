@@ -1,0 +1,4 @@
+# Director Core 通用配置
+storage_dir: var/director          # 场景快照、任务目录（每个任务一个文件夹）
+llm_purpose: scene_director        # 自然语言 → 场景协议 走哪条 text.chat 路由（免费路由）
+planner_max_repairs: 2             # LLM 出的 JSON 校验不过时，带着错误让它再改几次

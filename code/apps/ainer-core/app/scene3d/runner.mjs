@@ -1,7 +1,8 @@
 // 场景脚本沙箱。stdin 读 JSON，stdout 写 JSON。
 //
 //   {mode:"compile", script, seed, overrides, timeoutMs} → {ok, errors, warnings, summary, doc, ms}
-//   {mode:"catalog"}                                     → 预制件／体型／姿势／运镜预设目录
+//   {mode:"catalog"}                                     → 预制件／体型／姿势／运镜预设／动作库目录
+//   {mode:"bake", doc, options}                          → 逐帧解算的渲染场景（给 Blender／UE）
 //
 // 脚本是 LLM 写的，当不可信代码对待：
 //   - 运行时（vendor/scene-runtime.iife.js）在 vm 上下文里面执行，构建器属于沙箱自己的 realm；
@@ -38,6 +39,14 @@ function main() {
 
   if (input.mode === "catalog") {
     process.stdout.write(vm.runInContext("JSON.stringify(SceneRuntime.catalog())", ctx, { timeout: 3000 }));
+    return;
+  }
+  if (input.mode === "bake") {
+    // 烘焙：文档与选项都以字符串进沙箱，在里面解析；逐帧求值在沙箱里做（文档出自不可信脚本）
+    sandbox.__bake = JSON.stringify({ doc: input.doc, options: input.options ?? {} });
+    process.stdout.write(vm.runInContext(
+      "(function(){ var q = JSON.parse(__bake); return JSON.stringify(SceneRuntime.bake(q.doc, q.options)); })()",
+      ctx, { timeout: input.timeoutMs ?? 20000 }));
     return;
   }
   if (input.mode === "shot") {

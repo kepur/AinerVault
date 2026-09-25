@@ -16,6 +16,7 @@ import { SidePanel } from "./SidePanel";
 import { ChatPanel } from "./ChatPanel";
 import { SketchLayer, type Stroke2D } from "./SketchLayer";
 import { mergeKeys } from "./presets";
+import { RenderPanel } from "./RenderPanel";
 
 type Mode = "edit" | "preview";
 
@@ -37,6 +38,7 @@ export default function BoxEditor({ id, onBack }: { id: string; onBack: () => vo
   const [msg, setMsg] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [renderOpen, setRenderOpen] = useState(() => new URLSearchParams(location.search).get("render") === "1");
   const clock = useMemo(() => new Clock(), []);
   const editorApi = useRef<EditorApi | null>(null);
   const pip = useRef<CameraViewHandle | null>(null);
@@ -257,7 +259,9 @@ export default function BoxEditor({ id, onBack }: { id: string; onBack: () => vo
         </div>
         <div className="spacer" />
         <span className={`stat ${d.ok ? "" : "bad"}`}>{d.ok ? `✓ ${d.summary?.objects ?? 0} 个物体 · ${doc.cameras.length} 台机位 · ${doc.duration}s` : `✗ 脚本有错（${d.errors[0]?.line ? `第 ${d.errors[0].line} 行` : ""}）`}</span>
-        <button className="primary" onClick={exportVideo} title="按主机位时间表录成视频">⇪ 导出</button>
+        <button className={renderOpen ? "on" : ""} onClick={() => setRenderOpen(o => !o)}
+          title="Blender 渲控制素材（预演/白模/深度/骨架/边缘）→ LTX 成片">🎬 渲染成片</button>
+        <button className="primary" onClick={exportVideo} title="按主机位时间表录成视频（浏览器录画布）">⇪ 导出</button>
       </header>
 
       <div className={`box-main${chatOpen ? "" : " chat-closed"}`}>
@@ -285,6 +289,7 @@ export default function BoxEditor({ id, onBack }: { id: string; onBack: () => vo
             </div>
           )}
           {msg && <div className="box-msg" onClick={() => setMsg("")}>{msg}</div>}
+          {renderOpen && <RenderPanel projectId={id} doc={doc} onClose={() => setRenderOpen(false)} />}
         </section>
 
         <SidePanel project={project} doc={doc} ev={ev} clock={clock} sel={sel} onSelect={setSel}

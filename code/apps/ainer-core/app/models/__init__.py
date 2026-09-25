@@ -23,6 +23,7 @@ from app.models.narrative_device import (
     NarrativeDevice, PlotLoad, STRATEGY_BRIEF, Volatility, choose_strategy,
     strategy_brief,
 )
+from app.models.director import DirectorJob, DirectorOutput, DirectorScene
 from app.models.preset import Preset, PresetMark
 from app.models.primer import PrimerKind, WorldPrimer
 from app.models.scene3d import SceneMessage, SceneProject
@@ -57,6 +58,7 @@ from app.models.world import (
 
 __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
+    "DirectorJob", "DirectorOutput", "DirectorScene",
     "Preset", "PresetMark", "SceneMessage", "SceneProject",
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",

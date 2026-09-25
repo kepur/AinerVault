@@ -4,7 +4,8 @@
  */
 import * as THREE from "three";
 import type { Part } from "../scene/prefabs";
-import type { SceneObject, Vec2 } from "../scene/types";
+import type { Vec2 } from "../scene/types";
+export { GROUND, partColor, SKY, STRIP_COLOR } from "../scene/palette";
 
 const geoCache = new Map<string, THREE.BufferGeometry>();
 
@@ -72,19 +73,9 @@ export function material(color: string, opts: { glow?: boolean; opacity?: number
   return m;
 }
 
-/** 这些是「主色」：物体设了 color 时换掉它们；玻璃、轮胎、灯保留。 */
-const MAIN = new Set(["#eceef1", "#dfe3e8", "#b8bec6", "#f7f7f8", "#cdb99e", "#c3c9d1"]);
-export function partColor(p: Part, obj: SceneObject): string {
-  const base = p.color ?? "#dfe3e8";
-  if (obj.color && MAIN.has(base.toLowerCase())) return obj.color;
-  return base;
-}
 
 // ── 地面带（道路、河流）────────────────────────────────
 
-export const STRIP_COLOR: Record<string, string> = {
-  asphalt: "#8e949c", stone: "#cbc6bc", dirt: "#c4ae8e", water: "#9dbad1", grass: "#a3bb97", sand: "#dccb9f",
-};
 
 /** 沿折线的带子：每个折点取相邻两段法线的平均，拐弯处不断开。 */
 export function stripGeometry(points: Vec2[], width: number, y: number): THREE.BufferGeometry {
@@ -138,16 +129,4 @@ export function dashGeometry(points: Vec2[], y: number): THREE.BufferGeometry {
   return g;
 }
 
-export const SKY: Record<string, { bg: string; hemiSky: string; hemiGround: string; sun: string; sunI: number }> = {
-  day: { bg: "#cfdcea", hemiSky: "#e8f1ff", hemiGround: "#8b8f96", sun: "#ffffff", sunI: 1.2 },
-  dawn: { bg: "#e7d4cc", hemiSky: "#ffe6d8", hemiGround: "#80828a", sun: "#ffd7b5", sunI: 0.9 },
-  dusk: { bg: "#d9c3b6", hemiSky: "#ffd8bd", hemiGround: "#6f727c", sun: "#ffc190", sunI: 0.9 },
-  night: { bg: "#23283a", hemiSky: "#5a6a90", hemiGround: "#1d2029", sun: "#a9b8e6", sunI: 0.35 },
-  overcast: { bg: "#c9ccd1", hemiSky: "#eceef2", hemiGround: "#8d9096", sun: "#ffffff", sunI: 0.6 },
-  studio: { bg: "#9ea2aa", hemiSky: "#f2f2f4", hemiGround: "#7d8088", sun: "#ffffff", sunI: 1 },
-};
 
-export const GROUND: Record<string, string> = {
-  grid: "#d9dce1", asphalt: "#a7abb2", grass: "#b6c7ab", sand: "#e2d6b6", snow: "#f2f4f7",
-  water: "#a9c2d6", stone: "#d3cfc7", floor: "#d9d2c6", dirt: "#cdbb9d",
-};

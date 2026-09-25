@@ -145,7 +145,10 @@ export class SceneEval {
     return o.kind === "character" ? h * 0.9 : Math.max(0.5, h * 0.55);
   }
 
-  /** 人物步态相位（走过的距离 / 步幅），拖时间轴也确定。 */
+  /**
+   * 人物步态相位（圈数），拖时间轴也确定。
+   * 按每一小步的瞬时速度换步幅（走 1.4m、跑 2.4m）逐步累加：一条轨迹里走跑混着，步子也不会跳。
+   */
   gait(id: string, t: number): { phase: number; speed: number } {
     const o = this.byId.get(id);
     if (!o?.track) return { phase: 0, speed: 0 };
@@ -158,15 +161,15 @@ export class SceneEval {
       let prev = this.world(id, t0).pos;
       for (let x = t0 + dt; x <= t1 + dt; x += dt) {
         const p = this.world(id, x).pos;
-        acc.push(acc[acc.length - 1] + Math.hypot(p[0] - prev[0], p[2] - prev[2]));
+        const step = Math.hypot(p[0] - prev[0], p[2] - prev[2]);
+        acc.push(acc[acc.length - 1] + step / (step / dt > 2.6 ? 2.4 : 1.4));
         prev = p;
       }
       table = { t0, dt, acc };
       this.gaitTables.set(id, table);
     }
     const k = clamp(Math.floor((t - table.t0) / table.dt), 0, table.acc.length - 1);
-    const stride = o.track.action === "run" ? 2.4 : 1.4;
-    return { phase: table.acc[k] / stride, speed: this.world(id, t).speed };
+    return { phase: table.acc[k], speed: this.world(id, t).speed };
   }
 
   // ── 机位 ──────────────────────────────────────────────

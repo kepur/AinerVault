@@ -1,0 +1,19 @@
+# LTX 0.9.7 成片（V1 启用）
+#
+# 走能力网关的 video.image_to_video，加 control 字段；网关按控制类型挑工作流：
+#   v2v              白模重绘：预演视频编码成 latent，加噪到 denoise 再去噪。本机 2B 就能跑（6 秒约 100 秒）
+#   depth/pose/canny IC-LoRA 控制：需要 13B 0.9.7 底模（网关检测不到就报「未就绪」，不会悄悄降级）
+#
+# 实测（夜巷打斗，2B v2v）：
+#   denoise 0.72 → 基本照搬白模（灰人偶）；0.88 → 真人但偏灰；0.92–0.95 → 真人＋真实环境，动作仍跟预演
+#   钉住的首帧决定整段样子：钉灰白模首帧整段发灰；钉构图对不上的成片首帧第 1→2 帧会跳
+#   所以默认不钉首帧（pin_first=false），外观交给提示词；要锁角色身份（有角色库参考图）时再钉画好的首帧
+capability: video.image_to_video
+route_purpose: director_final
+default_mode: v2v
+resolution: [768, 448]     # 生成分辨率（32 的倍数）；控制素材会被缩放到这个尺寸
+steps: 8
+v2v:
+  denoise: 0.92            # 越大越自由（越不像白模），越小越贴白模
+  source: preview          # 用哪个通道当重绘底：preview（有明暗）或 clay
+control_strength: 1.0      # IC-LoRA 引导强度
