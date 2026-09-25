@@ -245,20 +245,45 @@ def template_prompt(protocol: dict[str, Any], extra: str = "") -> dict[str, str]
     return {"prompt": " ".join(p for p in parts if p).replace("  ", " ")[:1800], "subject": subject}
 
 
-SYSTEM_PROMPT = """你给视频模型写英文提示词。输入是一份预演场景（人物、动作时间线、环境、运镜）和导演的补充要求。
+SYSTEM_PROMPT = """你给视频模型写英文提示词。输入是一份预演场景（人物、动作时间线、环境、运镜）、
+每个人在画面里出现的时间（从实际渲染的机位算出来的），和导演的补充要求。
 输出 {"prompt": "…", "subject": "…"}：
   prompt：一段英文，写成片画面：环境与光线、每个人的外观（按 appearance.look，没有就按体型合理设定）、
           按时间顺序发生的动作、运镜方式、画风。不超过 120 个词。不要提 mannequin、3D、previs。
-  subject：一句英文祈使句，告诉图像编辑模型把首帧里的灰色人偶换成谁（例如 "Replace the grey mannequin on the left with …"）。"""
+          ★ 按出现时间写：开场不在画面里的人，写成「后来才入画」（例如 "a muscular man steps into frame"），
+          不要让开场就出现他 —— 视频模型会照着提示词在第一帧把他画出来。
+  subject：一句英文祈使句，只写首帧里看得见的人，告诉图像编辑模型把灰色人偶换成谁（例如 "Replace the grey mannequin on the left with …"）。"""
 
 
-def render_prompt(db: Session, protocol: dict[str, Any], extra: str = "", *, use_llm: bool = True) -> dict[str, str]:
+def visibility(motion: dict[str, Any] | None, *, min_points: int = 6) -> dict[str, dict[str, float]]:
+    """Blender motion.json → 每个人在画面里的时间段 {id: {first, last}}（秒；看得见的关键点 ≥ min_points 才算入画）。"""
+    out: dict[str, dict[str, float]] = {}
+    if not motion:
+        return out
+    fps = float(motion.get("fps") or 24)
+    for aid, a in (motion.get("actors") or {}).items():
+        seen = [i for i, f in enumerate(a.get("frames") or [])
+                if sum(1 for k in f.get("keypoints_2d") or [] if len(k) > 2 and k[2] > 0) >= min_points]
+        if seen:
+            out[aid] = {"first": round(seen[0] / fps, 2), "last": round(seen[-1] / fps, 2)}
+    return out
+
+
+def render_prompt(db: Session, protocol: dict[str, Any], extra: str = "", *, use_llm: bool = True,
+                  seen: dict[str, dict[str, float]] | None = None) -> dict[str, str]:
     base = template_prompt(protocol, extra)
     if not use_llm:
         return base
     try:
         slim = {k: protocol.get(k) for k in ("meta", "environment", "actors", "timeline")}
-        data = _llm_json(db, SYSTEM_PROMPT, f"场景：{json.dumps(slim, ensure_ascii=False)[:12000]}\n导演补充：{extra or '（无）'}",
+        dur = float((protocol.get("meta") or {}).get("duration_sec") or 0)
+        vis = "；".join(f"{aid} {v['first']}–{v['last']}s" + ("（开场不在画面里）" if v["first"] > 0.2 else "")
+                       for aid, v in (seen or {}).items())
+        hidden = [a.get("id") for a in as_items(protocol, "actors") if seen is not None and a.get("id") not in seen]
+        if hidden:
+            vis += f"；全程不在画面里：{', '.join(hidden)}"
+        data = _llm_json(db, SYSTEM_PROMPT, f"场景：{json.dumps(slim, ensure_ascii=False)[:12000]}\n"
+                                            f"画面里出现的时间（片长 {dur}s）：{vis or '（未知）'}\n导演补充：{extra or '（无）'}",
                          temperature=0.5)
         p = str(data.get("prompt") or "").strip()
         if len(p) > 20:

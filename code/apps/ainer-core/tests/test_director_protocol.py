@@ -175,3 +175,18 @@ def test_json_first_scene_compiles_with_actions_and_camera_ops():
     assert r["ok"], r["errors"]
     a = next(o for o in r["doc"]["objects"] if o["id"] == "A")
     assert [x["name"] for x in a["actions"]] == ["right_punch", "hit_react_back", "fall_backward"]
+
+
+def test_visibility_from_motion_json():
+    """谁在第几秒入画：从 Blender 实际投影的关键点算，给写提示词的 LLM 用（开场不在画面里的人别在第一帧画出来）。"""
+    from app.director.planner import visibility
+
+    seen = [[10, 10, 1]] * 18
+    unseen = [[0, 0, 0]] * 18
+    motion = {"fps": 24, "actors": {
+        "A": {"frames": [{"keypoints_2d": seen}] * 48},
+        "B": {"frames": [{"keypoints_2d": unseen}] * 24 + [{"keypoints_2d": seen}] * 24},
+        "C": {"frames": [{"keypoints_2d": unseen}] * 48},
+    }}
+    assert visibility(motion) == {"A": {"first": 0.0, "last": 1.96}, "B": {"first": 1.0, "last": 1.96}}
+    assert visibility(None) == {}

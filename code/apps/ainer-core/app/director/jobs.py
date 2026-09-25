@@ -270,11 +270,16 @@ def _run_final(db: Session, job: DirectorJob) -> None:
     prog = _Progress(job.id)
     prog({"kind": "stage", "stage": "prompt"})
     extra = " ".join(x for x in (inp.get("user_prompt"), inp.get("style_prompt")) if x)
+    seen = None
+    motion_path = config.job_dir(job.parent_id) / "motion.json" if job.parent_id else None
+    if motion_path and motion_path.exists():
+        seen = planner.visibility(json.loads(motion_path.read_text(encoding="utf-8")))
     if inp.get("use_llm_prompt", True) or not inp.get("user_prompt"):
-        pr = planner.render_prompt(db, protocol, extra, use_llm=bool(inp.get("use_llm_prompt", True)))
+        pr = planner.render_prompt(db, protocol, extra, use_llm=bool(inp.get("use_llm_prompt", True)), seen=seen)
     else:
         pr = {"prompt": extra, "subject": planner.template_prompt(protocol)["subject"], "by": "user"}
-    job.input_json = {**inp, "prompt": pr["prompt"], "prompt_by": pr.get("by"), "first_frame_subject": pr.get("subject")}
+    job.input_json = {**inp, "prompt": pr["prompt"], "prompt_by": pr.get("by"), "first_frame_subject": pr.get("subject"),
+                      "visibility": seen}
     db.commit()
     renderer = registry.get(job.backend)
     req = RenderRequest(
