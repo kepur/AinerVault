@@ -214,6 +214,15 @@ function Detail({ cid, voices, onClose, onEdit, onAdd, onChanged }: {
                 load();
               }}>生成角色资产</button>
             )}
+            {c.source !== "novel" && img(v.front) && (
+              <button disabled={!!c.pending} title="立绘不满意就重出一张；半身、三视图、九宫格是从旧立绘派生的，会一并作废，需要时再生成"
+                onClick={async () => {
+                  if (!window.confirm("重新生成立绘？从旧立绘派生的半身、三视图、表情九宫格会一并作废。")) return;
+                  const r = await lib.generate(c.id, "front", true);
+                  setMsg(r.queued ? "已排队重出立绘（本机约 30 秒）" : "已经在出了");
+                  load();
+                }}>重新生成立绘</button>
+            )}
           </div>
           {msg && <div className="note">{msg}</div>}
         </section>

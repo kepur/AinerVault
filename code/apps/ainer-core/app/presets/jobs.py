@@ -76,8 +76,9 @@ def snapshot(group: str | None = None) -> list[dict[str, Any]]:
 
 
 def pending(group: str) -> int:
+    """还没出完的（排队中＋正在跑）。只数排队的话，任务一开跑计数就归零，前端以为出完了、停止刷新。"""
     with _LOCK:
-        return sum(1 for j in _QUEUE if j.group == group)
+        return sum(1 for j in _RUNNING + _QUEUE if j.group == group)
 
 
 def _work() -> None:

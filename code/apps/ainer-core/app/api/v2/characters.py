@@ -188,13 +188,20 @@ def detail(cid: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 # ── 出图：立绘、半身、三视图、表情九宫格 ─────────────────────
 
-def _set_view(pid: str, view: str, then=None):
+_DERIVED = ("bust", "turnaround", "expressions", "expression_items")
+
+
+def _set_view(pid: str, view: str, then=None, *, reset_derived: bool = False):
     def done(db: Session, asset: Asset) -> None:
         p = db.get(Preset, pid)
         if p is None:
             return
         pl = dict(p.payload_json or {})
         views = dict(pl.get("views") or {})
+        if reset_derived:
+            # 立绘重出了：半身、三视图、九宫格都是从旧立绘派生的，留着就和新立绘对不上
+            for k in _DERIVED:
+                views.pop(k, None)
         if view.startswith("expression:"):
             items = dict(views.get("expression_items") or {})
             items[view.split(":", 1)[1]] = asset.url
@@ -205,8 +212,8 @@ def _set_view(pid: str, view: str, then=None):
             views[view] = asset.url
         pl["views"] = views
         p.payload_json = pl
-        if view == "front" and not p.cover_url:
-            p.cover_url = asset.url
+        if view == "front":
+            p.cover_url = asset.url          # 封面跟着最新的立绘走
         if then:
             then(db, p)
     return done
@@ -276,6 +283,25 @@ def _enqueue_expressions(p: Preset, bust_url: str | None) -> int:
 class GenerateIn(BaseModel):
     #: all = 立绘→半身→三视图→表情九宫格（一个角色约 12 张）；front = 只出立绘；views = 半身＋三视图；expressions = 九宫格
     what: str = "all"
+    #: 已有立绘也重出（what=front 时）；从旧立绘派生的半身、三视图、九宫格一并作废
+    redo: bool = False
+
+
+_AGE_EN = {"儿童": "little", "少年": "teenage", "青年": "young", "中年": "middle-aged", "老年": "elderly"}
+_CULTURE_EN = {"东亚": "East Asian", "欧美": "European", "混合": "mixed-race"}
+
+
+def _who(tags: dict[str, Any]) -> str:
+    """标签 → 英文主体，写在立绘提示词开头。
+
+    外观描述里常常不写性别、年龄，模型就自己猜：「赛博猎手」标签是女，描述只写了
+    silver buzz cut、techwear jacket，出来是个光头男人（实测）。
+    """
+    age, g = tags.get("age"), tags.get("gender")
+    kid = age in ("儿童", "少年")
+    noun = {"女": "girl" if kid else "woman", "男": "boy" if kid else "man"}.get(str(g), "person")
+    who = " ".join(x for x in (_AGE_EN.get(str(age), ""), _CULTURE_EN.get(str(tags.get("culture")), ""), noun) if x)
+    return f"{'an' if who[:1].lower() in 'aeio' and not who.startswith('European') else 'a'} {who}"
 
 
 @router.post("/{cid}:generate")
@@ -290,18 +316,19 @@ def generate(cid: str, body: GenerateIn, db: Session = Depends(get_db)) -> dict[
     n = 0
     if card["source"] == "novel":
         n = _enqueue_expressions(p, views.get("bust") or views.get("front"))
-    elif not views.get("front"):
-        look = card.get("look") or card["name"]
+    elif not views.get("front") or (body.redo and body.what == "front"):
+        look = f"{_who(card.get('tags') or {})}: {card.get('look') or card['name']}"
         # 官方角色一律写实：造型室的编辑、三视图、表情都在写实立绘上最稳
         style = "photoreal"
         jobs.enqueue(jobs.Job(
             title=f"{card['name']}·立绘", capability=Capability.image_t2i, group=f"char:{p.id}", purpose="preset_character",
-            payload={"prompt": f"Full-body character design reference photo of {look}, standing naturally facing the camera, "
+            payload={"prompt": f"Full-body character design reference photo of {look}. Standing naturally facing the camera, "
                                f"arms relaxed, whole body from head to shoes visible, {WHITE}",
                      "negative_prompt": "cropped feet, cut off head, multiple people, text, watermark",
                      "width": 576, "height": 1024, "style": style, "params": {"seed": 5}},
             on_done=_set_view(p.id, "front", None if body.what == "front" else (
-                lambda db2, pp: _enqueue_assets(pp, front_url=(pp.payload_json or {})["views"]["front"], bust_url=None)))))
+                lambda db2, pp: _enqueue_assets(pp, front_url=(pp.payload_json or {})["views"]["front"], bust_url=None)),
+                reset_derived=bool(views.get("front")))))
         n = 1
     else:
         n = _enqueue_assets(p, front_url=views.get("front"), bust_url=views.get("bust"),

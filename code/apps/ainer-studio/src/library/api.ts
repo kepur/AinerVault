@@ -98,8 +98,8 @@ export const lib = {
     call<CharCard[]>("GET", `/characters?${qs({ scope, ...f })}`),
   character: (cid: string) => call<CharCard>("GET", `/characters/${cid}`),
   voices: () => call<Voice[]>("GET", "/characters/voices"),
-  generate: (cid: string, what: "all" | "front" | "views" | "expressions") =>
-    call<{ queued: number; pending: number }>("POST", `/characters/${cid}:generate`, { what }),
+  generate: (cid: string, what: "all" | "front" | "views" | "expressions", redo = false) =>
+    call<{ queued: number; pending: number }>("POST", `/characters/${cid}:generate`, { what, redo }),
   restyle: (cid: string, body: RestyleBody) => call<{ job_id: string; prompt: string }>("POST", `/characters/${cid}/restyle`, body),
   job: (id: string) => call<JobInfo>("GET", `/characters/jobs/${id}`),
   saveLook: (cid: string, body: { url: string; name?: string; generate_assets: boolean }) =>

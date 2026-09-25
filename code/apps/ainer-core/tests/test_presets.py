@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 
 from app.api.v2 import characters
-from app.api.v2.characters import RestyleIn, _i2i, _infer_tags, restyle_instruction
+from app.api.v2.characters import RestyleIn, _i2i, _infer_tags, _who, restyle_instruction
 from app.pipelines.frame_compose import apply_style_preset
 from app.presets import jobs
 from app.presets.seeds import EXPRESSIONS, HAIR_ERAS, SEEDS
@@ -148,6 +148,7 @@ def test_queue_runs_one_at_a_time_and_people_waiting_go_first(monkeypatch):
     time.sleep(0.05)                                  # 封面1 已经在跑
     # 正在跑的任务也要查得到：前端轮询正好碰上它在出图时不能 404
     assert jobs.get(first.id) is first and first.status == "running"
+    assert jobs.pending("t") == 1                     # 正在跑的也算没出完
     assert [j["status"] for j in jobs.snapshot("t")] == ["running"]
     jobs.enqueue(mk("封面2"))
     jobs.enqueue(mk("试穿", pri=1))
@@ -158,3 +159,12 @@ def test_queue_runs_one_at_a_time_and_people_waiting_go_first(monkeypatch):
     assert order == ["封面1", "试穿", "封面2"]
     assert running["max"] == 1
     assert jobs.pending("t") == 0
+
+
+def test_portrait_subject_names_gender_age_and_culture():
+    """立绘提示词开头写死性别年龄：外观描述不写性别时模型会猜错（赛博猎手标签是女，出来是光头男人）。"""
+    assert _who({"gender": "女", "age": "青年", "culture": "混合"}) == "a young mixed-race woman"
+    assert _who({"gender": "男", "age": "儿童", "culture": "东亚"}) == "a little East Asian boy"
+    assert _who({"gender": "女", "age": "老年", "culture": "东亚"}) == "an elderly East Asian woman"
+    assert _who({"gender": "男", "age": "青年", "culture": "欧美"}) == "a young European man"
+    assert _who({}) == "a person"
