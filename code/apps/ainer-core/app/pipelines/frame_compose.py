@@ -1307,6 +1307,7 @@ def generate_first_frames(
             payload["reference_images"] = refs
         if params.get("style") or cfg.get("style"):
             payload["style"] = params.get("style") or cfg["style"]
+        apply_style_preset(plan, payload)
 
         task = submit_task(
             db, cap, payload, purpose="first_frame",
@@ -1440,6 +1441,7 @@ def generate_last_frames(
         style = params.get("style") or (plan.config_json or {}).get("style")
         if style:
             payload["style"] = style
+        apply_style_preset(plan, payload)
 
         task = submit_task(
             db, Capability.image_i2i, payload, purpose="last_frame",
@@ -1936,13 +1938,41 @@ def _render_style(profile) -> str:
     return render_style(profile)
 
 
+def apply_style_preset(plan: ShotPlan, payload: dict[str, Any]) -> None:
+    """风格广场套到这份分镜上的风格：画风用它的，风格描述追加在提示词末尾。
+
+    画风写在输入顶层的 style：工作台只读那一个，params.style 它不看，缺省按写实补
+    「not an illustration, not anime」—— 放在 params 里的动漫风会被这句写实锚顶掉。
+    追加而不是替换 —— 画面内容（人、景、动作）照旧由分镜决定，风格只管「怎么画」。
+    提示词有长度上限（工作台 2000 字符），放不下时让画面内容截短，风格句完整保留：
+    风格被截一半，出来的就是一半写实一半水墨。
+    """
+    sp = (plan.config_json or {}).get("style_preset") or {}
+    if not sp:
+        return
+    if sp.get("render"):
+        payload["style"] = sp["render"]
+        if isinstance(payload.get("params"), dict):
+            payload["params"]["style"] = sp["render"]
+    tail = str(sp.get("prompt") or "").strip()
+    if tail and isinstance(payload.get("prompt"), str):
+        head = payload["prompt"].rstrip(" ,.")
+        room = 1900 - len(tail) - 2
+        payload["prompt"] = f"{head[:max(0, room)]}, {tail}"
+    if sp.get("negative") and "negative_prompt" in payload:
+        payload["negative_prompt"] = ", ".join(x for x in (payload.get("negative_prompt"), sp["negative"]) if x)
+
+
 def _plan_style(db: Session, plan: ShotPlan) -> str:
     """出帧那两个函数手上没有档案，从计划顺着映射取一次。
 
     取不到就按写实 —— 宁可锚错一次画风，也不要不锚：
     不锚的话提示词里的 character sheet 这类词会把它推向动漫，
-    而那正是上一批素材出成动漫风的原因。
+    而那正是上一批素材出成动漫风的原因。风格广场套过风格的，以风格为准。
     """
+    sp = (plan.config_json or {}).get("style_preset") or {}
+    if sp.get("render"):
+        return str(sp["render"])
     try:
         tf = db.get(WorldTransform, plan.transform_id) if plan.transform_id else None
         prof = db.get(WorldProfile, tf.target_profile_id) if tf else None
