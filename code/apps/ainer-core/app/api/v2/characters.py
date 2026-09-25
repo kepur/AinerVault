@@ -92,6 +92,7 @@ def _entity_cards(db: Session, only: str | None = None) -> list[dict[str, Any]]:
             "cover": views.get("front") or views.get("bust"), "views": {**views, **{k: v for k, v in exv.items() if k.startswith("expression")}},
             "look": (el.get("wardrobe") or {}).get("en"), "identity": identity,
             "voice": ((ex.payload_json or {}).get("voice") if ex else None), "epoch": ep.epoch_key,
+            "pending": jobs.pending(f"char:{ex.id}") if ex else 0,
         })
     return out
 
@@ -273,7 +274,8 @@ def _enqueue_expressions(p: Preset, bust_url: str | None) -> int:
 
 
 class GenerateIn(BaseModel):
-    what: str = "all"          # all / views / expressions
+    #: all = 立绘→半身→三视图→表情九宫格（一个角色约 12 张）；front = 只出立绘；views = 半身＋三视图；expressions = 九宫格
+    what: str = "all"
 
 
 @router.post("/{cid}:generate")
@@ -298,8 +300,8 @@ def generate(cid: str, body: GenerateIn, db: Session = Depends(get_db)) -> dict[
                                f"arms relaxed, whole body from head to shoes visible, {WHITE}",
                      "negative_prompt": "cropped feet, cut off head, multiple people, text, watermark",
                      "width": 576, "height": 1024, "style": style, "params": {"seed": 5}},
-            on_done=_set_view(p.id, "front", lambda db2, pp: _enqueue_assets(pp, front_url=(pp.payload_json or {})["views"]["front"],
-                                                                              bust_url=None))))
+            on_done=_set_view(p.id, "front", None if body.what == "front" else (
+                lambda db2, pp: _enqueue_assets(pp, front_url=(pp.payload_json or {})["views"]["front"], bust_url=None)))))
         n = 1
     else:
         n = _enqueue_assets(p, front_url=views.get("front"), bust_url=views.get("bust"),

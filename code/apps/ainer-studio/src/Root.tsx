@@ -5,6 +5,9 @@ import { Nav, type View } from "./Nav";
 // 3D-BOX 带着整个 three.js，点进去才加载
 const BoxHome = lazy(() => import("./box/BoxHome"));
 const BoxEditor = lazy(() => import("./box/BoxEditor"));
+// 角色库（含造型室）、风格广场（风格／运镜／特效／题材）
+const Characters = lazy(() => import("./library/Characters"));
+const Plaza = lazy(() => import("./library/Plaza"));
 
 function readView(): { view: View; box: string | null } {
   const q = new URLSearchParams(location.search);
@@ -33,6 +36,8 @@ export default function Root() {
       {!(view === "box" && box) && <header className="topbar"><div className="brand">Ainer <b>Studio</b></div>{nav}<div className="spacer" /></header>}
       <Suspense fallback={<div className="empty-state">载入中…</div>}>
         {view === "box" && (box ? <BoxEditor id={box} onBack={() => go("box")} /> : <BoxHome onOpen={id => go("box", id)} />)}
+        {view === "characters" && <Characters onOpenBox={id => go("box", id)} />}
+        {view === "styles" && <Plaza />}
       </Suspense>
     </div>
   );

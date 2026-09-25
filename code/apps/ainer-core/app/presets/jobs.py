@@ -43,6 +43,9 @@ class Job:
 
 
 _QUEUE: list[Job] = []
+#: 正在跑的（一个工作线程，所以最多一个）。别省：出队之后、进 _DONE 之前的任务要能查到 ——
+#: 漏了它，前端轮询正好碰上「正在出图」就拿到 404，以为服务重启过
+_RUNNING: list[Job] = []
 _DONE: list[Job] = []
 _LOCK = threading.Condition()
 _WORKER: threading.Thread | None = None
@@ -62,12 +65,12 @@ def enqueue(job: Job) -> Job:
 
 def get(job_id: str) -> Job | None:
     with _LOCK:
-        return next((j for j in _QUEUE + _DONE if j.id == job_id), None)
+        return next((j for j in _RUNNING + _QUEUE + _DONE if j.id == job_id), None)
 
 
 def snapshot(group: str | None = None) -> list[dict[str, Any]]:
     with _LOCK:
-        rows = _QUEUE + _DONE[-60:]
+        rows = _RUNNING + _QUEUE + _DONE[-60:]
     return [{"id": j.id, "title": j.title, "status": j.status, "error": j.error, "url": j.result_url, "group": j.group}
             for j in rows if not group or j.group == group]
 
@@ -84,12 +87,15 @@ def _work() -> None:
                 _LOCK.wait(30)
             job = _QUEUE.pop(0)
             job.status = "running"
+            _RUNNING.append(job)
         try:
             _run(job)
         except Exception as exc:          # noqa: BLE001 —— 一张失败不能拖垮整条队列
             log.exception("出图任务失败：%s", job.title)
             job.status, job.error = "failed", str(exc)[:300]
         with _LOCK:
+            if job in _RUNNING:
+                _RUNNING.remove(job)
             _DONE.append(job)
             del _DONE[:-200]
 

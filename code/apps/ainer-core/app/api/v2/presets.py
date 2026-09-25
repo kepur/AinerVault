@@ -102,6 +102,15 @@ def job_status(group: str | None = None) -> list[dict[str, Any]]:
     return jobs.snapshot(group)
 
 
+@router.get("/plan-style")
+def plan_style(plan_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """这份分镜现在套着哪个风格（风格广场页顶上显示、可以取消）。"""
+    plan = db.get(ShotPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "分镜计划不存在")
+    return {"plan_id": plan.id, "version": plan.version, "style_preset": (plan.config_json or {}).get("style_preset")}
+
+
 class ApplyStyleIn(BaseModel):
     plan_id: str
     preset_id: str | None = None

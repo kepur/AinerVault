@@ -4,6 +4,8 @@ export type View = "canvas" | "box" | "characters" | "styles";
 export const VIEWS: { id: View; label: string }[] = [
   { id: "canvas", label: "分镜画布" },
   { id: "box", label: "3D-BOX 预演" },
+  { id: "characters", label: "角色库" },
+  { id: "styles", label: "风格广场" },
 ];
 
 export function Nav({ view, onChange }: { view: View; onChange: (v: View) => void }) {

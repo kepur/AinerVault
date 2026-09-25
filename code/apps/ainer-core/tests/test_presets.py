@@ -140,11 +140,15 @@ def test_queue_runs_one_at_a_time_and_people_waiting_go_first(monkeypatch):
     monkeypatch.setattr(jobs, "_run", fake_run)
     monkeypatch.setattr(jobs, "_QUEUE", [])
     monkeypatch.setattr(jobs, "_DONE", [])
+    monkeypatch.setattr(jobs, "_RUNNING", [])
     monkeypatch.setattr(jobs, "_WORKER", None)
     mk = lambda title, pri=0: jobs.Job(title=title, capability=None, payload={}, on_done=lambda db, a: None,  # noqa: E731
                                        priority=pri, group="t")
-    jobs.enqueue(mk("封面1"))
+    first = jobs.enqueue(mk("封面1"))
     time.sleep(0.05)                                  # 封面1 已经在跑
+    # 正在跑的任务也要查得到：前端轮询正好碰上它在出图时不能 404
+    assert jobs.get(first.id) is first and first.status == "running"
+    assert [j["status"] for j in jobs.snapshot("t")] == ["running"]
     jobs.enqueue(mk("封面2"))
     jobs.enqueue(mk("试穿", pri=1))
     gate.set()
