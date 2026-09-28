@@ -1,14 +1,15 @@
-# LTX 2.5 成片（V1 关闭：feature_flags.ltx25_enabled=false）
+# LTX 2.5 成片（2026-09-28 接入本机：网关模型 ltx-2.5-22b-distilled，路由用途 director_final_ltx25）
 #
-# 只做了参数校验、payload 组装和 mock 返回，不跑推理。开之前要准备：
-#   Lightricks/LTX-2.5 22B 底模、IC-LoRA（Union-Control / Motion-Track），以及对应的网关工作流。
+# 控制走 IC-LoRA Union Control：官方只有 2.3 版（参考视频半尺寸），挂在 2.5 上用。
+# 尺寸取 64 的倍数（两阶段管线要求），1024×576 正好是 Blender 控制素材的尺寸，不用缩放裁切。
 capability: video.image_to_video
 route_purpose: director_final_ltx25
-resolution: [1280, 704]
+default_mode: union            # 深度＋骨架（＋边缘）同时喂
+resolution: [1024, 576]
 fps: 24
 union_control:
   types: [depth, pose, canny]   # 一个 LoRA 同时吃多种控制
   strengths: {depth: 0.8, pose: 1.0, canny: 0.6}
 motion_track:
   enabled: false               # 运动轨迹控制（点轨迹）
-audio: false                   # 2.x 能同时出音轨；V1 不用
+audio: true                    # 同步音轨（脚步、击打、环境声）

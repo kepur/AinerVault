@@ -1,11 +1,10 @@
-# Ainer Director Core 功能开关（V1）
+# Ainer Director Core 功能开关
 #
-# V1 只真跑一条链：3D-BOX / LLM → Scene Protocol → Blender 控制素材 → LTX 0.9.7 成片。
-# UE 与 LTX 2.5 的代码都在（协议映射、参数校验、payload 组装、mock），但开关关着：
-# 关着的时候接口照常返回「未启用」，不会去连 UE、不会去跑 2.5 的推理。
+# 2026-09-28 起 LTX 2.5 打开：Blender 控制素材（深度/骨架/边缘）经 2.3 Union Control IC-LoRA 驱动 2.5，
+# 夜巷打斗实测动作、站位、机位都跟着预演走。UE 仍然只有代码和 mock，开关关着。
 #
 # 环境变量可以覆盖，比如 DIRECTOR_UE_ENABLED=true。
 blender_enabled: true
 ue_enabled: false
 ltx097_enabled: true
-ltx25_enabled: false
+ltx25_enabled: true

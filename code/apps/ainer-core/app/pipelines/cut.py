@@ -48,6 +48,9 @@ log = logging.getLogger(__name__)
 
 #: 轨道。顺序即**叠放顺序**：先画面后声音，声音里对白在最上层 ——
 #: 剪辑软件里也是这么排的，换个顺序人会找不到。
+#: 自带同步音效的视频模型（片子里的声音可以直接进混音）
+NATIVE_AUDIO_MODEL = "ltx-2.5-22b-distilled"
+
 TRACKS: tuple[tuple[str, str, str], ...] = (
     ("video", "画面", "visual"),
     ("dialogue", "对白", "audio"),
@@ -260,6 +263,12 @@ def build_timeline(
         last_url = (None if motion_kind in {"hold", "camera"}
                     else _url(assets, last))
         video_url = _url_by_id(assets, shot.video_asset_id)
+        # **LTX-2.5 没对白的镜头自带同步音效**（模型照着画面出的脚步、撞击、环境声），
+        # 用它替掉这一镜的程序化拟音；两份一起混就是同一下撞墙响两声、还对不齐。
+        # 有对白的镜头是配音驱动出的片子，音轨就是原配音，照旧走对白轨
+        vmeta = (assets[shot.video_asset_id].meta_json or {}) if shot.video_asset_id in assets else {}
+        native_audio = bool(video_url and not voiced_ms and vmeta.get("has_audio")
+                            and vmeta.get("model") == NATIVE_AUDIO_MODEL)
 
         if not (video_url or first_url):
             gaps.append({"track": "video", "shot": shot.order_no,
@@ -348,6 +357,8 @@ def build_timeline(
                 continue
             if spec.kind == AudioKind.narration:
                 continue
+            if native_audio and track in ("sfx", "ambience"):
+                continue
             asset = assets.get(spec.asset_id or "")
             d = _dur(spec, assets)
             who = entities.get(spec.entity_id or "")
@@ -369,6 +380,12 @@ def build_timeline(
                              "fix": "去「章节工作台」生成音频"})
             if spec.kind in voiced_kinds:
                 local += d or 0
+        if native_audio:
+            clips["sfx"].append({
+                "key": f"sfx:{shot.order_no}:native", "shot": shot.order_no,
+                "start_ms": cursor, "duration_ms": dur, "url": video_url,
+                "text": "LTX-2.5 同步音效", "speaker": None, "ready": True, "native": True,
+            })
         cursor += dur
 
     # 整场铺底：配乐与环境声跨若干镜连续
@@ -891,8 +908,11 @@ def _mix_audio(tl: dict[str, Any], work: Path, timeout_sec: int,
             # adelay 的单位是毫秒，且**必须每声道各给一次**，
             # 只给一个值的话立体声素材只有左声道被延迟，右声道从 0 开始
             delay = max(0, int(c["start_ms"]))
+            # 视频自带的音轨按本镜时长截断，不然会拖进下一镜
+            trim = (f"atrim=0:{int(c['duration_ms']) / 1000:.3f},asetpts=PTS-STARTPTS,"
+                    if c.get("native") and c.get("duration_ms") else "")
             filters.append(
-                f"[{n}:a]adelay={delay}|{delay},volume={gain}dB[a{n}]")
+                f"[{n}:a]{trim}adelay={delay}|{delay},volume={gain}dB[a{n}]")
             labels.append(f"[a{n}]")
             n += 1
     if not n:

@@ -52,21 +52,23 @@ class LTX25Adapter(BaseRendererAdapter):
         else:
             ctl = {"type": req.control_type, "video": {"url": req.control_video},
                    "strength": req.strength if req.strength is not None else 1.0}
-        mt = cfg.get("motion_track") or {}
-        if mt.get("enabled"):
-            ctl["motion_track"] = True
+        if uc.get("conditioning_strength") is not None:
+            ctl["conditioning_strength"] = float(uc["conditioning_strength"])
+        if uc.get("fidelity"):
+            ctl["fidelity"] = str(uc["fidelity"])
         w, h = req.resolution
         payload: dict[str, Any] = {
-            "model_family": "ltx-2.5", "prompt": req.prompt, "negative_prompt": req.negative_prompt or None,
+            "prompt": req.prompt, "negative_prompt": req.negative_prompt or None,
             "duration_ms": int(round(req.duration_sec * 1000)), "fps": req.fps or int(cfg.get("fps", 24)),
-            "width": w, "height": h, "control": ctl, "audio": bool(cfg.get("audio", False)),
+            "width": w, "height": h, "control": ctl, "style": req.style or None,
+            # LTX-2.5 自带同步音轨（脚步、击打、环境声）；关掉就只出画面
+            "audio": {"mode": "generate" if cfg.get("audio", True) else "none"},
             "params": {"seed": req.seed},
         }
-        if req.first_frame:
+        # **Blender 的首帧是灰的，默认不当锚点。** 2B 上实测过：钉灰首帧整段发灰。
+        # 只有已经画成成片风格的首帧、且明确要钉（锁角色身份）时才给
+        if req.first_frame and req.pin_first and req.first_frame_styled:
             payload["first_frame"] = {"url": req.first_frame}
-            payload["control"]["pin_first"] = req.pin_first
-        if req.reference_images:
-            payload["reference_images"] = [{"url": u, "role": "identity", "identity": True} for u in req.reference_images[:4]]
         return {k: v for k, v in payload.items() if v is not None}
 
     def mock_generate(self, req: RenderRequest) -> RenderResult:

@@ -20,10 +20,11 @@ from app.director.ue_worker.translator import camera_to_sequencer
 
 # ── 功能开关 ─────────────────────────────────────────────
 
-def test_v1_flags_are_blender_and_ltx097_on_ue_and_ltx25_off(monkeypatch):
+def test_flags_blender_ltx097_ltx25_on_ue_off(monkeypatch):
+    """2026-09-28 起 LTX 2.5 打开（Union Control 挂 2.5 实测跟得住 Blender 预演）；UE 仍关。"""
     for k in config.FLAGS:
         monkeypatch.delenv(f"DIRECTOR_{k.upper()}", raising=False)
-    assert config.features() == {"blender_enabled": True, "ue_enabled": False, "ltx097_enabled": True, "ltx25_enabled": False}
+    assert config.features() == {"blender_enabled": True, "ue_enabled": False, "ltx097_enabled": True, "ltx25_enabled": True}
 
 
 def test_env_overrides_a_flag(monkeypatch):
@@ -82,7 +83,16 @@ def test_ltx25_union_payload_and_mock():
     ctl = r.meta["payload"]["control"]
     assert ctl["type"] == "union" and set(ctl["videos"]) == {"depth", "pose"}
     assert ctl["strengths"] == {"depth": 0.8, "pose": 1.0}
-    assert r.meta["payload"]["model_family"] == "ltx-2.5"
+    assert r.meta["payload"]["audio"] == {"mode": "generate"}     # 2.5 自带同步音轨
+
+
+def test_ltx25_does_not_pin_the_grey_previs_frame():
+    """Blender 的首帧是灰的：钉住它整段都灰（2B 实测）。只有画好的首帧、明确要钉时才给。"""
+    base = dict(renderer="ltx_25", control_type="union", control_videos={"pose": "http://x/p.mp4"},
+                first_frame="http://x/first.png")
+    assert "first_frame" not in LTX25Adapter().build_payload(_req(**base))
+    styled = LTX25Adapter().build_payload(_req(**base, pin_first=True, first_frame_styled=True))
+    assert styled["first_frame"] == {"url": "http://x/first.png"}
 
 
 def test_ltx25_union_needs_a_control_video():
@@ -90,8 +100,9 @@ def test_ltx25_union_needs_a_control_video():
         LTX25Adapter().validate(_req(control_type="union", control_videos={}))
 
 
-def test_ltx25_is_off_in_v1(monkeypatch):
-    monkeypatch.delenv("DIRECTOR_LTX25_ENABLED", raising=False)
+def test_ltx25_can_be_switched_off(monkeypatch):
+    """开关关掉时接口照常返回「未启用」，不去跑推理。"""
+    monkeypatch.setenv("DIRECTOR_LTX25_ENABLED", "false")
     with pytest.raises(config.FeatureDisabled):
         LTX25Adapter().generate(None, _req(renderer="ltx_25"))
 

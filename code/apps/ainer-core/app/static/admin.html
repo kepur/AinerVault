@@ -4292,7 +4292,8 @@ const CutRoom = {
           它会被明确标为预览，不再冒充电影成片。</p>
         <div class="row">
           <span class="tag t-info">无旁白电影模式</span>
-          <button class="btn pri" onclick="CutRoom.genVideos(this)">生成下一批 6 镜动态视频</button>
+          <button class="btn pri" onclick="CutRoom.genLtx(this,'final')" title="不要首尾帧：有对白按配音驱动口型，没对白模型出同步音效">LTX 2.5 出片（下一批 4 镜）</button>
+          <button class="btn" onclick="CutRoom.genLtx(this,'preview')" title="只跑第一阶段，半分辨率、约一半时间；满意再点「出片」从同一结果续跑">LTX 2.5 先出预览</button>
           <button class="btn" onclick="CutRoom.export(this)">${
             d.quality&&d.quality.production_ready?'导出最终成片 .mp4':'导出审片预览 .mp4'}</button>
           <a class="btn" href="/api/v2/shot-plans/${pid}/handoff.srt" target="_blank">字幕 .srt</a>
@@ -4527,6 +4528,15 @@ const Tasks = {
       api("GET", "/gen-tasks?size=40"),
     ]);
     v.innerHTML = `
+  async genLtx(btn, quality) {
+    await run(btn, async () => {
+      const r = await api("POST", `/shot-plans/${this.pid}/videos:ltx25`, {limit: 4, quality});
+      logOk(`LTX 2.5 ${quality==="preview"?"预览":"出片"}提交 ${r.submitted} 镜，剩余 ${r.remaining} 镜`
+            + "（本机一个一个跑，一镜约 2–4 分钟）");
+      (r.skipped||[]).slice(0,12).forEach(x=>logWarn(`镜 ${x.shot}：${x.why}`));
+      App.refresh();
+    }, "提交 LTX 2.5 镜头中");
+  },
       <div class="steps">
         ${["queued","submitted","running","succeeded","failed"].map(k=>`
           <div class="step ${k==='failed'&&sum.by_status[k]?'blocked':k==='succeeded'?'done':''}">

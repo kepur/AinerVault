@@ -16,6 +16,12 @@ const PASSES = [
   { id: "pose", zh: "骨架" }, { id: "canny", zh: "边缘" },
 ];
 const RES = ["1024x576", "768x432", "1280x720", "576x1024"];
+// LTX 2.5：Blender 的深度／骨架／边缘同时喂（2.3 Union Control IC-LoRA 挂 2.5），片子自带同步音效
+const CONTROL_25 = [
+  { id: "union", zh: "深度＋骨架＋边缘", doc: "三路控制一起喂：动作、站位、机位跟预演走，外观按提示词，带同步音效。1024×576 三秒约 6 分钟" },
+  { id: "pose", zh: "只用骨架", doc: "只按骨架动作生成（打斗、舞蹈），场景更自由" },
+  { id: "depth", zh: "只用深度", doc: "只按空间结构生成（场景、机位），人物动作更自由" },
+];
 const CONTROL = [
   { id: "v2v", zh: "白模重绘", doc: "预演视频加噪重绘：动作、运镜跟白模走，外观按提示词。本机 2B 可跑，6 秒约 100 秒" },
   { id: "pose", zh: "骨架控制", doc: "IC-LoRA：按骨架动作生成（打斗、舞蹈最稳）。需要 13B 0.9.7 底模" },
@@ -74,7 +80,8 @@ function ControlJob({ job, finals, features, onFinal, onCancel }: {
   onFinal: (body: Parameters<typeof director.final>[1]) => void; onCancel: (id: string) => void;
 }) {
   const [view, setView] = useState<string>("grid");
-  const [ctype, setCtype] = useState("v2v");
+  const [engine, setEngine] = useState<"ltx_25" | "ltx_097">("ltx_25");
+  const [ctype, setCtype] = useState("union");
   const [prompt, setPrompt] = useState("");
   const [denoise, setDenoise] = useState(0.92);
   const [seed, setSeed] = useState("");
@@ -106,26 +113,35 @@ function ControlJob({ job, finals, features, onFinal, onCancel }: {
           </div>
 
           <div className="rp-final-form">
-            <h4>AI 成片 · LTX 0.9.7</h4>
+            <h4>AI 成片</h4>
             <div className="chips">
-              {CONTROL.map(c => (
-                <button key={c.id} className={ctype === c.id ? "on" : ""} disabled={!ready.includes(c.id)}
-                  title={`${c.doc}${ready.includes(c.id) ? "" : "（本机未就绪）"}`} onClick={() => setCtype(c.id)}>{c.zh}</button>
-              ))}
+              <button className={engine === "ltx_25" ? "on" : ""} disabled={!features?.ltx25_enabled}
+                title="LTX 2.5：动作跟着预演走，带同步音效" onClick={() => { setEngine("ltx_25"); setCtype("union"); }}>LTX 2.5（带声音）</button>
+              <button className={engine === "ltx_097" ? "on" : ""} disabled={!features?.ltx097_enabled}
+                title="LTX 0.9.7 2B：白模重绘，快、无声" onClick={() => { setEngine("ltx_097"); setCtype("v2v"); }}>LTX 0.9.7</button>
+            </div>
+            <div className="chips">
+              {(engine === "ltx_25" ? CONTROL_25 : CONTROL).map(c => {
+                const ok = engine === "ltx_25" || ready.includes(c.id);
+                return (
+                  <button key={c.id} className={ctype === c.id ? "on" : ""} disabled={!ok}
+                    title={`${c.doc}${ok ? "" : "（本机未就绪）"}`} onClick={() => setCtype(c.id)}>{c.zh}</button>
+                );
+              })}
             </div>
             <textarea rows={2} placeholder="补充描述（可选，中文也行）：人物长相、服装、场景质感、画风… LLM 会结合场景写成英文提示词"
               value={prompt} onChange={e => setPrompt(e.target.value)} />
             <div className="rp-row">
-              {ctype === "v2v" && (
+              {engine === "ltx_097" && ctype === "v2v" && (
                 <label title="越大越自由（越不像白模），越小越贴白模">重绘幅度
                   <input type="range" min={0.7} max={1} step={0.01} value={denoise} onChange={e => setDenoise(+e.target.value)} />
                   <em>{denoise.toFixed(2)}</em>
                 </label>
               )}
               <label>种子 <input className="seed" value={seed} placeholder="随机" onChange={e => setSeed(e.target.value.replace(/[^0-9]/g, ""))} /></label>
-              <button className="primary" disabled={!features?.ltx097_enabled}
-                onClick={() => onFinal({ control_type: ctype, prompt: prompt.trim() || undefined, denoise: ctype === "v2v" ? denoise : undefined,
-                  seed: seed ? Number(seed) : undefined })}>生成成片</button>
+              <button className="primary" disabled={engine === "ltx_25" ? !features?.ltx25_enabled : !features?.ltx097_enabled}
+                onClick={() => onFinal({ renderer: engine, control_type: ctype, prompt: prompt.trim() || undefined,
+                  denoise: ctype === "v2v" ? denoise : undefined, seed: seed ? Number(seed) : undefined })}>生成成片</button>
             </div>
           </div>
           {finals.map(f => (

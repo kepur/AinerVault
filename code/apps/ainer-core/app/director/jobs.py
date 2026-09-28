@@ -62,7 +62,10 @@ def job_out(j: DirectorJob, db: Session | None = None) -> dict[str, Any]:
 
 # ── 提交 ────────────────────────────────────────────────
 
-def submit_blender(db: Session, scene: DirectorScene, render_plan: dict[str, Any] | None = None) -> DirectorJob:
+def submit_blender(db: Session, scene: DirectorScene, render_plan: dict[str, Any] | None = None,
+                   chain: dict[str, Any] | None = None) -> DirectorJob:
+    """chain：渲完之后接着做什么（{"final": 成片参数, "shot_id": 出完挂到哪一镜}）。入队前写进任务，
+    执行线程读到的就是全的 —— 事后再补，线程手里那份可能还是旧的。"""
     config.require("blender_enabled", "Blender 渲染")
     rp = RenderPlan.model_validate({**((scene.protocol_json or {}).get("render_plan") or {}), **(render_plan or {})})
     cfg = config.load("blender")
@@ -79,7 +82,7 @@ def submit_blender(db: Session, scene: DirectorScene, render_plan: dict[str, Any
     (jd / "scene_resolved.json").write_text(json.dumps(baked, ensure_ascii=False), encoding="utf-8")
     (jd / "scene_protocol.json").write_text(json.dumps(scene.protocol_json, ensure_ascii=False, indent=1), encoding="utf-8")
     job.input_json = {**job.input_json, "baked_path": str(jd / "scene_resolved.json"), "frames": baked["frames"],
-                      "duration": baked["duration"], "fps": baked["fps"]}
+                      "duration": baked["duration"], "fps": baked["fps"], **({"chain": chain} if chain else {})}
     db.commit()
     enqueue(job.id)
     return job
@@ -98,7 +101,18 @@ def submit_final(db: Session, parent: DirectorJob, body: dict[str, Any]) -> Dire
     cfg = renderer.cfg()
     ctype = body.get("control_type") or cfg.get("default_mode") or "v2v"
     source = (body.get("v2v_source") or (cfg.get("v2v") or {}).get("source") or "preview") if ctype == "v2v" else ctype
-    ctl = _control_output(db, parent, source)
+    videos: dict[str, str] = {}
+    if ctype == "union":
+        # union：深度／骨架／边缘几路同时喂（LTX 2.x 的 Union Control），有哪路给哪路
+        for kind in (cfg.get("union_control") or {}).get("types") or ("depth", "pose", "canny"):
+            out = _control_output(db, parent, kind)
+            if out is not None and out.url:
+                videos[kind] = out.url
+        if not videos:
+            raise JobError("控制素材里没有深度／骨架／边缘任何一路：重新渲一遍并勾上它们")
+        ctl = _control_output(db, parent, next(iter(videos)))
+    else:
+        ctl = _control_output(db, parent, source)
     if ctl is None or not ctl.url:
         raise JobError(f"控制素材里没有 {source} 通道：重新渲一遍并勾上它")
     first = _control_output(db, parent, "first_frame")
@@ -107,6 +121,7 @@ def submit_final(db: Session, parent: DirectorJob, body: dict[str, Any]) -> Dire
     refs = [u for u in (body.get("reference_images") or []) if isinstance(u, str) and u]
     inp = {
         "renderer": name, "control_type": ctype, "control_source": source, "control_video": ctl.url,
+        "control_videos": videos, **({"chain": body["chain"]} if body.get("chain") else {}),
         "first_frame": first.url if first else None, "user_prompt": (body.get("prompt") or "").strip(),
         "negative_prompt": body.get("negative_prompt") or "", "seed": body.get("seed"), "denoise": body.get("denoise"),
         "strength": body.get("strength"), "pin_first": bool(body.get("pin_first", bool(refs))), "reference_images": refs,
@@ -226,6 +241,12 @@ def _run(job_id: str) -> None:
             else:
                 raise JobError(f"不认识的任务类型：{job.job_type}")
             job.status = "succeeded"
+            db.commit()
+            try:
+                _chain(db, job)
+            except Exception:          # noqa: BLE001 —— 下一步提交失败不能把这一步改判成失败
+                log.exception("director 串联下一步失败：%s", job_id)
+                db.rollback()
         except (blender_adapter.BlenderCancelled,) as exc:
             job.status, job.error = "cancelled", str(exc)
         except RendererError as exc:
@@ -253,6 +274,41 @@ def _run_blender(db: Session, job: DirectorJob) -> None:
     outputs.register(db, job, files)
     job.output_manifest_json = manifest
     job.progress_json = {"stage": "done", "percent": 100}
+
+
+def _has_audio(path: Path) -> bool:
+    import subprocess
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                              "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60).stdout
+        return bool(out.strip())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _chain(db: Session, job: DirectorJob) -> None:
+    """任务成功之后的下一步：Blender 渲完 → 按 chain.final 提交成片；成片出完 → 挂到 chain.shot_id 那一镜。"""
+    ch = (job.input_json or {}).get("chain") or {}
+    if not ch:
+        return
+    if job.job_type == "blender_render" and ch.get("final"):
+        submit_final(db, job, {**ch["final"], "chain": {k: v for k, v in ch.items() if k != "final"}})
+    elif job.job_type == "final_render" and ch.get("shot_id"):
+        from app.models import Asset, Shot, SpecStatus
+
+        out = _control_output(db, job, "final")
+        shot = db.get(Shot, ch["shot_id"])
+        if out is None or not out.asset_id or shot is None:
+            return
+        asset = db.get(Asset, out.asset_id)
+        if asset is not None:
+            asset.meta_json = {**(asset.meta_json or {}), "shot_id": shot.id, "via": "director"}
+        shot.video_asset_id = out.asset_id
+        shot.status = SpecStatus.ready
+        cam = dict(shot.camera_json or {})
+        cam["director"] = {"scene_id": job.scene_id, "blender_job_id": job.parent_id, "final_job_id": job.id}
+        shot.camera_json = cam
+        db.commit()
 
 
 def _download(url: str, dst: Path) -> Path:
@@ -284,7 +340,8 @@ def _run_final(db: Session, job: DirectorJob) -> None:
     renderer = registry.get(job.backend)
     req = RenderRequest(
         renderer=job.backend, prompt=pr["prompt"], negative_prompt=inp.get("negative_prompt") or "",
-        control_type=inp["control_type"], control_video=inp["control_video"], first_frame=inp.get("first_frame"),
+        control_type=inp["control_type"], control_video=inp["control_video"],
+        control_videos=inp.get("control_videos") or {}, first_frame=inp.get("first_frame"),
         pin_first=bool(inp.get("pin_first")), reference_images=inp.get("reference_images") or [], seed=inp.get("seed"),
         fps=int(inp.get("fps") or 24), resolution=tuple(inp.get("resolution") or (768, 448)),
         duration_sec=float(inp.get("duration_sec") or 6), denoise=inp.get("denoise"), strength=inp.get("strength"),
@@ -298,7 +355,11 @@ def _run_final(db: Session, job: DirectorJob) -> None:
         files["final"] = str(_download(res.video_url, out / "final.mp4"))
     if res.first_frame_url:
         files["styled_first_frame"] = str(_download(res.first_frame_url, out / "styled_first_frame.png"))
-    outputs.register(db, job, files, meta={"renderer": job.backend, "control_type": req.control_type})
+    meta: dict[str, Any] = {"renderer": job.backend, "control_type": req.control_type}
+    if job.backend == "ltx_25" and files.get("final"):
+        # 时间线按素材上的 model / has_audio 决定能不能直接用片子自带的同步音效
+        meta.update(model="ltx-2.5-22b-distilled", has_audio=_has_audio(Path(files["final"])))
+    outputs.register(db, job, files, meta=meta)
     manifest = {"job_id": job.id, "parent_id": job.parent_id, "renderer": job.backend, "control_type": req.control_type,
                 "prompt": pr["prompt"], "outputs": {k: Path(v).name for k, v in files.items()}, "meta": res.meta}
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -62,8 +62,17 @@ export default function Inspector({ planId, shot, onStage, onChanged }: Props) {
         <button disabled={!!busy || !shot.first?.url} onClick={() => run("出尾帧", () => api.lastFrame(planId, shot.id))}>
           出尾帧
         </button>
-        <button disabled={!!busy || !shot.last?.url} onClick={() => run("出视频", () => api.video(planId, shot.id))}>
-          出视频
+        <button className="primary" disabled={!!busy}
+          title="LLM 按这一镜搭 3D 场景（人物、站位、动作、机位）→ Blender 渲控制素材 → LTX 2.5 按预演出片，出完自动挂回这一镜（一镜约 5–10 分钟）"
+          onClick={() => run("3D 导演出片", () => api.directorShot(shot.id))}>
+          {busy === "3D 导演出片" ? "搭景中…" : "3D 导演出片"}
+        </button>
+        <button disabled={!!busy} title="只跑第一阶段：半分辨率、约一半时间；满意再点「出视频」从同一结果续跑"
+          onClick={() => run("预览", () => api.video(planId, shot.id, "preview"))}>
+          {busy === "预览" ? "提交中…" : "LTX 预览"}
+        </button>
+        <button disabled={!!busy} title="LTX 2.5：不要首尾帧，带声音" onClick={() => run("出视频", () => api.video(planId, shot.id))}>
+          {busy === "出视频" ? "提交中…" : "出视频"}
         </button>
       </div>
       {err && <div className="err">{err}</div>}

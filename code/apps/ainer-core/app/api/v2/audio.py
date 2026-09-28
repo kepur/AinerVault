@@ -430,6 +430,40 @@ def generate_shot_videos(plan_id: str, body: VideoGenIn,
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+class Ltx25VideoIn(BaseModel):
+    limit: int = Field(1, ge=1, le=60)
+    regenerate: bool = False
+    shot_ids: list[str] = Field(default_factory=list)
+    #: preview 只跑第一阶段（半分辨率，约一半时间）；final 有预览就从同一潜变量续跑
+    quality: str = Field("final", pattern="^(preview|final)$")
+    width: int = 832
+    height: int = 448
+    seed: int | None = None
+    #: sheet：挂参考设定图（跨镜同一张脸，慢约一倍）；text：只靠文字描述
+    identity: str = Field("sheet", pattern="^(sheet|text)$")
+
+
+@router.post("/shot-plans/{plan_id}/videos:ltx25")
+def generate_shot_videos_ltx25(plan_id: str, body: Ltx25VideoIn,
+                               db: Session = Depends(get_db)) -> dict:
+    """分镜走 LTX-2.5：不要首尾帧，一镜一次出片，片子自带声音。
+
+    有对白的镜头按配音驱动口型（成片音轨就是原配音）；没对白的镜头模型按音效说明出环境声。
+    """
+    from app.pipelines import ltx25_shots
+
+    try:
+        return ltx25_shots.generate(
+            db, _plan(db, plan_id), limit=body.limit, regenerate=body.regenerate,
+            shot_ids=body.shot_ids or None, quality=body.quality,
+            width=body.width, height=body.height, seed=body.seed, identity=body.identity,
+        )
+    except CapabilityError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/shot-plans/{plan_id}/render")
 def render_cut(plan_id: str, body: RenderIn, db: Session = Depends(get_db)) -> dict:
     """把时间线渲成 MP4。缺动态镜头时只能导出审片预览。"""

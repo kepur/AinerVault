@@ -57,9 +57,13 @@ export const api = {
     call("POST", `/shot-plans/${planId}/last-frames:generate`, {
       shot_ids: [shotId], regenerate: true, confirm_cost: true,
     }),
-  video: (planId: string, shotId: string) =>
-    call("POST", `/shot-plans/${planId}/videos:generate`, {
-      shot_ids: [shotId], limit: 1, regenerate: true,
+  // 3D 导演出片：LLM 按这一镜搭 3D-BOX 场景 → Blender 控制素材 → LTX 2.5 按控制出片 → 挂回镜头
+  directorShot: (shotId: string) =>
+    call<{ scene_id: string; blender_job_id: string; duration: number }>("POST", `/director/shots/${shotId}:render`, {}),
+  // LTX 2.5：不要首尾帧，一镜一次出片（有对白按配音驱动口型，没对白模型出同步音效）
+  video: (planId: string, shotId: string, quality: "preview" | "final" = "final") =>
+    call("POST", `/shot-plans/${planId}/videos:ltx25`, {
+      shot_ids: [shotId], limit: 1, regenerate: true, quality,
     }),
 
   cast: (planId: string) => call<{ cast: CastMember[] }>("GET", `/studio/plans/${planId}/cast`),

@@ -160,6 +160,32 @@ def generate_scene(body: GenerateIn, db: Session = Depends(get_db)) -> dict[str,
         raise _fail(exc) from exc
 
 
+class ShotRenderIn(BaseModel):
+    seed: int | None = None
+    control_type: str = Field("union", pattern="^(union|pose|depth)$")
+
+
+@router.post("/shots/{shot_id}:render")
+def render_shot(shot_id: str, body: ShotRenderIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """分镜 → 3D 导演出片：LLM 按这一镜搭 3D-BOX 场景 → Blender 控制素材 → LTX 2.5 按控制出片 → 挂回镜头。
+
+    接口只做搭景、交 Blender 任务；成片和挂回在任务队列里接着跑（看 /jobs/{blender_job_id} 的进度）。
+    """
+    from app.director import from_shot
+
+    _started()
+    try:
+        out = from_shot.render_shot(db, shot_id, seed=body.seed, control_type=body.control_type)
+        db.commit()
+        return out
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise _fail(exc) from exc
+
+
 class EditIn(BaseModel):
     instruction: str = Field(min_length=2, max_length=2000)
     model: str | None = None
