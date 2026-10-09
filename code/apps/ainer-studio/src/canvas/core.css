@@ -1,0 +1,70 @@
+/*
+ * 创作画布：画布本身（Flow）、启动/空状态、xyflow 的局部覆盖。
+ * 节点、端口、连线在 nodes.css；外壳（顶栏、Dock、菜单）在 chrome.css。
+ */
+
+.cv-flow { position: absolute; inset: 0; }
+.cv-flow .react-flow { background: var(--cv-bg); }
+
+/*
+ * xyflow 的 <Panel>/<MiniMap> 用 .left/.right/.center/.top/.bottom 定位，
+ * 全局 styles.css 恰好也有 .left/.right（面板底色、边框、滚动）和 .center（position: relative）——
+ * 不复位的话底栏会被挤到左上角、左下角多一块底色。
+ */
+.cv-root .react-flow__panel {
+  position: absolute;
+  min-height: 0;
+  overflow: visible;
+  background: none;
+  border: 0;
+}
+
+/* xyflow 的默认端口样式交给 nodes.css；这里只清掉它给的焦点框和选区底色 */
+.cv-root .react-flow__node:focus,
+.cv-root .react-flow__node:focus-visible { outline: none; }
+.cv-root .react-flow__edge:focus,
+.cv-root .react-flow__edge:focus-visible { outline: none; }
+.cv-root .react-flow__nodesselection-rect {
+  background: rgba(124, 108, 255, .06);
+  border: 1px dashed var(--cv-accent);
+  border-radius: var(--cv-radius-sm);
+}
+.cv-root .react-flow__selection {
+  background: var(--xy-selection-background-color);
+  border: var(--xy-selection-border);
+}
+.cv-root .react-flow__pane { cursor: default; }
+.cv-root .react-flow__pane.dragging { cursor: grabbing; }
+.cv-root .react-flow__connectionline path { stroke-width: 1.6; stroke-dasharray: 5 4; }
+
+/* 演示数据载入前（store 先装好 demo api 才渲染子组件） */
+.cv-boot {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: var(--cv-muted);
+  font-size: 13px;
+}
+
+/* 空状态：画布中央一张说明卡 */
+.cv-empty {
+  position: absolute; left: 50%; top: 46%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 48px));
+  padding: 22px 24px 18px;
+  border-radius: var(--cv-radius-lg);
+  text-align: center;
+  z-index: var(--cv-z-chrome);
+}
+.cv-empty b { display: block; font-size: 15px; margin-bottom: 8px; }
+.cv-empty p { margin: 0; color: var(--cv-muted); line-height: 1.65; overflow-wrap: anywhere; }
+.cv-empty__acts { display: flex; justify-content: center; gap: 10px; margin-top: 16px; }
+.cv-empty__acts a {
+  height: 30px; padding: 0 14px;
+  display: inline-flex; align-items: center;
+  border-radius: var(--cv-pill);
+  border: 1px solid var(--cv-line-2);
+  color: var(--cv-text); text-decoration: none;
+  transition: background var(--cv-fast) var(--cv-ease), border-color var(--cv-fast) var(--cv-ease);
+}
+.cv-empty__acts a:first-child { background: var(--cv-accent); border-color: var(--cv-accent); }
+.cv-empty__acts a:hover { border-color: var(--cv-accent-2); }

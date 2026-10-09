@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-10-09T10:44:29+0300",
+  "test_target": "http://localhost:5174",
+  "steps": {
+    "step1_create_canvas": {
+      "status": "PASS",
+      "canvas_id": "brd_01M4FSY06VEWM8GW053CE8Y26S",
+      "title": "E2E自由创作板_滑雪特写",
+      "initial_node_count": 0,
+      "initial_nodes": [],
+      "has_unwanted_story_card": false,
+      "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/02_blank_canvas_created.png"
+    },
+    "step2_edit_node": {
+      "status": "PASS",
+      "node_id": "n_mv0ntq0km0t6q",
+      "typed_content": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+      "dom_rendered_content": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+      "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/04_node_edited.png"
+    },
+    "step3_save_canvas": {
+      "status": "PASS",
+      "topbar_save_badge": {
+        "text": "已保存",
+        "is_saved": true
+      },
+      "backend_version": 3,
+      "backend_nodes_count": 1,
+      "backend_saved_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+      "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/05_canvas_saved.png"
+    },
+    "step4_reopen_canvas": {
+      "status": "PASS",
+      "reopened_node_count": 1,
+      "preserved_edited_node": {
+        "id": "n_mv0ntq0km0t6q",
+        "title": "文本",
+        "plain_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+        "card_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写"
+      },
+      "has_unwanted_story_card": false,
+      "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/06_canvas_reopened.png"
+    }
+  },
+  "defects_observed": [],
+  "overall_status": "PASSED"
+}

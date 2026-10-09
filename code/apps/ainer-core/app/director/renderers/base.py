@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.capability.schemas import Capability
-from app.capability.service import poll_task, submit_task
+from app.capability.service import cancel_task, poll_task, submit_task
 from app.director import config
 from app.models import GenTask, TaskStatus
 
@@ -46,6 +46,10 @@ class RenderRequest(BaseModel):
     denoise: float | None = Field(None, ge=0.3, le=1.0)
     strength: float | None = Field(None, ge=0, le=2)
     style: str | None = None                 # 工作台画风：photoreal / anime / cinematic / auto
+    #: 声音：generate = 模型现场生成（脚步、击打、环境声）；none = 只出画面；
+    #: drive = 用 audio_track（这一镜按角色音色配好的台词轨）驱动口型和表演，角色音色前后一致（LTX 2.5 a2v）
+    audio_mode: Literal["generate", "none", "drive"] = "generate"
+    audio_track: str | None = None
 
 
 class RenderResult(BaseModel):
@@ -98,6 +102,8 @@ def run_task(db: Session, cap: Capability, payload: dict[str, Any], *, purpose: 
     t0 = time.time()
     while task.status not in TERMINAL:
         if cancelled and cancelled():
+            cancel_task(db, task)          # 网关上的任务一起停，不然 GPU 一直被占着
+            db.commit()
             raise RendererError("任务被取消")
         if time.time() - t0 > timeout_s:
             raise RendererError(f"{label or cap.value} 超过 {int(timeout_s)} 秒没完成")

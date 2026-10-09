@@ -88,9 +88,32 @@ class ProjectPatch(BaseModel):
 
 
 @router.get("/projects")
-def list_projects(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    rows = db.execute(select(SceneProject).order_by(SceneProject.updated_at.desc()).limit(200)).scalars()
-    return [service.project_out(p, full=False) for p in rows]
+def list_projects(plan_id: str | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """白模项目列表。plan_id：只列这份分镜的白模（导演出片搭的那些，按镜号排），每项带 shot_id / shot_order。
+
+    镜头 → 白模的关联记在 shots.camera_json.director_run.box_project_id（老项目的 shot_plan_id 列是空的），
+    所以从镜头这一侧反查，不用回填数据库。
+    """
+    if not plan_id:
+        rows = db.execute(select(SceneProject).order_by(SceneProject.updated_at.desc()).limit(200)).scalars()
+        return [service.project_out(p, full=False) for p in rows]
+    from app.models import Shot
+
+    by_box: dict[str, Shot] = {}
+    for sh in db.execute(select(Shot).where(Shot.shot_plan_id == plan_id).order_by(Shot.order_no)).scalars():
+        run = (sh.camera_json or {}).get("director_run") if isinstance(sh.camera_json, dict) else None
+        pid = run.get("box_project_id") if isinstance(run, dict) else None
+        if pid and pid not in by_box:
+            by_box[pid] = sh
+    q = select(SceneProject).where((SceneProject.id.in_(list(by_box))) | (SceneProject.shot_plan_id == plan_id))
+    out = []
+    for p in db.execute(q).scalars():
+        d = service.project_out(p, full=False)
+        sh = by_box.get(p.id)
+        d.update({"shot_id": sh.id if sh else None, "shot_order": sh.order_no if sh else None})
+        out.append(d)
+    out.sort(key=lambda d: (d["shot_order"] is None, d["shot_order"] or 0, d["title"] or ""))
+    return out
 
 
 @router.post("/projects")

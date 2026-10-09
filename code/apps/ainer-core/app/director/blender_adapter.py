@@ -143,3 +143,27 @@ def render(*, job_id: str, scene_id: str | None, baked_path: str, out_dir: str, 
         if on_progress:
             on_progress({"kind": "retry", "attempt": attempt + 1, "error": last_err})
     raise BlenderError(last_err)
+
+
+def probe(*, baked_path: str, out_dir: str, resolution: tuple[int, int], lens_mm: float = 40.0,
+          shot_size: str | None = None, focus: str | None = None, timeout_s: float = 180.0) -> dict[str, Any]:
+    """试机位（只渲小色块图，约 5 秒）：返回 {planner: LLM 原机位的得分和每人露出面积, best: 最佳机位（协议坐标）}。"""
+    config.require("blender_enabled", "Blender 渲染")
+    b = binary()
+    if not b:
+        raise BlenderError("找不到 Blender")
+    os.makedirs(out_dir, exist_ok=True)
+    job = {"job_id": "probe", "out_dir": out_dir, "baked_path": baked_path,
+           "resolution": [int(resolution[0]), int(resolution[1])], "passes": [], "save_blend": False,
+           "probe": {"lens_mm": float(lens_mm), "shot_size": shot_size, "focus": focus}}
+    job_path = os.path.join(out_dir, "job.json")
+    with open(job_path, "w", encoding="utf-8") as f:
+        json.dump(job, f, ensure_ascii=False)
+    proc = subprocess.run([b, "-b", "--factory-startup", "--python", str(WORKER), "--", job_path],
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL, env=_env(), timeout=timeout_s)
+    path = os.path.join(out_dir, "probe.json")
+    if not os.path.exists(path):
+        tail = "\n".join((proc.stdout or "").splitlines()[-8:])
+        raise BlenderError(f"试机位失败：{tail[-600:]}")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)

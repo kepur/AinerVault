@@ -1,0 +1,99 @@
+/*
+ * 创作画布的设计 token。全部挂在 .cv-root 下，不碰全局 styles.css（那里有未提交改动，
+ * 而且全局 .dot/.badge/.row/.seg/.thumb/.meta/button 会串样式 —— 新画布一律用 .cv- 前缀）。
+ */
+.cv-root {
+  /* 层级底色：画布最深，卡片、浮层逐级变亮 */
+  --cv-bg: #0b0b0d;
+  --cv-dot: #24242b;
+  --cv-surface-1: #141418;
+  --cv-surface-2: #1b1b20;
+  --cv-surface-3: #24242a;
+  --cv-line: #2a2a31;
+  --cv-line-2: #3a3a44;
+  --cv-text: #ececf1;
+  --cv-muted: #8e8e99;
+  --cv-faint: #5c5c66;
+
+  --cv-accent: #7c6cff;
+  --cv-accent-2: #a99cff;
+  --cv-accent-soft: rgba(124, 108, 255, .16);
+  --cv-accent-glow: rgba(124, 108, 255, .45);
+  --cv-ok: #3ecf8e;
+  --cv-warn: #f5b84a;
+  --cv-bad: #ff6b6b;
+  --cv-new: #2fd27a;
+
+  /* 连线按语义着色 */
+  --cv-edge-flow: #34343e;
+  --cv-edge-ref: #8f86ff;
+  --cv-edge-identity: #ff7eb6;
+  --cv-edge-control: #38d0ff;
+  --cv-edge-style: #f5b84a;
+
+  /* 节点类型色（端口、标题图标） */
+  --cv-kind-text: #c9c9d3;
+  --cv-kind-image: #ff9fca;
+  --cv-kind-video: #7cc4ff;
+  --cv-kind-box3d: #38d0ff;
+
+  --cv-radius-sm: 8px;
+  --cv-radius: 14px;
+  --cv-radius-lg: 18px;
+  --cv-pill: 999px;
+
+  --cv-shadow-1: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .28);
+  --cv-shadow-2: 0 8px 28px rgba(0, 0, 0, .45), 0 2px 6px rgba(0, 0, 0, .3);
+  --cv-shadow-3: 0 18px 60px rgba(0, 0, 0, .6), 0 4px 14px rgba(0, 0, 0, .35);
+
+  --cv-glass: rgba(22, 22, 27, .86);
+  --cv-glass-blur: blur(18px) saturate(1.3);
+
+  --cv-ease: cubic-bezier(.2, .8, .2, 1);
+  --cv-fast: .14s;
+  --cv-mid: .24s;
+
+  /* 层级 */
+  --cv-z-chrome: 20;
+  --cv-z-dock: 30;
+  --cv-z-popover: 40;
+  --cv-z-overlay: 60;
+  --cv-z-toast: 80;
+
+  /* xyflow 12 的主题变量 */
+  --xy-background-color: var(--cv-bg);
+  --xy-edge-stroke: var(--cv-edge-flow);
+  --xy-edge-stroke-selected: var(--cv-accent-2);
+  --xy-connectionline-stroke: var(--cv-accent-2);
+  --xy-handle-background-color: var(--cv-surface-3);
+  --xy-handle-border-color: var(--cv-line-2);
+  --xy-selection-background-color: rgba(124, 108, 255, .08);
+  --xy-selection-border: 1px dashed var(--cv-accent);
+  --xy-minimap-background-color: var(--cv-surface-1);
+  --xy-minimap-mask-background-color: rgba(8, 8, 10, .72);
+  --xy-node-boxshadow-selected: none;
+  --xy-node-border-radius: var(--cv-radius);
+
+  position: fixed;
+  inset: 0;
+  background: var(--cv-bg);
+  color: var(--cv-text);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* 全局 button/select 样式在画布里一律复位，各组件自己定 */
+.cv-root button {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; border-radius: 0;
+  cursor: pointer;
+}
+.cv-root button:hover:not(:disabled) { border-color: transparent; }
+.cv-root button:disabled { opacity: .4; cursor: default; }
+.cv-root select { font: inherit; }
+.cv-root ::selection { background: rgba(124, 108, 255, .35); }
+
+.cv-stage-ref { padding: 10px; display: grid; gap: 8px; }
+.cv-stage-ref-preview { height: 168px; position: relative; display: grid; place-items: center; background: #17191e; color: var(--cv-muted); }
+.cv-stage-ref-preview > div { position: absolute; inset: 0; }
+.cv-stage-ref small { overflow-wrap: anywhere; }

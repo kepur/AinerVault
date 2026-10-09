@@ -95,7 +95,7 @@ def doc_to_protocol(doc: dict[str, Any], *, scene_id: str, title: str, source: d
             poses = o.get("poses") or []
             actors.append({"id": o["id"], "name": o.get("name"), "type": "human", "model_ref": f"mannequin/{body}",
                            "character_ref": o.get("ref"), "spawn": spawn, "parent": o.get("parent"),
-                           "appearance": {k: v for k, v in {"color": o.get("color")}.items() if v},
+                           "appearance": {k: v for k, v in {"color": o.get("color"), "height_m": o["size"][1]}.items() if v},
                            "pose": poses[0]["pose"] if poses and poses[0].get("t", 0) <= 0 else None})
             continue
         if o.get("prefab"):
@@ -174,7 +174,8 @@ def protocol_to_script(p: SceneProtocol | dict[str, Any]) -> str:
     sp = p if isinstance(p, SceneProtocol) else SceneProtocol.model_validate(p)
     d = sp.model_dump(mode="json", exclude_none=True)
     m, env = d["meta"], d["environment"]
-    L = [f"// 由 Ainer Scene Protocol 生成：{m['title']}（{sp.scene_id}）",
+    title_comment = m["title"].replace("\r", " ").replace("\n", " ")
+    L = [f"// 由 Ainer Scene Protocol 生成：{title_comment}（{sp.scene_id}）",
          f"S.setup({{ duration: {m['duration_sec']}, fps: {m['fps']}, aspect: {round(m['aspect'], 5)} }});",
          f"S.environment({_j({'sky': env['sky'], 'ground': env['ground'], 'groundSize': env['ground_size'], 'fog': env['fog']})});"]
     for lt in as_items(env, "lights"):
@@ -221,12 +222,15 @@ def protocol_to_script(p: SceneProtocol | dict[str, Any]) -> str:
         L.append("\n// 演员")
     for a in d["actors"]:
         sp_ = a.get("spawn") or {}
-        o = {"id": a["id"], "at": sp_.get("position", [0, 0, 0]), "rot": sp_.get("rotation", [0, 0, 0])}
+        o = {"id": a["id"], "at": sp_.get("position", [0, 0, 0]), "rot": sp_.get("rotation", [0, 0, 0]),
+             "scale": sp_.get("scale", [1, 1, 1])}
         if (a.get("appearance") or {}).get("color"):
             o["color"] = a["appearance"]["color"]
         if a.get("parent"):
             o["parent"] = a["parent"]
         if a.get("type", "human") == "human":
+            if (a.get("appearance") or {}).get("height_m") is not None:
+                o["height"] = a["appearance"]["height_m"]
             ref = a.get("model_ref", "mannequin/male")
             o["body"] = ref.split("/", 1)[1] if ref.startswith("mannequin/") else "male"
             if a.get("character_ref"):

@@ -29,6 +29,7 @@ from typing import Any, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.pipelines.director_review import review_of
 from app.models import (
     Asset, AudioKind, AudioSpec, FrameRole, FrameSpec, GenTask, Shot, ShotMotion, ShotPlan,
 )
@@ -82,7 +83,7 @@ def style_line(plan: Any) -> str:
 
 def shot_prompt(first: FrameSpec | None, motion: ShotMotion | None, sfx: Sequence[AudioSpec],
                 speakers: Sequence[str], fallback: str = "", *, scene: str = "",
-                characters: Sequence[str] = (), style: str = "") -> str:
+                characters: Sequence[str] = (), style: str = "", lead: str = "") -> str:
     """LTX-2.5 的一镜提示词。顺序：场景头 → 人物 → 构图 → 动作 → 声音。
 
     场景头和人物每镜都写同一套字，镜头之间才接得上；构图只取首帧提示词的开头（主体、景别），
@@ -108,6 +109,10 @@ def shot_prompt(first: FrameSpec | None, motion: ShotMotion | None, sfx: Sequenc
     room = PROMPT_BUDGET - len(header) - len(framing) - len(audio) - 12
     if len(action) > room:                 # 运动单写得太长：保动作的前半段（节拍、主动作都在前面）
         action = action[: max(400, room)]
+    if lead:
+        # 导演审过的运动描述（LTX 官方结构：第一句主要动作、按时间顺序、运镜最后一句）放最前面；
+        # 钉关键帧出片时构图已经在首帧里了，分镜原文的框景和运动单不再拼进来（两套说法会打架）
+        return "\n\n".join(p for p in (_clean(lead), header, audio) if p)[:PROMPT_BUDGET]
     parts = [p for p in (header, framing, action, audio) if p]
     if not action and not framing:
         parts.insert(1 if header else 0, _clean(fallback))
@@ -325,6 +330,7 @@ def generate(db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = 
     - limit 必填意义同老路：一支两三分钟，别一把梭整章
     - identity="sheet"（默认）：用这一镜出场角色的五视角拼参考设定图挂 Ingredients，跨镜同一张脸；
       有对白的镜头由网关先挂设定图出一小段拿身份锚、再配音驱动。"text" 只靠文字描述（快，脸会漂）
+    - identity="frame"：关键帧方案（pipelines/keyframe）—— 钉住首帧上挂的关键帧（定妆照画进场景的那张）
     """
     from app.capability.schemas import Capability
     from app.capability.service import submit_task
@@ -346,7 +352,8 @@ def generate(db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = 
     specs: dict[str, list[AudioSpec]] = {}
     for a in db.execute(select(AudioSpec).where(AudioSpec.shot_id.in_(sids))).scalars():
         specs.setdefault(a.shot_id, []).append(a)
-    assets = _assets(db, [a.asset_id for lst in specs.values() for a in lst] + [s.video_asset_id for s in shots])
+    assets = _assets(db, [a.asset_id for lst in specs.values() for a in lst] + [s.video_asset_id for s in shots]
+                     + [f.asset_id for f in firsts.values()])
     doc = db.get(ScriptDoc, plan.script_doc_id)
     chapter = db.get(Chapter, doc.chapter_id) if doc else None
     chapter_order = getattr(chapter, "order_no", None)
@@ -376,9 +383,10 @@ def generate(db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = 
             continue
         sfx = [a for a in own if a.kind == AudioKind.sfx]
         first = firsts.get(shot.id)
-        # 这一镜里的人：首帧登记的实体 ＋ 说话的人；外貌取这一章的形象时期（去掉手里拿的东西）
-        who = list(dict.fromkeys([*(first.entity_ids_json or [] if first else []),
-                                  *[a.entity_id for a in voiced if a.entity_id]]))
+        rv = review_of(shot) if identity == "frame" else None
+        # 这一镜里的人：首帧登记的实体（导演审过就用审片的）＋ 说话的人；外貌取这一章的形象时期（去掉手里拿的东西）
+        seen = (rv or {}).get("cast") or (first.entity_ids_json or [] if first else [])
+        who = list(dict.fromkeys([*seen, *[a.entity_id for a in voiced if a.entity_id]]))
         looks = {eid: appearance(db, eid, chapter_order, profile_id) for eid in who}
         # 说话的人用人物段里的编号指代，不再把外貌抄一遍
         cast = [eid for eid in who if looks.get(eid)]
@@ -387,11 +395,23 @@ def generate(db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = 
         scene = scenes.get(shot.scene_id or "")
         prompt = shot_prompt(first, motion, sfx, speakers, shot.description or "",
                              scene=scene_header(db, scene, chapter) if scene else "",
-                             characters=[looks[eid] for eid in cast], style=style_line(plan))
+                             characters=[looks[eid] for eid in cast], style=style_line(plan),
+                             lead=(rv or {}).get("motion") or "")
 
+        if identity == "frame":
+            # 钉关键帧出片：运镜限幅（去掉环绕、旋转，写明人始终在画面里），否则不是拍空就是定格
+            from app.pipelines.keyframe import tame_camera
+            prompt = tame_camera(prompt, shot.shot_size)
         payload: dict[str, Any] = {"prompt": prompt, "width": width, "height": height, "fps": 24,
                                    "quality": quality, "params": {"seed": seed} if seed is not None else {}}
         sheet_url = None
+        if identity == "frame":
+            # 关键帧方案：首帧上挂的是按定妆照画进场景的关键帧，钉在第 0 帧 —— 人像、服装、场景都由它定，模型只管动
+            kf = assets.get(first.asset_id or "") if first is not None else None
+            if kf is None or not kf.url:
+                skipped.append({"shot": shot.order_no, "why": "还没有关键帧（首帧）；先出关键帧再出视频"})
+                continue
+            payload["first_frame"] = {"url": kf.url}
         if identity == "sheet" and cast:
             sheet_url, sheet_desc = reference_sheet(db, cast, chapter_order, profile_id)
             if sheet_url:
@@ -406,7 +426,8 @@ def generate(db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = 
         else:
             payload["duration_ms"] = max(MIN_MS, min(MAX_SILENT_MS, _beat_ms(shot, motion)))
             payload["audio"] = {"mode": "generate"}
-            if quality == "final" and not sheet_url:
+            if quality == "final" and not sheet_url and identity != "frame":
+                # 钉了关键帧就不续跑旧预览：那份潜变量不是从这张关键帧出来的
                 tok = _latest_preview_token(db, shot.id)
                 if tok:
                     payload = {"quality": "final", "resume_token": tok}

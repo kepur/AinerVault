@@ -57,6 +57,13 @@ function main() {
       ctx, { timeout: 4000 }));
     return;
   }
+  if (input.mode === "state") {
+    sandbox.__state = JSON.stringify({ doc: input.doc, time: input.time, camera: input.camera });
+    process.stdout.write(vm.runInContext(
+      "(function(){ var q = JSON.parse(__state); return JSON.stringify(SceneRuntime.stateAt(q.doc, q.time, q.camera)); })()",
+      ctx, { timeout: 10000 }));
+    return;
+  }
 
   sandbox.__cfg = JSON.stringify({ seed: input.seed ?? 1, overrides: input.overrides ?? undefined });
   vm.runInContext(

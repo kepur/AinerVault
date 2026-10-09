@@ -1,0 +1,105 @@
+{
+  "batch": "Batch 2",
+  "timestamp": "2026-10-09T10:18:17.604466",
+  "total_duration_seconds": 3.84,
+  "pytest_suite": {
+    "success": true,
+    "passed_count": 180,
+    "failed_count": 0,
+    "files": [
+      "tests/test_planA_contracts_batch1.py",
+      "tests/test_canvas_api.py",
+      "tests/test_stage_p0.py",
+      "tests/test_char_sheet.py",
+      "tests/test_blocking_api.py",
+      "tests/test_cinematic_director.py",
+      "tests/test_screenplay.py"
+    ],
+    "duration_seconds": 3.83
+  },
+  "e2e_interactive_suite": {
+    "status": "PASSED_WITH_DEFECTS",
+    "steps": {
+      "step1_create_canvas": {
+        "status": "PASS",
+        "canvas_id": "brd_01M4F0N86DRMD3VZ728PKDV3CN",
+        "title": "E2E自由创作板_滑雪特写",
+        "initial_node_count": 1,
+        "initial_nodes": [
+          {
+            "id": "story:ch_01M1METGFD9RXHWWV8FR65Z57K",
+            "title": "故事梗概",
+            "text": "少年热血 第一章 欺负\n辍学少年Tyler和Brad Miller在走廊拦截并殴打学生Thomas Ashford，抢走其零花钱。\n辍学少年Tyler和Brad Miller在走廊拦截并殴打学生Tho"
+          }
+        ],
+        "has_unwanted_story_card": true,
+        "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/02_blank_canvas_created.png"
+      },
+      "step2_edit_node": {
+        "status": "PASS",
+        "node_id": "n_mv081pmpdltl3",
+        "typed_content": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+        "dom_rendered_content": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+        "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/04_node_edited.png"
+      },
+      "step3_save_canvas": {
+        "status": "PASS",
+        "topbar_save_badge": {
+          "text": "已保存",
+          "is_saved": true
+        },
+        "backend_version": 2,
+        "backend_nodes_count": 2,
+        "backend_saved_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+        "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/05_canvas_saved.png"
+      },
+      "step4_reopen_canvas": {
+        "status": "PASS",
+        "reopened_node_count": 2,
+        "preserved_edited_node": {
+          "id": "n_mv081pmpdltl3",
+          "title": "文本",
+          "plain_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写",
+          "card_text": "滑雪少女自由创作镜头：高山雪道急速俯冲，定格漫天飞雪特写"
+        },
+        "has_unwanted_story_card": true,
+        "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/06_canvas_reopened.png"
+      }
+    },
+    "defects_observed": [
+      {
+        "id": "BUG-05",
+        "severity": "HIGH",
+        "title": "新建空白画布自动注入故事梗概卡片",
+        "reproduction_milestone": "STEP 1 (新建空白画布)",
+        "details": "用户在空白画布弹窗中输入「E2E自由创作板_滑雪特写」并创建，生成的画布初始即包含故事梗概卡片，违背自由空白画布预期",
+        "screenshot": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/studio/test_runs/screenshots/02_blank_canvas_created.png"
+      }
+    ]
+  },
+  "cinematic_quality_assessment": {
+    "BLK-05_3d_blocking": {
+      "status": "BLOCKED",
+      "reason": "3D 白模姿态控制与站位推演未完成与 LTX 2.5 条件流打通"
+    },
+    "TIM-03_tail_frame_continuity": {
+      "status": "FAILED",
+      "reason": "缺少分镜尾帧作为次镜图生视频锚点接力机制，单次生成长镜头画面断层"
+    },
+    "CAM-04_cinematography_scale": {
+      "status": "FAILED",
+      "reason": "长镜头未按特写、全景、跟镜拆分，缺乏镜头节奏控制"
+    },
+    "BUG-04_mlx_audio_sync": {
+      "status": "BLOCKED",
+      "reason": "本地 MLX LTX 2.5 音频管道未完成，视频无匹配声音"
+    }
+  },
+  "cr_status": {
+    "CR-09": {
+      "title": "canonical-pack 与 stage/cards 物理事实一致性校验",
+      "status": "DEFECT_CONFIRMED",
+      "description": "非角色实体被误赋人身物理属性，且 visual_prompt 参数不一致导致体型推断冲突"
+    }
+  }
+}

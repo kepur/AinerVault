@@ -1,38 +1,44 @@
 import type { ReactNode } from "react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { readCtx, writeCtx } from "./ctx";
 import type { Board, CastMember, PlanSummary } from "./types";
 import Canvas from "./components/Canvas";
 import Inspector from "./components/Inspector";
 // 3D 导演台带着整个 three.js（约 1MB），点开时才加载
 const Stage = lazy(() => import("./components/Stage"));
 import CastPanel from "./components/CastPanel";
+import { directorPending } from "./shotStatus";
 
 interface NovelRow { id: string; title: string }
 interface ChapterRow { id: string; order_no: number; title: string }
 
-const q = new URLSearchParams(location.search);
-
-/** 地址栏记住当前选择：刷新、分享链接都回到同一份分镜。 */
-function remember(key: string, value: string) {
-  const u = new URL(location.href);
-  u.searchParams.set(key, value);
-  history.replaceState(null, "", u);
+/**
+ * 地址栏记住当前选择（ctx.ts 的约定，各视图共用）：刷新、分享链接、顶部 Nav 切视图都回到同一份分镜、同一镜。
+ * 换书 / 换章 / 换计划时级联清掉下级参数。
+ */
+function remember(key: "novel" | "chapter" | "plan" | "shot", value: string | null) {
+  writeCtx({ [key]: value });
 }
 
 export default function App({ nav }: { nav?: ReactNode }) {
+  // 每次挂载现读地址栏：Nav 用 pushState 切回来时模块不会重新执行，模块级缓存的参数是旧的
+  const [init] = useState(readCtx);
+  const deep = useRef({ shot: init.shot, stage: new URLSearchParams(location.search).get("stage") });
   const [novels, setNovels] = useState<NovelRow[]>([]);
-  const [novelId, setNovelId] = useState(q.get("novel") ?? "");
+  const [novelId, setNovelId] = useState(init.novel ?? "");
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
-  const [chapterId, setChapterId] = useState(q.get("chapter") ?? "");
+  const [chapterId, setChapterId] = useState(init.chapter ?? "");
   const [plans, setPlans] = useState<PlanSummary[]>([]);
-  const [planId, setPlanId] = useState(q.get("plan") ?? "");
+  const [planId, setPlanId] = useState(init.plan ?? "");
   const [board, setBoard] = useState<Board | null>(null);
   const [cast, setCast] = useState<CastMember[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [stageShot, setStageShot] = useState<string | null>(null);
   const [tab, setTab] = useState<"canvas" | "assets">("canvas");
   const [focusScene, setFocusScene] = useState<string | null>(null);
+  /** 深链带来的镜头：载入后视口飞到它（只用一次） */
+  const [focusShot, setFocusShot] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -71,13 +77,14 @@ export default function App({ nav }: { nav?: ReactNode }) {
     if (!planId) return;
     api.board(planId).then(b => {
       setBoard(b);
-      // 深链：?shot= 选中镜头，?stage= 直接打开这一镜的 3D 导演台（只在首次载入时生效）
-      const want = q.get("stage") ?? q.get("shot");
+      // 深链：?shot= 选中镜头并飞过去，?stage= 直接打开这一镜的 3D 导演台（只在首次载入时生效）
+      const d = deep.current;
+      const want = d.stage ?? d.shot;
       if (want && b.shots.some(s => s.id === want)) {
         setSelected(want);
-        if (q.get("stage")) setStageShot(want);
-        q.delete("stage");
-        q.delete("shot");
+        setFocusShot(want);
+        if (d.stage) setStageShot(want);
+        deep.current = { shot: null, stage: null };
       }
     }).catch(e => setError(String(e)));
   }, [planId]);
@@ -91,9 +98,12 @@ export default function App({ nav }: { nav?: ReactNode }) {
     api.cast(planId).then(d => setCast(d.cast)).catch(() => setCast([]));
   }, [planId, reload]);
 
-  // 出图是异步的：有镜头在生成时每 6 秒刷新一次，结果挂回来就能在卡片上看到
+  // 选中的镜头写回地址栏：切到创作画布 / 后台时落在这一镜
+  useEffect(() => { if (selected) remember("shot", selected); }, [selected]);
+
+  // 出片是异步的：有镜头在生成（含导演出片）时每 6 秒刷新一次，结果挂回来就能在卡片上看到
   const busy = useMemo(() => board?.shots.some(s =>
-    s.first?.status === "generating" || s.last?.status === "generating") ?? false, [board]);
+    s.first?.status === "generating" || s.last?.status === "generating" || directorPending(s) || !!s.canvas_run) ?? false, [board]);
   useEffect(() => {
     if (!busy) return;
     const t = setInterval(reload, 6000);
@@ -102,9 +112,9 @@ export default function App({ nav }: { nav?: ReactNode }) {
 
   const shot = board?.shots.find(s => s.id === selected) ?? null;
   const ready = board ? {
-    first: board.shots.filter(s => s.first?.url).length,
     video: board.shots.filter(s => s.video_url).length,
-    regional: board.shots.filter(s => s.regional).length,
+    director: board.shots.filter(s => s.director?.done).length,
+    pending: board.shots.filter(directorPending).length,
   } : null;
 
   return (
@@ -128,7 +138,8 @@ export default function App({ nav }: { nav?: ReactNode }) {
         <div className="spacer" />
         {ready && board && (
           <div className="stat">
-            首帧 <b>{ready.first}</b>/{board.shots.length} · 视频 <b>{ready.video}</b> · 分区 <b>{ready.regional}</b>
+            视频 <b>{ready.video}</b>/{board.shots.length} · 3D 导演 <b>{ready.director}</b>
+            {ready.pending > 0 && <> · 出片中 <b>{ready.pending}</b></>}
             {busy && " · 生成中…"}
           </div>
         )}
@@ -157,7 +168,7 @@ export default function App({ nav }: { nav?: ReactNode }) {
         <section className="center">
           {error && <div className="err" style={{ padding: 12 }}>{error}</div>}
           {board
-            ? <Canvas board={board} selected={selected} onSelect={setSelected} focusScene={focusScene} />
+            ? <Canvas board={board} selected={selected} onSelect={setSelected} focusScene={focusScene} focusShot={focusShot} />
             : <div className="empty-state">载入分镜…</div>}
         </section>
 
@@ -171,7 +182,6 @@ export default function App({ nav }: { nav?: ReactNode }) {
       {stageShot && board && (
         <Suspense fallback={<div className="stage-wrap"><div className="empty-state">载入 3D 导演台…</div></div>}>
         <Stage
-          planId={board.plan.id}
           shot={board.shots.find(s => s.id === stageShot)!}
           cast={cast}
           onClose={() => setStageShot(null)}

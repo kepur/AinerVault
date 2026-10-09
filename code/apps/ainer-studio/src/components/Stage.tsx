@@ -24,7 +24,6 @@ import { CameraView, FreeView, leads, SideView, TopView, type Handle } from "../
  */
 
 interface Props {
-  planId: string;
   shot: ShotCard;
   cast: CastMember[];
   onClose: () => void;
@@ -103,7 +102,7 @@ function EaseCurve({ easing, t }: { easing: Easing; t: number }) {
   );
 }
 
-export default function Stage({ planId, shot, cast, onClose, onChanged }: Props) {
+export default function Stage({ shot, cast, onClose, onChanged }: Props) {
   const [stage, setStage] = useState<Stage3D | null>(null);
   const [regional, setRegional] = useState(true);
   const [plate, setPlate] = useState<string | undefined>();
@@ -330,14 +329,11 @@ export default function Stage({ planId, shot, cast, onClose, onChanged }: Props)
     const r = await api.saveStage(shot.id, payload());
     setSource(r.source);
   });
-  const saveAndRender = () => act(regional ? "保存并重出首帧" : "保存并重出尾帧", async () => {
+  // 首尾帧已作废：保存后直接走导演出片（站位和机位写进给 LLM 的导演要求，照着搭景）
+  const saveAndRender = () => act("保存并出视频", async () => {
     await api.saveStage(shot.id, payload());
-    if (regional) {
-      setSource("stage");
-      await api.firstFrame(planId, shot.id);
-    } else {
-      await api.lastFrame(planId, shot.id);
-    }
+    if (regional) setSource("stage");
+    await api.directorShot(shot.id);
   });
   const reset = () => act("恢复自动", async () => {
     await api.resetBlocking(shot.id);
@@ -604,7 +600,7 @@ export default function Stage({ planId, shot, cast, onClose, onChanged }: Props)
           </div>
           <div className="actions">
             <button className="primary" disabled={!!busy} onClick={saveAndRender}>
-              {busy.startsWith("保存并") ? "提交中…" : regional ? "保存并重出首帧" : "保存并重出尾帧"}
+              {busy.startsWith("保存并") ? "提交中…" : "保存并出视频"}
             </button>
             <button disabled={!!busy} onClick={save}>保存</button>
             <button disabled={!!busy || (source !== "stage" && !shot.camera?.rig)} onClick={reset}>恢复自动</button>

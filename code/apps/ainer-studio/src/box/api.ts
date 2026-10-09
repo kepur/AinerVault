@@ -21,6 +21,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export interface ProjectRow {
   id: string; title: string; template: string | null; thumb_url: string | null; updated_at: string | null;
   ok: boolean | null; objects: number | null; cameras: number; duration: number | null;
+  /** 按分镜筛选时：这个白模属于哪一镜 */
+  shot_id?: string | null; shot_order?: number | null;
 }
 export interface Project extends ProjectRow {
   files: Record<string, string>;
@@ -46,7 +48,8 @@ export interface Catalog {
 export interface Sketch { tool: string; color: string; points: [number, number][] }
 
 export const box = {
-  projects: () => call<ProjectRow[]>("GET", "/projects"),
+  /** planId：只列这份分镜的白模（每项带 shot_id / shot_order） */
+  projects: (planId?: string | null) => call<ProjectRow[]>("GET", `/projects${planId ? `?plan_id=${encodeURIComponent(planId)}` : ""}`),
   create: (title: string, template: string) => call<Project>("POST", "/projects", { title, template }),
   get: (id: string) => call<Project>("GET", `/projects/${id}`),
   patch: (id: string, body: { title?: string; seed?: number }) => call<Project>("PATCH", `/projects/${id}`, body),

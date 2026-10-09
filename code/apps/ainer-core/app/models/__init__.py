@@ -27,6 +27,7 @@ from app.models.director import DirectorJob, DirectorOutput, DirectorScene
 from app.models.preset import Preset, PresetMark
 from app.models.primer import PrimerKind, WorldPrimer
 from app.models.scene3d import SceneMessage, SceneProject
+from app.models.studio_board import StudioBoard, StudioNodeRun, StudioRun
 from app.models.performance import (
     Facing, ShotPerformance, SpeechRole, StagePosition,
 )
@@ -59,7 +60,7 @@ from app.models.world import (
 __all__ = [
     "Base", "StdMixin", "TimestampMixin", "utcnow",
     "DirectorJob", "DirectorOutput", "DirectorScene",
-    "Preset", "PresetMark", "SceneMessage", "SceneProject",
+    "Preset", "PresetMark", "SceneMessage", "SceneProject", "StudioBoard", "StudioNodeRun", "StudioRun",
     "EntityAppellation", "Register", "REGISTER_BRIEF",
     "MemeEntry", "MemeRendering", "MemeRegister",
     "AssetEpoch", "EpochBinding", "EpochKind",

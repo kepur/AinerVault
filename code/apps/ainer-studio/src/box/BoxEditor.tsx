@@ -20,7 +20,7 @@ import { RenderPanel } from "./RenderPanel";
 
 type Mode = "edit" | "preview";
 
-export default function BoxEditor({ id, onBack }: { id: string; onBack: () => void }) {
+export default function BoxEditor({ id, onBack, backLabel }: { id: string; onBack: () => void; backLabel?: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [overrides, setOv] = useState<Overrides>({});
   const undo = useRef<{ o: Overrides; note: string }[]>([]);
@@ -215,7 +215,7 @@ export default function BoxEditor({ id, onBack }: { id: string; onBack: () => vo
   return (
     <div className="box-editor">
       <header className="box-top">
-        <button className="ghost" onClick={onBack} title="回到项目列表">←</button>
+        <button className="ghost" onClick={onBack} title={backLabel ? `回${backLabel}` : "回到项目列表"}>←{backLabel ? ` ${backLabel}` : ""}</button>
         {editingTitle
           ? <input className="title-input" autoFocus defaultValue={project.title}
               onBlur={e => { setEditingTitle(false); if (e.target.value.trim() && e.target.value !== project.title) box.patch(id, { title: e.target.value }).then(setProject); }}

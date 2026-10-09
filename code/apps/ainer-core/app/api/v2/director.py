@@ -163,6 +163,24 @@ def generate_scene(body: GenerateIn, db: Session = Depends(get_db)) -> dict[str,
 class ShotRenderIn(BaseModel):
     seed: int | None = None
     control_type: str = Field("union", pattern="^(union|pose|depth)$")
+    scene_id: str | None = None          # 按这一镜已有的导演场景重出（3D-BOX 里调过的），不重新搭景
+    frames_only: bool = False            # 只出分镜图（预演 → 场景底图 → 身份首帧，写回分镜首帧），不出视频
+    #: 默认最快档：768×448（LTX 2.5 的 480p 档，Q8 流式权重）；hd = 1024×576
+    profile: str | None = Field("fast", pattern="^(fast|hd)$")
+    #: 默认带声音：台词按角色音色配好了就用台词轨驱动口型，否则现场生成；none = 只要画面
+    audio: str = Field("auto", pattern="^(auto|generate|none)$")
+
+
+@router.get("/shots/{shot_id}/run")
+def shot_run(shot_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """这一镜最近一次导演出片的进度（画布轮询用）：step = previs / identity / final，done = 已挂回这一镜。"""
+    from app.director import from_shot
+    from app.models import Shot
+
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise HTTPException(404, "镜头不存在")
+    return {"shot_id": shot_id, "run": from_shot.run_status(db, shot)}
 
 
 @router.post("/shots/{shot_id}:render")
@@ -175,12 +193,44 @@ def render_shot(shot_id: str, body: ShotRenderIn, db: Session = Depends(get_db))
 
     _started()
     try:
-        out = from_shot.render_shot(db, shot_id, seed=body.seed, control_type=body.control_type)
+        out = from_shot.render_shot(db, shot_id, seed=body.seed, control_type=body.control_type,
+                                    scene_id=body.scene_id, frames_only=body.frames_only,
+                                    profile=body.profile, audio=body.audio)
         db.commit()
         return out
+    except store.SceneStoreError as exc:          # 场景不存在、3D-BOX 脚本有错
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404 if "不存在" in str(exc) else 422, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise _fail(exc) from exc
+
+
+class PlanSceneIn(BaseModel):
+    instruction: str | None = Field(None, max_length=2000)
+    model: str | None = None
+
+
+@router.post("/shots/{shot_id}:plan-scene")
+def plan_shot_scene(shot_id: str, body: PlanSceneIn | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """为镜头重新生成 3D 白模场景（LLM 规划），同步回 3D-BOX 项目。"""
+    from app.director import from_shot
+
+    _started()
+    try:
+        b = body or PlanSceneIn()
+        out = from_shot.plan_shot_scene(db, shot_id, instruction=b.instruction, model=b.model)
+        db.commit()
+        return out
+    except store.SceneStoreError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404 if "不存在" in str(exc) else 422, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise _fail(exc) from exc
@@ -303,6 +353,16 @@ def job_file(jid: str, path: str) -> FileResponse:
 @router.post("/jobs/{jid}:cancel")
 def cancel_job(jid: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return jobs.job_out(jobs.cancel(db, _job(db, jid)), db)
+
+
+@router.post("/jobs/{jid}:continue")
+def continue_job(jid: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """已成功的任务重跑串联的下一步（例：预演渲好了、身份首帧失败或被重启打断 → 从身份首帧接着跑）。"""
+    _started()
+    try:
+        return jobs.job_out(jobs.continue_chain(db, _job(db, jid)), db)
+    except jobs.JobError as exc:
+        raise _fail(exc) from exc
 
 
 # ── UE（V1 预埋）───────────────────────────────────────────

@@ -116,19 +116,26 @@ def submit_final(db: Session, parent: DirectorJob, body: dict[str, Any]) -> Dire
     if ctl is None or not ctl.url:
         raise JobError(f"控制素材里没有 {source} 通道：重新渲一遍并勾上它")
     first = _control_output(db, parent, "first_frame")
+    styled = body.get("first_frame_url")          # 已经画成成片风格的首帧（分区身份），钉在片头
     scene = db.get(DirectorScene, parent.scene_id) if parent.scene_id else None
     protocol = (scene.protocol_json if scene else None) or {}
     refs = [u for u in (body.get("reference_images") or []) if isinstance(u, str) and u]
     inp = {
         "renderer": name, "control_type": ctype, "control_source": source, "control_video": ctl.url,
         "control_videos": videos, **({"chain": body["chain"]} if body.get("chain") else {}),
-        "first_frame": first.url if first else None, "user_prompt": (body.get("prompt") or "").strip(),
+        "first_frame": styled or (first.url if first else None), "first_frame_styled": bool(styled),
+        "user_prompt": (body.get("prompt") or "").strip(),
         "negative_prompt": body.get("negative_prompt") or "", "seed": body.get("seed"), "denoise": body.get("denoise"),
-        "strength": body.get("strength"), "pin_first": bool(body.get("pin_first", bool(refs))), "reference_images": refs,
+        "strength": body.get("strength"), "pin_first": bool(body.get("pin_first", bool(refs or styled))),
+        "reference_images": refs,
         "style": body.get("style"), "style_prompt": body.get("style_prompt") or "",
         "resolution": body.get("resolution") or cfg.get("resolution") or [768, 448],
-        "duration_sec": (parent.input_json or {}).get("duration") or (protocol.get("meta") or {}).get("duration_sec") or 6,
+        # 配音驱动时跟台词轨走（预演最长 8 秒，台词长了会被截）；否则跟预演
+        "duration_sec": body.get("duration_sec") or (parent.input_json or {}).get("duration")
+        or (protocol.get("meta") or {}).get("duration_sec") or 6,
         "fps": (parent.input_json or {}).get("fps") or 24, "use_llm_prompt": bool(body.get("use_llm_prompt", True)),
+        # 声音：generate / none / drive（台词轨驱动口型，见 renderers/base.RenderRequest）
+        "audio_mode": body.get("audio_mode") or "generate", "audio_track": body.get("audio_track"),
     }
     job = DirectorJob(id=new_id("djob"), scene_id=parent.scene_id, parent_id=parent.id, job_type="final_render",
                       backend=name, status="queued", attempts=0, input_json=inp)
@@ -176,11 +183,41 @@ def cancel(db: Session, job: DirectorJob) -> DirectorJob:
     return job
 
 
+_CHAIN_PREFIX = "chain:"
+
+
+def continue_chain(db: Session, job: DirectorJob) -> DirectorJob:
+    """已经成功的任务重跑「下一步」（身份首帧失败修好后、或服务重启把串联打断后）。和别的任务同一条队列排队。"""
+    if job.status != "succeeded":
+        raise JobError("只有已成功的任务能接着跑下一步")
+    if not (job.input_json or {}).get("chain"):
+        raise JobError("这个任务没有串联的下一步")
+    _chain_note(db, job, step="queued", status="queued")
+    enqueue(_CHAIN_PREFIX + job.id)
+    return job
+
+
+def _run_chain(job_id: str) -> None:
+    with SessionLocal() as db:
+        job = db.get(DirectorJob, job_id)
+        if job is None or job.status != "succeeded":
+            return
+        try:
+            _chain(db, job)
+        except Exception as exc:          # noqa: BLE001
+            log.exception("director 串联下一步失败：%s", job_id)
+            db.rollback()
+            _chain_note(db, job, step="chain", status="failed", error=str(exc)[:500])
+
+
 def _work() -> None:
     while True:
         job_id = _Q.get()
         try:
-            _run(job_id)
+            if job_id.startswith(_CHAIN_PREFIX):
+                _run_chain(job_id[len(_CHAIN_PREFIX):])
+            else:
+                _run(job_id)
         except Exception:          # noqa: BLE001 —— 一个任务炸了不能拖垮队列
             log.exception("director 任务异常：%s", job_id)
 
@@ -286,13 +323,40 @@ def _has_audio(path: Path) -> bool:
         return False
 
 
+def _chain_note(db: Session, job: DirectorJob, **note: Any) -> None:
+    """串联下一步的结果记在上一步任务的进度里（任务本身已经成功，不改它的状态）。"""
+    job.progress_json = {**(job.progress_json or {}), "next": note}
+    db.commit()
+
+
 def _chain(db: Session, job: DirectorJob) -> None:
     """任务成功之后的下一步：Blender 渲完 → 按 chain.final 提交成片；成片出完 → 挂到 chain.shot_id 那一镜。"""
     ch = (job.input_json or {}).get("chain") or {}
     if not ch:
         return
-    if job.job_type == "blender_render" and ch.get("final"):
-        submit_final(db, job, {**ch["final"], "chain": {k: v for k, v in ch.items() if k != "final"}})
+    if job.job_type == "blender_render" and (ch.get("final") or ch.get("identity")):
+        final = dict(ch.get("final") or {})
+        if ch.get("identity"):
+            # 分区身份首帧：预演首帧打底，每个人只在自己的区域里画自己的脸。
+            # 失败就停在这一步，不退回「不钉首帧照常出片」：那样出来的是大头卡通、不是角色库里的人
+            # （用户实看到过），比没有新片子更糟。修好原因后用 continue_chain 从这里接着跑
+            from app.director import identity_frame
+            _chain_note(db, job, step="identity", status="running")
+            try:
+                styled = identity_frame.render(db, job, ch["identity"])
+            except Exception as exc:          # noqa: BLE001
+                log.exception("身份首帧失败，不出成片：%s", job.id)
+                db.rollback()
+                _chain_note(db, job, step="identity", status="failed", error=f"身份首帧失败：{exc}"[:500])
+                return
+            if styled:
+                final.update(first_frame_url=styled, pin_first=True)
+            _chain_note(db, job, step="identity", status="succeeded", first_frame_url=styled)
+        if not ch.get("final"):
+            return                        # 只出分镜图：预演 → 场景底图 → 身份首帧，停在这里
+        fj = submit_final(db, job, {**final, "chain": {k: v for k, v in ch.items() if k not in ("final", "identity")}})
+        _chain_note(db, job, step="final", status="submitted", job_id=fj.id,
+                    **({"first_frame_url": final["first_frame_url"]} if final.get("first_frame_url") else {}))
     elif job.job_type == "final_render" and ch.get("shot_id"):
         from app.models import Asset, Shot, SpecStatus
 
@@ -342,10 +406,12 @@ def _run_final(db: Session, job: DirectorJob) -> None:
         renderer=job.backend, prompt=pr["prompt"], negative_prompt=inp.get("negative_prompt") or "",
         control_type=inp["control_type"], control_video=inp["control_video"],
         control_videos=inp.get("control_videos") or {}, first_frame=inp.get("first_frame"),
-        pin_first=bool(inp.get("pin_first")), reference_images=inp.get("reference_images") or [], seed=inp.get("seed"),
+        pin_first=bool(inp.get("pin_first")), first_frame_styled=bool(inp.get("first_frame_styled")),
+        reference_images=inp.get("reference_images") or [], seed=inp.get("seed"),
         fps=int(inp.get("fps") or 24), resolution=tuple(inp.get("resolution") or (768, 448)),
         duration_sec=float(inp.get("duration_sec") or 6), denoise=inp.get("denoise"), strength=inp.get("strength"),
         style=inp.get("style"),
+        audio_mode=inp.get("audio_mode") or "generate", audio_track=inp.get("audio_track"),
     )
     res = renderer.generate(db, req, on_progress=prog, cancelled=lambda: job.id in _CANCEL,
                             **({"first_frame_subject": pr.get("subject", "")} if job.backend == "ltx_097" else {}))
@@ -355,7 +421,8 @@ def _run_final(db: Session, job: DirectorJob) -> None:
         files["final"] = str(_download(res.video_url, out / "final.mp4"))
     if res.first_frame_url:
         files["styled_first_frame"] = str(_download(res.first_frame_url, out / "styled_first_frame.png"))
-    meta: dict[str, Any] = {"renderer": job.backend, "control_type": req.control_type}
+    meta: dict[str, Any] = {"renderer": job.backend, "control_type": (res.meta or {}).get("control_type") or req.control_type,
+                            "audio_mode": req.audio_mode}
     if job.backend == "ltx_25" and files.get("final"):
         # 时间线按素材上的 model / has_audio 决定能不能直接用片子自带的同步音效
         meta.update(model="ltx-2.5-22b-distilled", has_audio=_has_audio(Path(files["final"])))

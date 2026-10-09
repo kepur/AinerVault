@@ -555,6 +555,37 @@ def _dump(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=1)
 
 
+def _shots_per_spec(db: Session, novel_id: str) -> dict[str, int]:
+    """引用计数：一条素材被多少个镜头用到（按镜头去重）。改之前要知道波及面。
+
+    镜头绑定（ShotAssetBinding）里存的是用到的**变体**和**人物**，不直接存素材 id ——
+    按素材 id 取会直接 AttributeError（台账自从有了镜头绑定就整页 500，画面上一直停在「读取…」）。
+    变体 → 素材；人物 → 这个人的人物素材；时期绑定（EpochBinding）本身带素材 id。
+    """
+    from app.models import ShotAssetBinding
+    from app.models.asset_epoch import EpochBinding
+
+    spec_of_variant = dict(db.execute(
+        select(AssetVariant.id, AssetVariant.asset_spec_id)
+        .join(AssetSpec, AssetSpec.id == AssetVariant.asset_spec_id)
+        .where(AssetSpec.novel_id == novel_id)).all())
+    specs_of_entity: dict[str, set[str]] = {}
+    for sid, eid, kind in db.execute(
+            select(AssetSpec.id, AssetSpec.entity_id, AssetSpec.kind)
+            .where(AssetSpec.novel_id == novel_id, AssetSpec.entity_id.is_not(None))).all():
+        if getattr(kind, "value", kind) == "character":
+            specs_of_entity.setdefault(eid, set()).add(sid)
+    shots: dict[str, set[str]] = {}
+    for b in db.execute(select(ShotAssetBinding)).scalars():
+        specs = {spec_of_variant[v] for v in (b.asset_variant_ids or []) if v in spec_of_variant}
+        specs |= specs_of_entity.get(b.entity_id or "", set())
+        for s in specs:
+            shots.setdefault(s, set()).add(b.shot_id)
+    for eb in db.execute(select(EpochBinding).where(EpochBinding.asset_spec_id.is_not(None))).scalars():
+        shots.setdefault(eb.asset_spec_id, set()).add(eb.shot_id)
+    return {s: len(v) for s, v in shots.items()}
+
+
 def prompt_ledger(
     db: Session, transform: WorldTransform, *,
     kind: str | None = None, q: str | None = None,
@@ -570,7 +601,6 @@ def prompt_ledger(
         来源与证据      为什么是这样（原文哪句支持）
         被谁引用        改了会影响什么
     """
-    from app.models import FrameSpec, Shot, ShotAssetBinding, ShotPlan
 
     profile = db.get(WorldProfile, transform.target_profile_id)
     if profile is None:
@@ -587,11 +617,7 @@ def prompt_ledger(
         .order_by(AssetSpec.kind, AssetSpec.display_name)
     ))
 
-    # 引用计数：一条素材被多少个镜头绑定。改之前要知道波及面
-    usage: dict[str, int] = {}
-    for b in db.execute(select(ShotAssetBinding)).scalars():
-        if b.asset_spec_id:
-            usage[b.asset_spec_id] = usage.get(b.asset_spec_id, 0) + 1
+    usage = _shots_per_spec(db, transform.novel_id)
 
     items: list[dict[str, Any]] = []
     for spec, var in rows:

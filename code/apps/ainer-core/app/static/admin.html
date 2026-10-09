@@ -331,6 +331,12 @@ const DIALECT_CN = {
 const GROUPS = [
   {id:"g-home", name:"", pages:[
     {id:"console", ico:"🏠", name:"控制台", sub:"小说 → 章节 → 工作台"},
+    // 另一个后台：画布式的出片工作台。带着当前小说／章节过去，不用再选一遍；五个视图各一个直达入口
+    {id:"studio", ico:"🎬", name:"Studio 分镜画布 ↗", sub:"一章的镜头卡片：首尾帧、视频、3D 导演台", href:"canvas"},
+    {id:"studio-flow", ico:"🧩", name:"Studio 创作画布 ↗", sub:"按场次的节点画布：定妆照＋场景图 → 分镜图 → LTX 出片", href:"flow"},
+    {id:"studio-box", ico:"🧊", name:"Studio 3D-BOX ↗", sub:"本章的 3D 白模（运镜、站位）", href:"box"},
+    {id:"studio-chars", ico:"🧑", name:"Studio 角色库 ↗", sub:"本书角色卡、定妆照、造型室", href:"characters"},
+    {id:"studio-styles", ico:"🎨", name:"Studio 风格广场 ↗", sub:"风格 · 运镜 · 特效 · 题材", href:"styles"},
   ]},
   {id:"g-src", name:"素材", pages:[
     {id:"library",  ico:"📚", name:"书架", sub:"小说与章节"},
@@ -362,7 +368,8 @@ const GROUPS = [
     {id:"settings", ico:"⚙", name:"设置", sub:"端点 · 能力路由 · 质量档位"},
   ]},
 ];
-const PAGES = GROUPS.flatMap(g => g.pages);
+// 跳到别的后台的入口（href）不是本页的页面：不能被 State.page 指到
+const PAGES = GROUPS.flatMap(g => g.pages).filter(p => !p.href);
 
 // 下钻页：有标题、能被 State.page 指到，但**不进侧栏**。
 // 它们是从控制台点进去的，不是并列的目的地 ——
@@ -2302,6 +2309,7 @@ const KIND_CN = {
 
 const Prompts = {
   async render(v) {
+    await App.ensureTransform();              // 记住的映射可能失效（换了小说、从 Studio 跳过来）
     if (!State.transformId) {
       v.innerHTML = `<div class="card"><div class="empty">先在「映射与词表」选一个世界观映射</div></div>`;
       return;
@@ -2310,9 +2318,12 @@ const Prompts = {
     const q = this.q || "";
     const url = `/transforms/${State.transformId}/prompt-ledger`
       + (kind || q ? `?${kind?`kind=${encodeURIComponent(kind)}&`:""}${q?`q=${encodeURIComponent(q)}`:""}` : "");
-    const d = await api("GET", url).catch(()=>null);
+    let d, why = "";
+    try { d = await api("GET", url); } catch (e) { why = e.message || String(e); }
     if (!d) {
-      v.innerHTML = `<div class="card"><div class="empty">读取失败</div></div>`;
+      // 把原因写出来：只写「读取失败」的话，看不出是服务端 500 还是映射没了
+      v.innerHTML = `<div class="card"><div class="empty">读取失败${why ? `：${h(why)}` : ""}
+        <div style="margin-top:10px"><button class="btn sm" onclick="App.refresh()">重试</button></div></div></div>`;
       return;
     }
     v.innerHTML = `
@@ -2867,6 +2878,11 @@ const Epochs = {
             ${anchorOf[i.entity_id]&&anchorOf[i.entity_id].anchor_url
               ?`<img src="${h(anchorOf[i.entity_id].anchor_url)}"
                  style="width:26px;height:26px;object-fit:cover;border-radius:4px">`:""}
+            <span class="grow"></span>
+            <button class="btn sm" onclick="Epochs.refs(this,'${h(i.entity_id)}','${h(i.name)}')"
+              title="定妆照画坏了（多出手、背景不是灰底、抬着手）就重出：本机先出正面全身，再补齐其余角度、拼设定图（约 3–5 分钟，后台跑）">一键重出定妆照</button>
+            <a class="btn sm" href="/studio/?view=characters&novel=${h(State.novelId)}&char=e:${h(i.entity_id)}" target="_blank"
+              title="在 Studio 角色库里看这个角色的定妆照和进度">看定妆照 ↗</a>
           </div>
           ${Object.keys(i.invariant||{}).length?`
             <div class="prop" style="margin-bottom:8px">
@@ -2898,6 +2914,26 @@ const Epochs = {
           pid?"还没划分时期":"还没有世界观映射"}</div></div>`}
       <div class="card"><h2>运行日志</h2><div class="log" id="log"></div></div>`;
     const el = $("#log"); if (el) el.innerHTML = logBuf.join("\n");
+  },
+  /** 一键重出定妆照（后台串：正面全身 → 其余角度 → 设定图），轮询到结束 */
+  async refs(btn, eid, name) {
+    if (!confirm(`重出「${name}」的定妆照？正面全身换成新的一张，其余角度跟着重出（本机约 3–5 分钟）。`)) return;
+    await run(btn, async () => {
+      await api("POST", `/characters/e:${eid}:references`, {});
+      logOk(`${name}：定妆照重出已开始`);
+      const STEP = {front: "正面全身", views: "其余角度", sheet: "拼设定图"};
+      let last = "";
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const c = await api("GET", `/characters/e:${eid}`).catch(() => null);
+        const j = c && c.refs_job;
+        if (!j) continue;
+        if (j.step !== last && j.state === "running") { log(`${name}：${STEP[j.step] || j.step}…`); last = j.step; }
+        if (j.state === "done") { logOk(`${name}：定妆照已重出（画布里重画分镜图就用新的）`); (j.notes||[]).forEach(logWarn); return; }
+        if (j.state === "failed") throw new Error(j.error || "没出成");
+      }
+      logWarn(`${name}：10 分钟还没出完，去 Studio 角色库看进度`);
+    });
   },
   async anchors(btn) {
     await run(btn, async () => {
@@ -3588,6 +3624,10 @@ const Storyboard = {
         <button class="btn sm" onclick="goto('reader')">译本</button>
       </div>
       <div class="row" style="margin-top:12px;gap:8px">
+        <label>画风 <select onchange="Storyboard.style(this.value)" style="width:auto">
+          ${[['photoreal','写实摄影'],['anime','动漫插画'],['cinematic','电影感'],['auto','按提示词']].map(([k,n])=>
+            `<option value="${k}" ${(d.plan.config.style||'photoreal')===k?'selected':''}>${n}</option>`).join('')}
+        </select></label>
         <label>起始镜 <input id="sample-start" type="number" min="1" value="1" style="width:70px"></label>
         <button class="btn" onclick="Storyboard.sample(this)">建立 ≤30 秒试片（不调用模型）</button>
         <button class="btn" onclick="goto('handoff')">下载制作手册 / 字幕</button>
@@ -3616,11 +3656,16 @@ const Storyboard = {
     const longish = (s.duration_ms || 0) > 5000;
     const cam = [s.shot_size, (s.camera || {}).move, (s.camera || {}).angle]
       .filter(Boolean).map(x => String(x).replace(/_/g, " ")).join(" · ");
+    const motionKind = (s.camera||{}).motion_kind ||
+      ((s.camera||{}).frame_mode === 'first_only'
+        ? ((s.camera||{}).held_reason ? 'hold' : 'camera') : 'animate');
+    const motionLabel = {hold:'真正静止', camera:'单帧动态', animate:'主体动作'}[motionKind];
 
     return `<div class="card">
       <div class="row" style="align-items:baseline;gap:8px">
         <b style="font-size:15px">镜 ${s.order_no}</b>
         <span class="tag ${longish ? "t-warn" : "t-ok"}">${secs}s</span>
+        <span class="tag ${motionKind==='hold' ? 't-mute' : 't-ok'}">${motionLabel}</span>
         <span class="mono" style="color:var(--muted);font-size:12px">${h(cam)}</span>
         <span class="grow"></span>
         <span class="sub" style="color:var(--muted)">${h(s.scene || "")}</span>
@@ -3630,19 +3675,22 @@ const Storyboard = {
       ${this.uses(s)}
       <div class="row" style="margin-bottom:10px;gap:8px">
         <button class="btn sm" onclick="copyText(this)" data-copy="${encodeURIComponent(this.copyShot(s))}">复制本镜完整制作单</button>
+        <button class="btn sm" onclick="App.openStudio('canvas', '${s.shot_id}')" title="在 Studio 分镜画布里选中这一镜">分镜画布定位 ↗</button>
+        <button class="btn sm" onclick="App.openStudio('flow', '${s.shot_id}')" title="进这一镜所在场次的创作画布：定妆照＋场景图出分镜图、出片">进创作画布 ↗</button>
         <span class="hint">起幅：${h((s.motion||{}).start || '待填写')} → 落幅：${h((s.motion||{}).end || '待填写')}</span>
       </div>
       <label>制作方式 <select onchange="Storyboard.mode('${s.shot_id}', this.value)">
-        <option value="first_last">首尾帧 · 明确动作变化</option>
-        <option value="first_only" ${(s.camera||{}).frame_mode === 'first_only' ? 'selected' : ''}>单首帧 · 对话 / 连续运镜</option>
+        <option value="animate" ${motionKind==='animate' ? 'selected' : ''}>主体动作 · 首尾帧</option>
+        <option value="camera" ${motionKind==='camera' ? 'selected' : ''}>单帧动态 · 运镜 / 口型</option>
+        <option value="hold" ${motionKind==='hold' ? 'selected' : ''}>真正静止 · 不跑视频模型</option>
       </select></label>
       <div class="hint">主体：${h((s.motion||{}).subject_move || '待填写')} · 运镜：${h((s.motion||{}).camera_move || '待填写')}。
-        轻微动作可只制作首帧并用连续运镜生成视频；动作有明确位移时制作首尾帧。</div>
+        静止镜直接保持首帧；对白口型或连续运镜用单帧动态；主体有明确位移才制作首尾帧。</div>
 
       <div class="row" style="gap:12px;align-items:flex-start;flex-wrap:nowrap;
         overflow-x:auto;padding-bottom:4px">
         ${this.frame(s.first, "首帧", s)}
-        ${(s.camera||{}).frame_mode === 'first_only' ? '' : this.frame(s.last, "尾帧", s)}
+        ${motionKind !== 'animate' ? '' : this.frame(s.last, "尾帧", s)}
         ${s.video_url ? `<div style="flex:1 1 0;min-width:260px">
           <div class="sub" style="color:var(--muted);margin-bottom:4px">成片</div>
           <video controls preload="metadata" src="${s.video_url}"
@@ -3835,14 +3883,17 @@ const Storyboard = {
 
   copyShot(s) {
     const m=s.motion||{}, f=s.first||{}, l=s.last||{};
-    const mode=(s.camera||{}).frame_mode==='first_only';
+    const kind=(s.camera||{}).motion_kind || ((s.camera||{}).frame_mode==='first_only'
+      ? ((s.camera||{}).held_reason?'hold':'camera') : 'animate');
+    const single=kind!=='animate';
+    const label={hold:'真正静止（首帧保持）',camera:'单首帧＋连续运镜/口型',animate:'首尾帧主体动作'}[kind];
     return [`镜 ${s.order_no} · ${s.duration_ms/1000} 秒 · ${s.scene||''}`,
-      `内容：${s.description||''}`, `制作方式：${mode?'单首帧＋连续运镜':'首尾帧'}`,
+      `内容：${s.description||''}`, `制作方式：${label}`,
       '基础素材：', ...(f.references||[]).map(r=>`${r.label||r.tag||r.role}: ${(r.ref||{}).url||'缺图'}`),
       `起幅：${m.start||''}`, `落幅：${m.end||''}`,
       `主体动作：${m.subject_move||''}`, `运镜：${m.camera_move||''}`,
       `首帧提示词：${f.prompt||''}`, `首帧图片：${f.url||'待制作'}`,
-      ...(mode?[]:[`尾帧提示词：${l.prompt||''}`, `尾帧变化：${l.derive_en||''}`, `尾帧图片：${l.url||'待制作'}`]),
+      ...(single?[]:[`尾帧提示词：${l.prompt||''}`, `尾帧变化：${l.derive_en||''}`, `尾帧图片：${l.url||'待制作'}`]),
       `视频提示词：${m.prompt_en||''}`, `配乐：${s.music_note||'待定'}`, '声音：',
       ...[...(s.audio||[]),...(s.scene_audio||[])].map(a=>
         `${a.kind} · ${a.speaker||''} · 音色 ${a.voice_id||'不适用'} · 起点 ${(a.at_ms||0)/1000}s · 时长 ${a.duration_ms?a.duration_ms/1000+'s':'待制作实测'}\n${a.text||''}\n${a.url||'待上传'}`)
@@ -3851,6 +3902,10 @@ const Storyboard = {
   async mode(id, mode) {
     try { await api('PATCH', `/shots/${id}/frame-mode`, {mode}); App.refresh(); }
     catch(e) { alert(e.message); }
+  },
+  async style(style) {
+    await api('PATCH', `/shot-plans/${this.pid}/image-style`, {style});
+    await this.render(document.getElementById('view'));
   },
   async sample(btn) {
     btn.disabled = true;
@@ -4511,6 +4566,15 @@ const CutRoom = {
       window.open(r.url, "_blank");
     }, "导出中（逐镜编码，一章要几分钟）");
   },
+  async genLtx(btn, quality) {
+    await run(btn, async () => {
+      const r = await api("POST", `/shot-plans/${this.pid}/videos:ltx25`, {limit: 4, quality});
+      logOk(`LTX 2.5 ${quality==="preview"?"预览":"出片"}提交 ${r.submitted} 镜，剩余 ${r.remaining} 镜`
+            + "（本机一个一个跑，一镜约 2–4 分钟）");
+      (r.skipped||[]).slice(0,12).forEach(x=>logWarn(`镜 ${x.shot}：${x.why}`));
+      App.refresh();
+    }, "提交 LTX 2.5 镜头中");
+  },
   async genVideos(btn) {
     await run(btn, async () => {
       const r = await api("POST", `/shot-plans/${this.pid}/videos:generate`, {limit:6});
@@ -4528,15 +4592,6 @@ const Tasks = {
       api("GET", "/gen-tasks?size=40"),
     ]);
     v.innerHTML = `
-  async genLtx(btn, quality) {
-    await run(btn, async () => {
-      const r = await api("POST", `/shot-plans/${this.pid}/videos:ltx25`, {limit: 4, quality});
-      logOk(`LTX 2.5 ${quality==="preview"?"预览":"出片"}提交 ${r.submitted} 镜，剩余 ${r.remaining} 镜`
-            + "（本机一个一个跑，一镜约 2–4 分钟）");
-      (r.skipped||[]).slice(0,12).forEach(x=>logWarn(`镜 ${x.shot}：${x.why}`));
-      App.refresh();
-    }, "提交 LTX 2.5 镜头中");
-  },
       <div class="steps">
         ${["queued","submitted","running","succeeded","failed"].map(k=>`
           <div class="step ${k==='failed'&&sum.by_status[k]?'blocked':k==='succeeded'?'done':''}">
@@ -4583,13 +4638,15 @@ const Tasks = {
 // ───────────────────────── App ─────────────────────────
 const App = {
   async boot() {
+    this.fromUrl();
     const shut = new Set(JSON.parse(localStorage.getItem("nav.shut") || "[]"));
     $("#nav").innerHTML = GROUPS.map(g => `
       <div class="navgrp ${shut.has(g.id) ? "shut" : ""}" id="${g.id}">
         <button class="gh" onclick="App.toggleGroup('${g.id}')">
           ${h(g.name)}<span class="caret">▼</span></button>
         <div class="items"><div>${g.pages.map(p => `
-          <button class="item" data-p="${p.id}" onclick="App.go('${p.id}')" title="${h(p.sub)}">
+          <button class="item" data-p="${p.id}" onclick="${p.href ? `App.openStudio('${p.href}')` : `App.go('${p.id}')`}"
+                  title="${h(p.sub)}">
             <span class="ico">${p.ico}</span><span class="lbl">${h(p.name)}</span>
             <span class="navbadge hide" id="badge-${p.id}"></span>
           </button>`).join("")}</div></div>
@@ -4602,6 +4659,32 @@ const App = {
     await this.refresh();
   },
   go(id) { State.page = id; State.save(); this.refresh(); },
+
+  /** 从 Studio 跳过来：/admin?novel=…&chapter=…&page=… 落在同一本书、同一章。
+   *  用完就从地址栏去掉 —— 留着的话每次刷新都会把人拽回这一章，盖掉他后来的选择。 */
+  fromUrl() {
+    const q = new URLSearchParams(location.search);
+    if (![...q.keys()].some(k => ["novel", "chapter", "page"].includes(k))) return;
+    if (q.get("novel") && q.get("novel") !== State.novelId) {
+      State.novelId = q.get("novel");
+      State.transformId = "";                  // 换了小说，映射由 ensureTransform 重新挑
+      State.chapterId = "";                    // 旧章节属于别的小说
+    }
+    if (q.get("chapter")) State.chapterId = q.get("chapter");
+    const page = q.get("page");
+    if (page && ALL_PAGES.some(p => p.id === page)) State.page = page;
+    State.save();
+    history.replaceState(null, "", location.pathname + location.hash);
+  },
+  /** 去另一个后台（Studio 的某个视图），带上当前小说、章节；shot 给了就定位到这一镜 */
+  openStudio(view, shot) {
+    const q = new URLSearchParams();
+    if (view) q.set("view", view);
+    if (State.novelId) q.set("novel", State.novelId);
+    if (State.chapterId) q.set("chapter", State.chapterId);
+    if (shot) q.set("shot", shot);
+    location.href = "/studio/" + (q.toString() ? "?" + q : "");
+  },
 
   toggleGroup(gid) {
     const el = document.getElementById(gid);

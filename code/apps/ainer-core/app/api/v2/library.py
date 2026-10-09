@@ -5,7 +5,9 @@ import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, insert, or_, select
+from sqlalchemy import delete, func, insert, or_, select, text
+
+from app.config import settings
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -751,6 +753,53 @@ def purge_orphans(dry_run: bool = Query(True), purge_media: bool = Query(True),
         select(func.count()).select_from(orphan_tasks.subquery())).scalar() or 0
     assets = db.execute(orphan_assets).scalars().all()
 
+    # **novel_id 为空且没人引用的 asset 也是孤儿。**
+    #
+    # delete_novel 按 `WHERE novel_id = ?` 删，这批永远捞不到 ——
+    # 实测库里积了 64 条（59 图 5 音频，跨越近一个月），全部无人引用。
+    # 它们不占逻辑位置，但对应的文件一直躺在磁盘上。
+    #
+    # 引用点要连 JSON 数组一起查：ref_asset_ids 这类列里放的也是 asset id，
+    # 只查标量外键列会把它们误判成死行。**新增任何引用 asset 的地方，
+    # 这段 SQL 要跟着加**，否则下次清理会删掉还在用的东西。
+    #
+    # 留一小时缓冲：刚生成、引用还没写回去的不碰。
+    # 裸 SQL 不走 ORM 的 schema 绑定，表名必须自己限定，
+    # 否则 search_path 里没有 core 就报 relation does not exist
+    sc = settings.db_schema
+    stale_null = db.execute(text(f"""
+        WITH refs AS (
+            SELECT asset_id AS aid FROM {sc}.frame_specs WHERE asset_id IS NOT NULL
+            UNION ALL SELECT video_asset_id FROM {sc}.shots WHERE video_asset_id IS NOT NULL
+            UNION ALL SELECT asset_id FROM {sc}.audio_specs WHERE asset_id IS NOT NULL
+            UNION ALL SELECT identity_ref_asset_id FROM {sc}.asset_epochs
+                      WHERE identity_ref_asset_id IS NOT NULL
+            UNION ALL SELECT cover_asset_id FROM {sc}.novels WHERE cover_asset_id IS NOT NULL
+            UNION ALL SELECT bg_asset_id FROM {sc}.scenes WHERE bg_asset_id IS NOT NULL
+            UNION ALL SELECT bgm_asset_id FROM {sc}.scenes WHERE bgm_asset_id IS NOT NULL
+            UNION ALL SELECT ambience_asset_id FROM {sc}.scenes WHERE ambience_asset_id IS NOT NULL
+            UNION ALL SELECT voice_asset_id FROM {sc}.voice_castings WHERE voice_asset_id IS NOT NULL
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.asset_epochs
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.asset_variants
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.entity_chapter_states
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.entity_world_visual
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.world_entities
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+            UNION ALL SELECT jsonb_array_elements_text(ref_asset_ids) FROM {sc}.frame_specs
+                      WHERE jsonb_typeof(ref_asset_ids)='array'
+        )
+        SELECT a.id, a.url FROM {sc}.assets a
+        WHERE a.novel_id IS NULL
+          AND a.created_at < now() - interval '1 hour'
+          AND NOT EXISTS (SELECT 1 FROM refs r WHERE r.aid = a.id)
+    """)).all()
+    stale_null_ids = [r[0] for r in stale_null]
+    stale_null_urls = [r[1] for r in stale_null if r[1]]
+
     # 落盘但没有任何 asset 指着的文件。**按 URL 比对而不是按行** ——
     # 内容寻址下同一个文件可能有多条 asset 指着它
     root = media_root()
@@ -761,26 +810,40 @@ def purge_orphans(dry_run: bool = Query(True), purge_media: bool = Query(True),
         if u and "/media/" in u
     }
     doomed = {a.url for a in assets if a.url and "/media/" in a.url}
+    doomed |= {u for u in stale_null_urls if "/media/" in u}
     # 孤儿删掉之后还会被引用的文件，不能碰
+    _dying = [a.id for a in assets] + stale_null_ids
     surviving = {
         u.rsplit("/media/", 1)[-1]
         for (u,) in db.execute(
             select(Asset.url).where(
                 Asset.url.isnot(None),
-                Asset.id.notin_([a.id for a in assets]) if assets else True)
+                Asset.id.notin_(_dying) if _dying else True)
         ).all() if u and "/media/" in u
     }
     unreferenced = sorted(on_disk - referenced)
     freed = sorted(
         {u.rsplit("/media/", 1)[-1] for u in doomed} - surviving)
 
+    # **试运行必须报出真跑会删的那一份，不能只报其中一半。**
+    #
+    # 从前这里报的是 freed（孤儿 asset 带走的文件），而真跑删的是
+    # freed ∪ unreferenced。孤儿 asset 为 0 时，试运行显示「释放 0 个」，
+    # 真跑却删掉 21 个文件 89MB —— 照着试运行的结论做决定的人会中招，
+    # 而这正是试运行存在的唯一理由。
+    to_remove = sorted(set(freed) | set(unreferenced)) if purge_media else []
+
     if dry_run:
         return {
             "dry_run": True,
             "orphan_tasks": task_n, "orphan_assets": len(assets),
+            "stale_unowned_assets": len(stale_null_ids),
             "media_files_on_disk": len(on_disk),
             "unreferenced_files": len(unreferenced),
-            "files_freed_by_purge": len(freed) if purge_media else 0,
+            "files_freed_by_purge": len(to_remove),
+            "bytes_freed_by_purge": sum(
+                (root / n).stat().st_size
+                for n in to_remove if (root / n).is_file()),
             "sample_unreferenced": unreferenced[:5],
         }
 
@@ -788,14 +851,18 @@ def purge_orphans(dry_run: bool = Query(True), purge_media: bool = Query(True),
         GenTask.novel_id.isnot(None), GenTask.novel_id.notin_(alive)))
     db.execute(delete(Asset).where(
         Asset.novel_id.isnot(None), Asset.novel_id.notin_(alive)))
+    if stale_null_ids:
+        db.execute(delete(Asset).where(Asset.id.in_(stale_null_ids)))
     db.flush()
 
     removed = 0
     if purge_media:
-        removed = _purge_media(
-            [f"/media/{n}" for n in set(freed) | set(unreferenced)])
+        # 和上面 to_remove 同一份集合，别再各算各的 —— 两边算法一分岔，
+        # 试运行就又开始骗人了
+        removed = _purge_media([f"/media/{n}" for n in to_remove])
     return {
         "dry_run": False,
         "orphan_tasks": task_n, "orphan_assets": len(assets),
+        "stale_unowned_assets": len(stale_null_ids),
         "media_files_removed": removed,
     }

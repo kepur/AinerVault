@@ -205,6 +205,40 @@ class TestVisibleChange:
     def test_blank_instructions_are_not_counted_as_duplicates(self):
         assert sp.duplicate_changes([(1, ""), (2, None), (3, "  ")]) == []
 
+    def test_camera_motion_accepts_handheld_lips_and_pan(self):
+        assert sp.is_camera_motion("镜头轻微手持，捕捉对白口型")[0]
+        assert sp.is_camera_motion("slow pan right with natural blinking")[0]
+        assert not sp.is_camera_motion("脚步声由远及近")[0]
+
+
+class TestHeldShotDuration:
+    """静态镜的时长上限。
+
+    STATIC_MAX_MS 的 8 秒是给**对话镜**的 —— 画面定着但声音在走，
+    注意力在台词上。空镜定场、情绪停顿没有这层声音，
+    8 秒纯定格观众会以为播放器卡了。
+    """
+
+    def test_held_shot_is_capped_shorter_than_dialogue(self):
+        assert sp.HELD_MAX_MS < sp.STATIC_MAX_MS
+        capped, why = sp.clamp_shot_ms(8000, action=False, held=True)
+        assert capped == sp.HELD_MAX_MS
+        assert "定格" in why
+
+    def test_held_overrides_the_action_keyword_guess(self):
+        """分镜明示「这一镜不动」时，关键词猜测不该翻盘。
+
+        词表是兜底，模型的标注是判断 —— 一句「他拔刀出鞘的余音未散」
+        命中「拔刀」会被猜成动作镜，可画面上什么都没动。
+        """
+        capped, _ = sp.clamp_shot_ms(8000, action=True, held=True)
+        assert capped == sp.HELD_MAX_MS
+
+    def test_normal_shots_keep_their_old_caps(self):
+        """held 是新增的一档，不能顺手改掉原来两档的行为。"""
+        assert sp.clamp_shot_ms(9000, action=False)[0] == sp.STATIC_MAX_MS
+        assert sp.clamp_shot_ms(9000, action=True)[0] == sp.ACTION_MAX_MS
+
 
 class TestShotPlanPrompt:
     def test_prompt_demands_a_physical_action(self):
@@ -219,6 +253,34 @@ class TestShotPlanPrompt:
         assert "必须是一个看得见的物理动作" in src
         assert "脚步声由远及近" in src      # 反例要写进去
         assert "每一镜的变化说明必须互不相同" in src
+
+    def test_prompt_offers_hold_instead_of_faking_motion(self):
+        """「写不出动作就标 hold」必须和「动作必须看得见」同时存在。
+
+        只留后者，模型就被逼着给对话镜、情绪停顿编一个假动作 ——
+        「他收起笑容」五秒内看不出来，首尾帧生成出来几乎一样，
+        视频模型插不出东西，白烧八十秒，成片里还是一张静止画面。
+        只留前者，模型会拿 hold 当偷懒出口，成片变幻灯片。
+        两句话是一对，缺一不可，所以一起守。
+        """
+        import inspect
+
+        from app.pipelines import shot_plan
+
+        src = inspect.getsource(shot_plan)
+        assert '"animate"' in src and '"camera"' in src and '"hold"' in src
+        assert "主体与摄影机都不动才标 hold" in src
+        assert "四成以内" in src              # 比例上限，防幻灯片
+        assert "拿不准时优先 animate" in src    # 边界情况往安全一侧倒
+
+    def test_shot_schema_requires_motion(self):
+        """motion 必须是 required —— 选填的话模型会整批不填，
+        全部退回 animate，等于这个改动没发生过。"""
+        from app.pipelines.shot_plan import SHOT_SCHEMA
+
+        item = SHOT_SCHEMA["properties"]["shots"]["items"]
+        assert "motion" in item["required"]
+        assert item["properties"]["motion"]["enum"] == ["animate", "camera", "hold"]
 
 
 class TestScriptAsides:
@@ -433,4 +495,6 @@ class TestDurationTiers:
 
         src = inspect.getsource(shot_plan.build_shot_plan)
         assert "sp.is_action_beat(" in src
-        assert "sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS" in src
+        assert "sp.HELD_MAX_MS if held" in src
+        assert "sp.ACTION_MAX_MS if action and not camera_only" in src
+        assert "sp.STATIC_MAX_MS" in src

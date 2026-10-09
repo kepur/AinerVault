@@ -786,7 +786,7 @@ def bind_and_compose(
             auto = regional_plan(db, shot, frame, refs,
                                  profile_id=profile.id, chapter_order=chapter_order)
             kept = params.get("regional") or {}
-            if kept.get("source") != "stage":
+            if kept.get("source") not in ("stage", "director"):     # director = 从 3D 预演身份首帧写回的站位
                 merged["regional"] = auto
             elif auto:
                 # 3D 台手摆过的站位不能被自动摆位盖掉 —— 但只保留几何。

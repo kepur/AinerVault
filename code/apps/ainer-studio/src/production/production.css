@@ -1,0 +1,92 @@
+/* 角色定妆照 16 格（三分区）。颜色沿用 styles.css 的变量，不另起一套主题。 */
+
+.cs { display: flex; flex-direction: column; gap: 14px; }
+
+.cs-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cs-head > b { font-size: 15px; }
+.cs-ready {
+  padding: 2px 9px; border-radius: 999px; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background: rgba(43, 219, 137, .15); color: #2bdb89;
+}
+.cs-ready.is-partial { background: rgba(255, 176, 32, .15); color: #ffb020; }
+/* 近似映射要显眼：用户得知道这几格是将就的 */
+.cs-approx-note { font-size: 12px; color: #ffb020; }
+.cs-epoch, .cs-lock { font-size: 11.5px; color: var(--muted, #8e8e99); }
+.cs-prepare {
+  margin-left: auto; padding: 5px 12px; border-radius: 8px;
+  border: 1px solid var(--line, #2c2c34); background: var(--surface, #16161a);
+  color: var(--ink, #e8e8ef); font-size: 12.5px; cursor: pointer;
+}
+.cs-prepare:hover { border-color: #2bdb89; }
+
+/* 三分区并排，格子给上限尺寸：不限的话一个分区就能把整幅撑满（实测 1340px 下单格涨到 400px） */
+.cs-sections { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.cs-sec {
+  flex: 0 1 auto; min-width: 0;
+  padding: 12px; border-radius: 12px;
+  background: var(--surface-1, #121216); border: 1px solid var(--line, #2c2c34);
+}
+.cs-sec h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--muted, #8e8e99); }
+
+.cs-grid { display: grid; gap: 8px; }
+/* 全身要看比例，给高一点；头部和表情是头肩，方形就够 */
+.cs-sec--3 .cs-grid { grid-template-columns: repeat(3, minmax(0, 132px)); }
+.cs-sec--4 .cs-grid { grid-template-columns: repeat(2, minmax(0, 118px)); }
+.cs-sec--9 .cs-grid { grid-template-columns: repeat(3, minmax(0, 104px)); }
+.cs-sec--4 .cs-cell-box, .cs-sec--9 .cs-cell-box { aspect-ratio: 1 / 1; }
+
+.cs-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cs-cell-box {
+  position: relative; aspect-ratio: 3 / 4; border-radius: 8px; overflow: hidden;
+  background: var(--surface-2, #1b1b21); border: 1px solid var(--line, #2c2c34);
+}
+.cs-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cs-cell-label { font-size: 11px; color: var(--muted, #8e8e99); text-align: center; }
+
+/* 缺格：虚线框 + 键名。不放占位图，省得看着像已经有了 */
+.cs-cell.is-missing .cs-cell-box {
+  border-style: dashed; display: grid; place-items: center; background: transparent;
+}
+.cs-missing-key { font-size: 9.5px; color: #55555f; word-break: break-all; padding: 0 4px; text-align: center; }
+
+.cs-cell.is-approx .cs-cell-box { border-color: rgba(255, 176, 32, .55); }
+
+.cs-badge {
+  position: absolute; left: 4px; top: 4px; max-width: calc(100% - 8px);
+  padding: 1px 5px; border-radius: 4px;
+  font-size: 9.5px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: rgba(8, 8, 12, .78); color: #c9c9d4;
+}
+.cs-badge.is-approx { background: rgba(255, 176, 32, .9); color: #1a1205; font-weight: 600; }
+
+.cs-use {
+  position: absolute; right: 4px; bottom: 4px;
+  padding: 2px 8px; border-radius: 5px; border: 0;
+  background: rgba(8, 8, 12, .8); color: #e8e8ef;
+  font-size: 10.5px; cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+.cs-cell-box:hover .cs-use { opacity: 1; }
+.cs-use:hover { background: #2bdb89; color: #06140d; }
+
+.cs-sheet { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.cs-sheet-tag { padding: 2px 8px; border-radius: 999px; background: var(--surface-2, #1b1b21); color: var(--muted, #8e8e99); }
+.cs-sheet-why { color: #ffb020; }
+
+.cs-issues { margin: 0; padding-left: 18px; font-size: 11.5px; color: #ffb020; line-height: 1.7; }
+.cs-issues code { color: var(--muted, #8e8e99); }
+
+.cs-loading, .cs-err { padding: 20px; text-align: center; font-size: 13px; color: var(--muted, #8e8e99); }
+.cs-err { color: #ff6b6b; }
+
+/* 16 格页签激活：弹窗转单栏并加宽，三分区才排得开（16 格并排需要约 1100px） */
+.char-detail.is-sheet16 { width: min(1340px, 100%); grid-template-columns: 1fr; }
+.char-detail.is-sheet16 .stage {
+  display: block; place-items: unset; overflow: auto; padding: 14px; background: transparent;
+}
+/* 这一屏不受 .stage img 的 contain 规则影响：单格自己控制比例 */
+.char-detail.is-sheet16 .stage img { max-width: none; max-height: none; }
+
+.cs-job { padding: 7px 11px; border-radius: 8px; font-size: 12px; background: var(--surface-2, #1b1b21); color: var(--muted, #8e8e99); }
+.cs-job.is-err { color: #ff6b6b; }
+.cs-prepare:disabled { opacity: .6; cursor: default; }

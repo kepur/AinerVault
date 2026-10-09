@@ -156,6 +156,26 @@ def demonym(profile: WorldProfile) -> str:
     return _DEMONYM.get(str((profile.axes_json or {}).get("region") or "").upper(), "")
 
 
+#: 工作台认的画风锚点。传别的值它会当成 auto
+_RENDER_STYLES = frozenset({"photoreal", "anime", "cinematic", "auto"})
+
+
+def render_style(profile: WorldProfile | None) -> str:
+    """出图时传给工作台的画风锚点。
+
+    **档案里本来就写着这一版是写实还是动漫**（visual_json.rendition.code），
+    只是从前没接到出图参数上 —— 于是一批素材出成了动漫风。
+
+    工作台自述点得很明白：「提示词里出现 character sheet 这类词容易滑向
+    动漫，选 photoreal」。而人物参考图的提示词里全是
+    character model reference、photographic reference sheet 这类词 ——
+    不显式锚住画风，它就顺着那些词滑走。
+    """
+    code = str(((getattr(profile, "visual_json", None) or {})
+                .get("rendition") or {}).get("code") or "").strip().lower()
+    return code if code in _RENDER_STYLES else "photoreal"
+
+
 def cast_look(profile: WorldProfile) -> str:
     """出图时补在人物前面的**选角相貌**，一句话。
 
@@ -210,6 +230,23 @@ def era_phrase(profile: WorldProfile) -> str:
         return era
     article = "an" if who[0] in "AEIOU" else "a"
     return f"set in {article} {who} city{f', {era}' if era else ''}"
+
+
+def anchor_size() -> tuple[int, int]:
+    """身份锚的尺寸。头肩像，方图。"""
+    from app.config import get_settings
+    n = 512 if int(get_settings().render_short_side) <= 480 else 1024
+    return (n, n)
+
+
+def view_size() -> tuple[int, int]:
+    """人物视角图的尺寸。全身站姿，2:3 竖版。
+
+    **边长取 32 的倍数** —— 本机工作台会把宽高对齐到 32，
+    报一个它要对齐的尺寸，首帧与尾帧未必落在同一个结果上。
+    """
+    from app.config import get_settings
+    return (512, 768) if int(get_settings().render_short_side) <= 480 else (1536, 768)
 
 
 #: 锚图的构图。**固定不变** —— 锚之间的差别只该来自这个人本身，
@@ -362,7 +399,7 @@ def compose_character_reference_prompt(
 
 
 def preferred_reference_view(facing: str | None, shot_size: str | None = None) -> str:
-    """(朝向, 景别) → 参考集里的具体一张。右侧面允许镜像使用左侧面。
+    """(朝向, 景别) → 参考集里的具体一张。左右视角分别选择，不隐式镜像。
 
     **景别先判。** 特写画的是脸，给它一张全身参考等于没给 ——
     脸只占参考图的百分之几，模型只能自己把五官放大重画，
@@ -374,7 +411,7 @@ def preferred_reference_view(facing: str | None, shot_size: str | None = None) -
         "to_camera": "front",
         "three_quarter": "three_quarter_left",
         "profile_left": "profile_left",
-        "profile_right": "profile_left",
+        "profile_right": "profile_right",
         "away": "three_quarter_left",
     }.get(str(facing or ""), "three_quarter_left")
 
@@ -382,6 +419,13 @@ def preferred_reference_view(facing: str | None, shot_size: str | None = None) -
 def character_reference_asset_id(
     epoch: AssetEpoch, facing: str | None, shot_size: str | None = None,
 ) -> str | None:
+    from app.production.canonical import canonical_views, preferred_canonical_view
+
+    panels = canonical_views(epoch.reference_set_json or {})
+    panel = panels.get(preferred_canonical_view(facing, shot_size))
+    if panel and not (facing == "profile_right" and panel.get("side", "unspecified") != "right"
+                      and not str(shot_size or "").lower() in {"ecu", "cu", "mcu", "close", "closeup"}):
+        return str(panel["asset_id"])
     views = dict((epoch.reference_set_json or {}).get("views") or {})
     preferred = preferred_reference_view(facing, shot_size)
     # 回落顺序也随景别走：近景没有头肩像时宁可用正面，
@@ -391,6 +435,9 @@ def character_reference_asset_id(
             else ("three_quarter_left", "front", "bust", "profile_left"))
     # Contact sheets are for human review; model inputs use one viewpoint.
     order = (preferred, *tail)
+    if facing == "profile_right":
+        # Do not present a left profile (or mirror it) as a right profile.
+        order = ("profile_right", "front", "bust") if preferred != "bust" else ("bust", "front")
     for key in order:
         item = views.get(key)
         if isinstance(item, dict) and item.get("asset_id"):
@@ -607,8 +654,11 @@ def generate_anchors(
                 "prompt": prompt,
                 "negative_prompt": ANCHOR_NEGATIVE,
                 # 方图：锚是头肩像，宽画幅只会填进背景
-                "width": 1024, "height": 1024,
-                "params": {"seed": None},
+                "width": anchor_size()[0], "height": anchor_size()[1],
+                # **画风要锚住。** 工作台自述：「提示词里出现 character
+                # sheet 这类词容易滑向动漫」—— 而这段提示词里全是
+                # character model reference、photographic reference sheet
+                "params": {"seed": None, "style": render_style(profile)},
             },
             purpose="identity_ref",
             ref_kind="identity_anchor", ref_id=ent.id,
@@ -885,8 +935,11 @@ def generate_character_references(
                 "prompt": prompt,
                 "negative_prompt": CHARACTER_REFERENCE_NEGATIVE,
                 "strength": 0.68 if view == "front" else 0.42,
-                "width": 1024, "height": 1536,
-                "params": {"seed": None},
+                "width": view_size()[0], "height": view_size()[1],
+                # ref_megapixels 直接决定速度（0.4 约 25s，1.0 约 48s）。
+                # 输出就是 0.4MP，参考图没必要比它还大
+                "params": {"seed": None, "style": render_style(profile),
+                           "ref_megapixels": 0.4},
             },
             purpose="character_reference",
             ref_kind=REFERENCE_REF_KINDS[view], ref_id=epoch.id,

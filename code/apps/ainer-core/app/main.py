@@ -38,6 +38,9 @@ async def lifespan(app: FastAPI):
     if settings.poll_loop_sec > 0:
         poller = asyncio.create_task(run_forever(settings.poll_loop_sec))
         log.info("后台轮询已启动，每 %ds 一轮", settings.poll_loop_sec)
+    from app.pipelines import canvas_run
+    if (n := canvas_run.resume()):
+        log.info("画布一键出片：%d 个工作流没跑完，接着跑", n)
     try:
         yield
     finally:
@@ -68,17 +71,25 @@ async def capability_error_handler(_: Request, exc: CapabilityError) -> JSONResp
 
 
 from app.api.v2 import (  # noqa: E402
-    asset_pack, audio, blocking, console, culture, gen_tasks, handoff, library,
-    characters, director, presets, prose, scene3d, script, settings_api, shots, studio, translation, worldview,
+    asset_pack, audio, blocking, canvas, canvas_gen, canvas_run, console, quick_film, culture, gen_tasks, handoff, library,
+    characters, char_sheet, director, presets, production, prose, scene3d, script, settings_api, shared_stages, shots, stage, studio, translation, worldview,
 )
 
 app.include_router(console.router)
 app.include_router(blocking.router)
 app.include_router(studio.router)
+app.include_router(canvas.router)
+app.include_router(canvas_gen.router)
+app.include_router(canvas_run.router)
+app.include_router(quick_film.router)
+app.include_router(stage.router)
 app.include_router(scene3d.router)
 app.include_router(director.router)
 app.include_router(presets.router)
 app.include_router(characters.router)
+app.include_router(production.router)
+app.include_router(shared_stages.router)
+app.include_router(char_sheet.router)
 app.include_router(library.router)
 app.include_router(script.router)
 app.include_router(worldview.router)

@@ -215,7 +215,7 @@ class TestBustReference:
         from app.pipelines.identity import preferred_reference_view
 
         assert preferred_reference_view("to_camera", size) == "front"
-        assert preferred_reference_view("profile_right", size) == "profile_left"
+        assert preferred_reference_view("profile_right", size) == "profile_right"
 
     def test_bust_falls_back_to_front_not_to_a_profile(self):
         """没有头肩像时宁可用正面 —— 侧身全身那张连脸都不完整。"""

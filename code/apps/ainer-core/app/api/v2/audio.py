@@ -415,6 +415,7 @@ class VideoGenIn(BaseModel):
     limit: int = 6
     regenerate: bool = False
     max_ms: int | None = None
+    shot_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("/shot-plans/{plan_id}/videos:generate")
@@ -424,8 +425,11 @@ def generate_shot_videos(plan_id: str, body: VideoGenIn,
     from app.pipelines import cut
 
     try:
-        return cut.generate_videos(db, _plan(db, plan_id), limit=body.limit,
-                                   regenerate=body.regenerate, max_ms=body.max_ms)
+        return cut.generate_videos(
+            db, _plan(db, plan_id), limit=body.limit,
+            regenerate=body.regenerate, max_ms=body.max_ms,
+            shot_ids=body.shot_ids or None,
+        )
     except CapabilityError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

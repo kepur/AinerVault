@@ -98,11 +98,33 @@ select {
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .frames figure { margin: 0; }
 .frames img { width: 100%; aspect-ratio: 5 / 3; object-fit: cover; border-radius: 6px; background: #000; }
+.frames .frame-video { width: 100%; aspect-ratio: 5 / 3; object-fit: cover; border-radius: 6px; background: #000; display: block; }
 .frames figcaption { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .inspector video { width: 100%; border-radius: 6px; margin-top: 8px; background: #000; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.5; }
 .err { color: var(--bad); margin-top: 8px; font-size: 12px; }
+a.btn {
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 12px; text-decoration: none;
+}
+a.btn:hover { border-color: var(--accent); }
+/* 导演出片进度：预演 → 身份首帧 → 成片 */
+.director-run { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.director-run.failed, .director-run.cancelled { border-color: var(--bad); }
+.director-run .steps { display: flex; gap: 4px; margin-bottom: 6px; }
+.director-run .steps span {
+  flex: 1; text-align: center; padding: 3px 0; border-radius: 6px; background: var(--panel-2); color: var(--muted);
+}
+.director-run .steps span.ok { background: rgba(62,207,142,.18); color: var(--ok); }
+.director-run .steps span.now { background: rgba(124,108,255,.22); color: var(--accent-2); }
+.director-run .steps span.bad { background: rgba(255,107,107,.18); color: var(--bad); }
+.director-run .line { color: var(--muted); }
+.director-run .line a { color: var(--accent-2); }
+.director-run button { margin-top: 8px; }
+details.more { margin-top: 10px; color: var(--muted); font-size: 12px; }
+details.more summary { cursor: pointer; }
+details.more .actions { margin-top: 6px; }
 
 /* 3D 导演台 */
 .stage-wrap {
@@ -242,6 +264,11 @@ select {
 .nav { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
 .nav button { background: transparent; border: none; padding: 4px 12px; border-radius: 7px; color: var(--muted); }
 .nav button.on { background: var(--panel-2); color: var(--text); }
+.nav .nav-admin {
+  display: inline-flex; align-items: center; padding: 4px 12px; margin-left: 2px; border-radius: 7px;
+  color: var(--muted); text-decoration: none; border-left: 1px solid var(--line);
+}
+.nav .nav-admin:hover { color: var(--text); background: var(--panel-2); }
 .shell { display: grid; grid-template-rows: 48px 1fr; height: 100%; }
 .shell > .box-editor { grid-row: 1 / 3; }
 button.ghost { background: transparent; border-color: transparent; }
@@ -625,3 +652,25 @@ button.big { padding: 9px 22px; font-size: 14px; }
 .sr-extra span { color: var(--muted); font-size: 12px; }
 .sr-extra textarea { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; resize: vertical; }
 .lib-page .err, .styling-room .err, .add-box .err { color: var(--bad); font-size: 12px; white-space: pre-wrap; }
+
+/* 3D-BOX 列表：按本章筛选时卡片上的「镜 N ↩」（回到这一镜的创作画布） */
+.proj { position: relative; }
+.proj .back-shot { position: absolute; left: 8px; top: 8px; padding: 2px 8px; font-size: 11px; border-radius: 999px; background: rgba(10, 10, 14, .72); }
+
+/* A/B/C/D 两级导航：阶段一行，阶段内的面板一行（planA.md §2） */
+.nav-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.nav-wrap .nav { margin: 0; }
+.nav-stage { display: flex; align-items: center; gap: 2px; }
+.nav-stage .nav-spacer { flex: 1; }
+.stage-btn {
+  padding: 5px 11px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.stage-btn:hover { color: var(--ink); background: #1b1b21; }
+.stage-btn.on { color: var(--ink); background: #22222a; border-color: #34343f; font-weight: 600; }
+.stage-btn.is-admin { text-decoration: none; }
+/* 面板行比阶段行弱一级，看得出从属关系 */
+.nav-panel { display: flex; gap: 2px; padding-left: 6px; }
+.nav-panel button { font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.nav-panel button:hover { color: var(--ink); }
+.nav-panel button.on { color: var(--ink); background: #1b1b21; }

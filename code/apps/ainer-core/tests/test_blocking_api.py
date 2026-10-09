@@ -25,11 +25,11 @@ def test_medium_shots_may_put_the_feet_below_the_frame():
 
 
 def test_hand_placed_blocking_survives_rebinding():
-    """3D 台手摆过的站位（source=stage）不能被重新绑定时的自动摆位盖掉。"""
+    """3D 台手摆过的站位（source=stage）和 3D 预演写回的站位（source=director）不能被重新绑定时的自动摆位盖掉。"""
     from app.pipelines import frame_compose
 
     src = inspect.getsource(frame_compose.bind_and_compose)
-    assert '.get("source") != "stage"' in src
+    assert '.get("source") not in ("stage", "director")' in src
 
 
 def test_moving_people_invalidates_the_old_frame():

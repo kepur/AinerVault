@@ -37,7 +37,30 @@ export interface ShotCard {
   last: FrameState | null;
   video_url: string | null;
   dialogue_lines: number;
+  /** 这一镜所在的创作画布（场次板） */
+  canvas_id?: string | null;
+  /** 创作画布一键出片 / 出分镜图正跑到这一镜 */
+  canvas_run?: { run_id: string; step: string; status: string } | null;
   regional: { source: string | null; people: number; preview_url: string | null } | null;
+  /** 导演出片：最近一次提交的（run）和已挂回这一镜的（done）；没走过导演出片为空 */
+  director?: {
+    run: { blender_job_id: string; scene_id: string; box_project_id?: string | null; started_at: string } | null;
+    done: { blender_job_id: string; final_job_id: string; scene_id: string } | null;
+  } | null;
+}
+
+/** 一镜导演出片的进度：预演（Blender）→ 身份首帧（角色库的脸）→ 成片（LTX 2.5）→ 挂回 */
+export interface DirectorRun {
+  blender_job_id: string;
+  final_job_id: string | null;
+  step: "previs" | "identity" | "queued" | "final" | "chain";
+  status: string;
+  error: string | null;
+  done: boolean;
+  percent: number | null;
+  first_frame_url: string | null;
+  started_at: string | null;
+  can_continue: boolean;
 }
 
 export interface SceneInfo {

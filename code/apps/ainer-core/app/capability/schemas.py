@@ -374,6 +374,10 @@ class I2VInput(BaseModel):
     first_frame: AssetRefIn
     last_frame: AssetRefIn | None = None
     prompt: str | None = None
+    #: 这一镜要不要动：auto / animate / hold / kenburns。
+    #: 静态镜走 hold|kenburns，下游用定格或缓缓推近出片（约 2s），
+    #: 不经过视频模型（约 80s）。不填按 auto —— 下游量首尾帧差异自己判。
+    motion: str | None = None
     duration_ms: int = 4000
     fps: int = 24
     width: int | None = None

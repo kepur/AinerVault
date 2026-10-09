@@ -26,6 +26,15 @@ class LTX25Adapter(BaseRendererAdapter):
     def validate(self, req: RenderRequest) -> RenderRequest:
         req = super().validate(req)
         cfg = self.cfg()
+        if req.audio_mode == "drive":
+            # a2v：台词轨驱动口型。网关的 a2v 管线不吃 IC-LoRA，白模的站位和机位靠首帧（身份首帧就是按预演画的）带进来
+            if not req.audio_track:
+                raise RendererError("配音驱动（audio_mode=drive）要给台词轨 audio_track")
+            if not req.first_frame:
+                raise RendererError("配音驱动没有白模控制，必须钉一张首帧（身份首帧）")
+            if req.duration_sec > 20:
+                raise RendererError("LTX 2.5 单段最长 20 秒")
+            return req
         if req.control_type == "union":
             vids = {k: v for k, v in req.control_videos.items() if k in UNION_TYPES and v}
             if not vids:
@@ -42,6 +51,17 @@ class LTX25Adapter(BaseRendererAdapter):
 
     def build_payload(self, req: RenderRequest) -> dict[str, Any]:
         cfg = self.cfg()
+        if req.audio_mode == "drive":
+            w, h = req.resolution
+            payload = {
+                "prompt": req.prompt, "duration_ms": int(round(req.duration_sec * 1000)),
+                "fps": req.fps or int(cfg.get("fps", 24)), "width": w, "height": h, "style": req.style or None,
+                "first_frame": {"url": req.first_frame},
+                "audio": {"mode": "drive", "track": {"url": req.audio_track}},
+                "quality": "final",                # a2v 没有分阶段续跑
+                "params": {"seed": req.seed},
+            }
+            return {k: v for k, v in payload.items() if v is not None}
         uc = cfg.get("union_control") or {}
         if req.control_type == "union":
             ctl: dict[str, Any] = {
@@ -62,7 +82,7 @@ class LTX25Adapter(BaseRendererAdapter):
             "duration_ms": int(round(req.duration_sec * 1000)), "fps": req.fps or int(cfg.get("fps", 24)),
             "width": w, "height": h, "control": ctl, "style": req.style or None,
             # LTX-2.5 自带同步音轨（脚步、击打、环境声）；关掉就只出画面
-            "audio": {"mode": "generate" if cfg.get("audio", True) else "none"},
+            "audio": {"mode": "generate" if cfg.get("audio", True) and req.audio_mode != "none" else "none"},
             "params": {"seed": req.seed},
         }
         # **Blender 的首帧是灰的，默认不当锚点。** 2B 上实测过：钉灰首帧整段发灰。
@@ -85,4 +105,5 @@ class LTX25Adapter(BaseRendererAdapter):
                      timeout_s=5400, label="LTX 2.5 视频", on_progress=on_progress, cancelled=cancelled)
         out = t.result_json or {}
         return RenderResult(renderer=self.name, video_url=(out.get("video") or {}).get("url"), task_ids=[t.id],
-                            meta={"control_type": req.control_type})
+                            meta={"control_type": "a2v" if req.audio_mode == "drive" else req.control_type,
+                                  "audio_mode": req.audio_mode})

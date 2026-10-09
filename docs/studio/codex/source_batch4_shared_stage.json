@@ -1,0 +1,50 @@
+{
+  "created_at": "2026-10-09T08:24:36.917452+00:00",
+  "scope": "Integrated shared stage increment, including post-Gemini narrative compiler integration",
+  "validation": {
+    "frontend_build": "passed",
+    "runtime_build": "passed",
+    "syntax_and_route_import": "passed",
+    "functional_tests": "not_run",
+    "media_QA": "not_run"
+  },
+  "deployment": {
+    "pid": 52157,
+    "previous_pid": 47604,
+    "log": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/var/planA/core-shared-stage-2026-10-09.log",
+    "active_tasks_before_reload": {
+      "StudioRun": 0,
+      "StudioNodeRun": 0,
+      "GenTask": 0,
+      "DirectorJob": 0
+    },
+    "stage_routes": 11,
+    "functional_tests": "not_run",
+    "GPU_generation": "not_submitted"
+  },
+  "files": {
+    "code/apps/ainer-core/app/main.py": "23fac7ba13f0edb300d1a53696409e9fa394b04885af129a6b3e18ea15d9aa18",
+    "code/apps/ainer-core/app/api/v2/shared_stages.py": "4edc32ce06cd2012910a40e7caf2cd276ba7f47557e25b3830196ba5e0e8555f",
+    "code/apps/ainer-core/app/production/stage_schema.py": "4f3d09fa846cf89192e615926d94213db2b6b80201f015258e2771053cf69afc",
+    "code/apps/ainer-core/app/production/stage_state.py": "4926e8c53046e02909d73d048fb1331fb97a2ef4ce061073a7635adbea81c65e",
+    "code/apps/ainer-core/app/production/stages.py": "561ae216ccba1f2eea24bce89bcd7b5cd822549aa48c0f350a99e44830db863e",
+    "code/apps/ainer-core/app/stage/compile.py": "edb1af249e1d1fb5bad0f39d03f04d79f0a0a41b02e87c78da053c84b6715a51",
+    "code/apps/ainer-core/app/director/convert.py": "4171351956dfb79cf54f1dc2c862b5fa208ec30646c8ce9dc613952852129877",
+    "code/apps/ainer-core/app/scene3d/runner.mjs": "1881c7d2304e07a2bf68f2f8342983559e1529442b3eb555f07d6431b04573ea",
+    "code/apps/ainer-core/app/scene3d/vendor/scene-runtime.iife.js": "83e8f96a336589d463ead26339a19783bded4936a4cea5869592d285d05f0fd5",
+    "code/apps/ainer-studio/src/scene/state.ts": "5a4a0d33ca4e83f63a90e1dc2769cc74fe0825464cd921ae27a1a3d4d2e7268c",
+    "code/apps/ainer-studio/src/scene/bake.ts": "6150c6bccb2c53a9e5d384a94de75f330dcacb886fd1f046468ea17a30b228ad",
+    "code/apps/ainer-studio/src/scene/iife.ts": "f84f690fdbab56fd40e0065dd2ebd59ae2c17f71db620baffd127d61c0d6198a",
+    "code/apps/ainer-studio/src/production/stages.ts": "11ec26c496d190029ad08691bda3154b90a17866372b51de19c86962a0ead6f0",
+    "code/apps/ainer-studio/src/production/SharedStageWorkspace.tsx": "1b7758e2e9cc585f44efc1fffecdf8890fc7be2cc6f1cacc9286e457ae657344",
+    "code/apps/ainer-studio/src/production/shared-stage.css": "0bf1062e726a3e7906aa976f999dd7316d24dca5a6db1fe36051792301937802",
+    "code/apps/ainer-studio/src/canvas/chrome/TopBar.tsx": "0aafa54267fa8421ec1e385416e0d7a03b50a23d4407d93d2baf8b90e332ffdd",
+    "code/apps/ainer-studio/dist/index.html": "74fb8a2aa1bce386b743e74f35b3e67a124de8433af05fa58a55920e820330fd",
+    "planA.md": "9c80278dd3afcd66e5307d05b7198c9ede9a471daf683ac653c8d20fa7d649f6",
+    "docs/studio/planA_agents.md": "b673221fb6bc22b02b88f13eb946a591f47d0090bd346aa9bc552d966c694168",
+    "docs/studio/planA_contracts.md": "1d128b0702bbb327f02b8fe60e6cf237546953aa8649c1bad5de59b28b94711d",
+    "docs/studio/planA_execution_order.md": "84fe159b9b7b9c7d97122450e4c4e8b61e1511691f67dd0170beb412836e4feb",
+    "docs/studio/creative_canvas.md": "78039b1959e8b91f2d9a5b547a9504937150e80508b28e19570ef9d175e92383",
+    "docs/studio/codex/handoff_batch4_shared_stage.md": "0146b0e504d6aef66d99ebc74790b4de785a46e22691762d6a240768e864eac7"
+  }
+}

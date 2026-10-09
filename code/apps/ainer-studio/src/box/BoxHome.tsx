@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { box, type ProjectRow, type Template } from "./api";
 import { media } from "../api";
+import { navigate, readCtx } from "../ctx";
 
 export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
   const [rows, setRows] = useState<ProjectRow[]>([]);
@@ -9,9 +10,13 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [title, setTitle] = useState("");
+  // 带着分镜计划进来（从分镜画布 / 创作画布切过来）默认只看本章的白模，可以切到全部
+  const [plan] = useState(() => readCtx().plan);
+  const [onlyPlan, setOnlyPlan] = useState(!!plan);
 
-  const load = () => box.projects().then(setRows).catch(e => setErr(String(e)));
-  useEffect(() => { load(); box.templates().then(setTpls).catch(e => setErr(String(e))); }, []);
+  const load = () => box.projects(onlyPlan ? plan : null).then(setRows).catch(e => setErr(String(e)));
+  useEffect(() => { load(); }, [onlyPlan]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { box.templates().then(setTpls).catch(e => setErr(String(e))); }, []);
 
   async function create(t: Template) {
     setBusy(t.key);
@@ -44,7 +49,15 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
       </section>
       {err && <div className="err">{err}</div>}
-      <h3>我的预演 <small>{rows.length}</small></h3>
+      <h3>
+        {onlyPlan ? "本章白模" : "我的预演"} <small>{rows.length}</small>
+        {plan && (
+          <span className="seg" style={{ marginLeft: 12 }}>
+            <button className={onlyPlan ? "on" : ""} onClick={() => setOnlyPlan(true)} title="只列当前分镜计划里导演出片搭的白模">本章</button>
+            <button className={!onlyPlan ? "on" : ""} onClick={() => setOnlyPlan(false)}>全部</button>
+          </span>
+        )}
+      </h3>
       <div className="proj-grid">
         {rows.map(r => (
           <div key={r.id} className="proj" onClick={() => onOpen(r.id)}>
@@ -54,6 +67,12 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
               <small>{r.ok === false ? "✗ 脚本有错 · " : ""}{r.objects ?? 0} 物体 · {r.cameras} 机位 · {r.duration ?? "?"}s</small>
               <small>{r.updated_at?.replace("T", " ").slice(0, 16)}</small>
             </div>
+            {r.shot_id && (
+              <button className="ghost back-shot" title="回到这一镜所在的创作画布"
+                onClick={e => { e.stopPropagation(); navigate("flow", { shot: r.shot_id! }); }}>
+                镜 {r.shot_order} ↩
+              </button>
+            )}
             <button className="ghost del" title="删除" onClick={async e => {
               e.stopPropagation();
               if (!window.confirm(`删除「${r.title}」？`)) return;
@@ -62,7 +81,7 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
             }}>×</button>
           </div>
         ))}
-        {!rows.length && <div className="note">还没有预演。点上面的模板或官方示例开始。</div>}
+        {!rows.length && <div className="note">{onlyPlan ? "这一章还没有导演出片搭的白模；点「全部」看所有预演。" : "还没有预演。点上面的模板或官方示例开始。"}</div>}
       </div>
     </div>
   );

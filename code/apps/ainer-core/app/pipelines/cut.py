@@ -980,7 +980,7 @@ def to_edl_json(tl: dict[str, Any]) -> str:
 
 def generate_videos(
     db: Session, plan: ShotPlan, *, limit: int = 0, regenerate: bool = False,
-    max_ms: int | None = None,
+    max_ms: int | None = None, shot_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """给镜头出 i2v。首尾帧都在的才发 —— 只有首帧的插不出运动。
 
@@ -1003,6 +1003,9 @@ def generate_videos(
     shots = list(db.execute(
         select(Shot).where(Shot.shot_plan_id == plan.id).order_by(Shot.order_no)
     ).scalars())
+    if shot_ids:
+        wanted = set(shot_ids)
+        shots = [s for s in shots if s.id in wanted]
     sids = [s.id for s in shots]
     frames: dict[str, dict[str, FrameSpec]] = {}
     for f in db.execute(select(FrameSpec).where(FrameSpec.shot_id.in_(sids))).scalars():

@@ -1,0 +1,505 @@
+/*
+ * 创作画布：节点、端口、连线。token 在 tokens.css；一律 .cv- 前缀（全局 styles.css 的
+ * .badge/.dot/.thumb/.meta 会串样式）。xyflow 12.12 对自定义类型的节点不加任何底色边框
+ * （只给 default/input/output/group），下面的复位只是防它以后加。
+ */
+
+.cv-root .react-flow__node-text,
+.cv-root .react-flow__node-image,
+.cv-root .react-flow__node-video,
+.cv-root .react-flow__node-box3d {
+  padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
+}
+
+/* ───────────────────────── 外壳 ───────────────────────── */
+
+.cv-node {
+  position: relative;
+  color: var(--cv-text);
+  --cv-kc: var(--cv-kind-text);
+}
+.cv-node--image { --cv-kc: var(--cv-kind-image); }
+.cv-node--video { --cv-kc: var(--cv-kind-video); }
+.cv-node--box3d { --cv-kc: var(--cv-kind-box3d); }
+
+/*
+ * 卡片上方一行小标题（纳逗式）：绝对定位，不算进节点尺寸，连线和整理都按卡片算。
+ * 严格和卡片一样宽：伸出去会压到右边邻居的标题（定妆照一排挨得近），放不下的省略号，悬停看全名。
+ */
+.cv-node__head {
+  position: absolute;
+  left: 2px; top: -22px;
+  width: calc(100% - 2px);
+  height: 18px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; line-height: 18px;
+  color: var(--cv-muted);
+  white-space: nowrap;
+  transition: color var(--cv-fast) var(--cv-ease);
+}
+.cv-node.is-selected .cv-node__head { color: var(--cv-text); }
+.cv-node__glyph {
+  flex: none;
+  min-width: 16px; height: 14px; padding: 0 3px;
+  border-radius: 4px;
+  font-size: 9px; font-weight: 600; line-height: 14px; text-align: center;
+  color: var(--cv-kc);
+  background: color-mix(in srgb, var(--cv-kc) 15%, transparent);
+}
+.cv-node__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cv-node__pin { flex: none; width: 10px; height: 10px; color: var(--cv-warn); }
+.cv-node__badges { flex: none; margin-left: auto; display: flex; gap: 4px; }
+
+.cv-card {
+  position: relative;
+  background: var(--cv-surface-2);
+  border: 1px solid var(--cv-line);
+  border-radius: var(--cv-radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), var(--cv-shadow-1);
+  overflow: hidden;
+  transition: border-color var(--cv-fast) var(--cv-ease), box-shadow var(--cv-mid) var(--cv-ease);
+}
+.cv-root .react-flow__node:hover .cv-card { border-color: var(--cv-line-2); }
+.cv-root .react-flow__node.dragging .cv-card { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), var(--cv-shadow-3); }
+.cv-root .cv-node.is-selected .cv-card {
+  border-color: var(--cv-accent);
+  box-shadow: 0 0 0 3px var(--cv-accent-soft), 0 0 34px -6px var(--cv-accent-glow), var(--cv-shadow-1);
+}
+.cv-card__foot {
+  border-top: 1px solid var(--cv-line);
+  background: var(--cv-surface-1);
+}
+
+/* 小角标：标题行右侧（外壳 badges）—— 白模节点等也可以用 */
+.cv-badge {
+  display: inline-flex; align-items: center;
+  height: 16px; padding: 0 6px;
+  border-radius: var(--cv-pill);
+  border: 1px solid var(--cv-line);
+  background: var(--cv-surface-3);
+  font-size: 10px; line-height: 16px;
+  color: var(--cv-muted);
+}
+.cv-badge.is-now { color: var(--cv-accent-2); background: var(--cv-accent-soft); border-color: color-mix(in srgb, var(--cv-accent) 40%, transparent); }
+.cv-badge.is-icon { min-width: 18px; padding: 0 3px; justify-content: center; }
+.cv-badge.is-ok { color: var(--cv-ok); border-color: color-mix(in srgb, var(--cv-ok) 35%, transparent); }
+.cv-badge.is-warn { color: var(--cv-warn); border-color: color-mix(in srgb, var(--cv-warn) 35%, transparent); }
+.cv-badge.is-bad { color: var(--cv-bad); border-color: color-mix(in srgb, var(--cv-bad) 35%, transparent); }
+
+/* 画面上叠的小胶囊（「3D 导演」「出片中」「预演」） */
+.cv-chip {
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: var(--cv-pill);
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  font-size: 10px; line-height: 16px;
+  color: #fff;
+}
+.cv-chip.is-now { border-color: transparent; background: color-mix(in srgb, var(--cv-accent) 78%, transparent); }
+.cv-chip.is-control { color: var(--cv-edge-control); }
+
+/* 失效：整体变淡 + 角标；选中时稍微亮一点，方便看清再删 */
+.cv-node.is-orphan { opacity: .45; }
+.cv-node.is-orphan.is-selected { opacity: .7; }
+.cv-node__orphan {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  padding: 0 7px;
+  border-radius: var(--cv-pill);
+  background: color-mix(in srgb, var(--cv-bad) 85%, transparent);
+  font-size: 10px; line-height: 17px;
+  color: #fff;
+}
+
+/*
+ * busy 流光：一圈遮罩成环的容器，里面一块大方块转一张 conic 渐变 —— 只转 transform，走合成层，
+ * 不重排；绝对定位盖在卡片边框上，不影响布局。
+ */
+.cv-node__flow {
+  position: absolute; inset: -1px; z-index: 2;
+  padding: 2px;
+  border-radius: calc(var(--cv-radius) + 1px);
+  background: color-mix(in srgb, var(--cv-accent) 22%, transparent);
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.cv-node__flow::before {
+  content: "";
+  position: absolute; left: 50%; top: 50%;
+  width: 300%; aspect-ratio: 1;
+  background: conic-gradient(from 0deg,
+    transparent 0 52%,
+    color-mix(in srgb, var(--cv-kc) 55%, transparent) 70%,
+    var(--cv-accent-2) 84%,
+    #fff 88%,
+    transparent 91% 100%);
+  transform: translate(-50%, -50%) rotate(0turn);
+  animation: cv-node-spin 2.6s linear infinite;
+  will-change: transform;
+}
+@keyframes cv-node-spin { to { transform: translate(-50%, -50%) rotate(1turn); } }
+
+/* ───────────────────────── 端口 ───────────────────────── */
+
+/* 平时藏起来（纳逗式：画面干净），悬停节点 / 选中 / 正在连线时才出来 */
+.cv-root .react-flow__handle.cv-handle {
+  width: 10px; height: 10px; min-width: 0; min-height: 0;
+  border: 2px solid var(--cv-bg);
+  border-radius: 50%;
+  background: var(--cv-kc);
+  opacity: 0;
+  z-index: 4;
+  transition: opacity var(--cv-fast) var(--cv-ease), scale var(--cv-fast) var(--cv-ease), box-shadow var(--cv-fast) var(--cv-ease);
+}
+/* 10px 太难点中：透明的伪元素把可点区域扩到 26px */
+.cv-root .react-flow__handle.cv-handle::after {
+  content: ""; position: absolute; inset: -8px; border-radius: 50%;
+}
+.cv-root .react-flow__node:hover .cv-handle,
+.cv-root .cv-node.is-selected .cv-handle,
+.cv-root .react-flow__handle.cv-handle.connectingfrom { opacity: 1; }
+.cv-root .cv-node.is-linking .cv-handle.target { opacity: 1; scale: 1.15; }
+.cv-root .react-flow__handle.cv-handle:hover,
+.cv-root .react-flow__handle.cv-handle.connectingfrom,
+.cv-root .react-flow__handle.cv-handle.connectingto {
+  opacity: 1;
+  scale: 1.35;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cv-kc) 28%, transparent), 0 0 12px var(--cv-kc);
+}
+.cv-root .react-flow__handle.cv-handle.connectingto.valid { background: var(--cv-ok); }
+.cv-root .react-flow__handle.cv-handle.connectingto:not(.valid) { background: var(--cv-bad); box-shadow: 0 0 0 3px rgba(255, 107, 107, .25); }
+
+/* 选中节点两侧的「+」：中线、卡片外 18px */
+.cv-root .cv-node__plus {
+  position: absolute; top: 50%; z-index: 5;
+  width: 24px; height: 24px; margin-top: -12px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--cv-line-2);
+  background: var(--cv-surface-3);
+  color: var(--cv-text);
+  box-shadow: var(--cv-shadow-2);
+  animation: cv-plus-in var(--cv-mid) var(--cv-ease) both;
+  transition: background var(--cv-fast) var(--cv-ease), border-color var(--cv-fast) var(--cv-ease), box-shadow var(--cv-fast) var(--cv-ease);
+}
+.cv-root .cv-node__plus svg { width: 12px; height: 12px; }
+.cv-root .cv-node__plus--left { left: -42px; }
+.cv-root .cv-node__plus--right { right: -42px; }
+/* :not(:disabled) 是为了压过 tokens.css 的 `.cv-root button:hover:not(:disabled)` */
+.cv-root .cv-node__plus:hover:not(:disabled) {
+  color: #fff;
+  background: var(--cv-accent);
+  border-color: var(--cv-accent);
+  box-shadow: 0 0 0 4px var(--cv-accent-soft), 0 0 18px var(--cv-accent-glow);
+}
+@keyframes cv-plus-in { from { opacity: 0; scale: .6; } }
+
+/* ───────────────────────── 文字节点 ───────────────────────── */
+
+.cv-text {
+  padding: 12px 14px;
+  font-size: 11.5px; line-height: 1.6;
+  color: color-mix(in srgb, var(--cv-text) 84%, transparent);
+}
+.cv-text--prompt { background: linear-gradient(180deg, var(--cv-accent-soft), transparent 70%); }
+.cv-text__head {
+  margin-bottom: 6px;
+  font-size: 12px; font-weight: 600; line-height: 1.45;
+  color: var(--cv-text);
+}
+.cv-text--story .cv-text__head { font-size: 13px; }
+.cv-text__body { max-height: 240px; overflow: hidden; }
+.cv-text__body.is-clipped {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent);
+}
+.cv-text__body.is-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-right: -8px; padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cv-line-2) transparent;
+  cursor: auto;
+}
+.cv-text__plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-text__empty { padding: 6px 0; color: var(--cv-faint); }
+
+.cv-blk { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-blk:last-child { margin-bottom: 0; }
+/* 段首小胶囊：颜色按段落类型（画面/对白/独白/字幕各一色，旁白用灰） */
+.cv-blk__tag {
+  --cv-tag: var(--cv-muted);
+  display: inline-block;
+  margin-right: 5px; padding: 0 5px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--cv-tag) 26%, transparent);
+  background: color-mix(in srgb, var(--cv-tag) 9%, transparent);
+  font-size: 9.5px; line-height: 13px;
+  vertical-align: 1px;
+  color: var(--cv-tag);
+}
+.cv-blk--action .cv-blk__tag { --cv-tag: var(--cv-kind-video); }
+.cv-blk--dialogue .cv-blk__tag { --cv-tag: var(--cv-kind-image); }
+.cv-blk--inner_monolog .cv-blk__tag { --cv-tag: var(--cv-accent-2); }
+.cv-blk--signage .cv-blk__tag { --cv-tag: var(--cv-warn); }
+.cv-blk__who { font-weight: 600; color: var(--cv-text); }
+
+.cv-text.is-editing { padding: 0; box-shadow: inset 0 0 0 1px var(--cv-accent-soft); }
+.cv-text__edit {
+  display: block;
+  width: 100%; min-height: 76px; max-height: 480px;
+  padding: 12px 14px;
+  border: 0; outline: none; resize: none;
+  background: transparent;
+  color: var(--cv-text);
+  font: inherit; line-height: 1.6;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  overflow-y: auto;
+}
+.cv-text__edit::placeholder { color: var(--cv-faint); }
+
+/* ───────────────────────── 图片节点 ───────────────────────── */
+
+.cv-pic {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: var(--cv-surface-1);
+}
+.cv-pic img {
+  position: absolute; inset: 0;
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--cv-mid) var(--cv-ease);
+}
+.cv-pic.is-ok img { opacity: 1; }
+.cv-pic.is-err img { display: none; }
+.cv-pic--sheet { background: #000; }
+.cv-pic--sheet img { object-fit: contain; }
+.cv-pic.is-empty {
+  background: repeating-linear-gradient(135deg, var(--cv-surface-1) 0 8px, color-mix(in srgb, var(--cv-surface-2) 70%, var(--cv-surface-1)) 8px 16px);
+}
+.cv-pic__note {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  padding: 12px;
+  text-align: center;
+  font-size: 11px; line-height: 1.5;
+  color: var(--cv-faint);
+}
+.cv-pic__note.is-bad { color: var(--cv-bad); }
+
+/* 加载中的骨架闪烁、生成中的占位共用一条扫光 */
+.cv-pic.is-load::after,
+.cv-gen::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .07) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: cv-shimmer 1.4s linear infinite;
+  pointer-events: none;
+}
+@keyframes cv-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+
+/* ───────────────────────── 生成占位 ───────────────────────── */
+
+.cv-gen {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 40%, color-mix(in srgb, var(--cv-accent) 16%, var(--cv-surface-1)), var(--cv-surface-1));
+}
+.cv-gen__pct {
+  position: relative;
+  font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--cv-text);
+}
+.cv-gen__model { position: relative; font-size: 10.5px; color: var(--cv-muted); }
+.cv-gen__bar {
+  position: absolute; left: 0; bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cv-accent), var(--cv-accent-2));
+  transition: width .4s var(--cv-ease);
+}
+.cv-gen.is-bad { background: color-mix(in srgb, var(--cv-bad) 7%, var(--cv-surface-1)); }
+.cv-gen.is-bad::before { display: none; }
+.cv-gen__err {
+  position: relative;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0 14px;
+  text-align: center;
+  font-size: 11px; line-height: 1.5;
+  color: var(--cv-bad);
+}
+
+/* ───────────────────────── 视频节点 ───────────────────────── */
+
+.cv-vid {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #000;
+}
+/* 底部压一层暗角，左下角的「镜 N · 景别 · 时长」在亮画面上也看得清 */
+.cv-vid::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 42%;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .5));
+  pointer-events: none;
+}
+.cv-vid__media { position: absolute; inset: 0; width: 100%; height: 100%; }
+img.cv-vid__media { display: block; object-fit: cover; }
+.cv-vid__poster,
+.cv-vid__play {
+  position: absolute; inset: 0;
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.cv-vid__play { opacity: 0; transition: opacity var(--cv-mid) var(--cv-ease); }
+.cv-vid__play.is-on { opacity: 1; }
+.cv-vid__empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 11.5px;
+  color: var(--cv-faint);
+  /* 没片子时是一张很淡的取景网格，和真画面一眼区分开 */
+  background:
+    linear-gradient(color-mix(in srgb, var(--cv-line) 55%, transparent) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(90deg, color-mix(in srgb, var(--cv-line) 55%, transparent) 1px, transparent 1px) 0 0 / 28px 28px,
+    var(--cv-surface-1);
+}
+.cv-vid__empty em { font-style: normal; font-size: 11px; color: var(--cv-accent-2); }
+.cv-vid__tag {
+  position: absolute; left: 8px; bottom: 8px; z-index: 1;
+  padding: 0 8px;
+  border-radius: var(--cv-pill);
+  background: rgba(0, 0, 0, .5);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  font-size: 10.5px; line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  pointer-events: none;
+}
+.cv-vid__flags {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  display: flex; gap: 4px;
+  pointer-events: none;
+}
+.cv-vid__desc {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* 用 margin 不用 padding：overflow 按 padding 盒裁，padding 里会漏出第 3 行的上半截 */
+  margin: 8px 12px 10px;
+  font-size: 11px; line-height: 1.5;
+  color: var(--cv-muted);
+}
+
+/* 导演出片三步：预演 → 身份首帧 → 成片 */
+.cv-steps {
+  position: relative;
+  padding: 7px 12px 8px;
+  font-size: 10.5px;
+  color: var(--cv-faint);
+}
+.cv-steps__row { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cv-steps__row .is-ok { color: var(--cv-ok); }
+.cv-steps__row .is-now { color: var(--cv-text); font-weight: 600; }
+.cv-steps__row .is-bad { color: var(--cv-bad); font-weight: 600; }
+.cv-steps__sep { color: var(--cv-line-2); }
+.cv-steps__pct { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--cv-accent-2); }
+.cv-steps.is-bad .cv-steps__pct { color: var(--cv-bad); }
+.cv-steps__bar {
+  position: absolute; left: 0; bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cv-accent), var(--cv-edge-control));
+  transition: width .6s var(--cv-ease);
+}
+.cv-steps__err {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 3px;
+  line-height: 1.45;
+  color: var(--cv-bad);
+}
+
+/* ───────────────────────── 连线 ───────────────────────── */
+
+/* --cv-e 由 GlowEdge 按语义写成 var(--cv-edge-<kind>)；选择器带 path 是为了压过 xyflow 的 .selected 描边色 */
+.cv-root .react-flow__edge path.cv-edge__halo {
+  fill: none;
+  stroke: var(--cv-e);
+  stroke-width: 7;
+  stroke-linecap: round;
+  opacity: .14;
+  pointer-events: none;
+  transition: opacity var(--cv-mid) var(--cv-ease);
+}
+.cv-root .react-flow__edge path.cv-edge__core {
+  stroke: var(--cv-e);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  transition: stroke-width var(--cv-mid) var(--cv-ease), stroke var(--cv-mid) var(--cv-ease);
+}
+.cv-root .react-flow__edge path.cv-edge__halo.is-active { opacity: .5; }
+.cv-root .react-flow__edge path.cv-edge__core.is-active {
+  stroke-width: 2;
+  stroke: color-mix(in srgb, var(--cv-e) 62%, #fff);
+}
+/* 剧本→镜头的派生线：背景信息，更暗更细 */
+.cv-root .react-flow__edge path.cv-edge__halo.cv-edge--flow { opacity: .05; }
+.cv-root .react-flow__edge path.cv-edge__core.cv-edge--flow { stroke-width: 1; }
+.cv-root .react-flow__edge path.cv-edge__halo.cv-edge--flow.is-active { opacity: .22; stroke: var(--cv-muted); }
+.cv-root .react-flow__edge path.cv-edge__core.cv-edge--flow.is-active { stroke-width: 1.4; stroke: var(--cv-muted); }
+
+.cv-root .react-flow__edge path.cv-edge__run {
+  fill: none;
+  stroke: color-mix(in srgb, var(--cv-e) 45%, #fff);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 3 11;
+  pointer-events: none;
+  animation: cv-edge-run .9s linear infinite;
+}
+/* dashoffset 从一个周期（3+11）减到 0：虚线朝目标方向走 */
+@keyframes cv-edge-run { from { stroke-dashoffset: 14; } to { stroke-dashoffset: 0; } }
+
+.cv-root .cv-edge__del {
+  position: absolute; z-index: 10;
+  width: 20px; height: 20px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--cv-line-2);
+  background: var(--cv-surface-3);
+  box-shadow: var(--cv-shadow-2);
+  font-size: 13px; line-height: 1;
+  color: var(--cv-text);
+  pointer-events: all;
+}
+.cv-root .cv-edge__del:hover:not(:disabled) { color: #fff; background: var(--cv-bad); border-color: var(--cv-bad); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cv-node__flow::before,
+  .cv-pic.is-load::after,
+  .cv-gen::before,
+  .cv-root .react-flow__edge path.cv-edge__run,
+  .cv-root .cv-node__plus { animation: none; }
+}
+
+.cv-audio { padding: 16px 10px; }
+.cv-audio audio { width: 100%; height: 36px; }

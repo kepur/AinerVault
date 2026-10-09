@@ -216,3 +216,134 @@ def test_blender_progress_percent_weights_the_slow_passes():
 def test_final_render_needs_a_finished_control_job():
     with pytest.raises(jobs.JobError, match="控制素材"):
         jobs.submit_final(None, SimpleNamespace(job_type="blender_render", status="running"), {})
+
+
+# ── 串联：身份首帧失败就停，不出卡通成片 ──────────────────────
+
+class _ChainDB:
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
+def _blender_job():
+    return SimpleNamespace(id="djob_b", job_type="blender_render", status="succeeded", progress_json={"stage": "done"},
+                           input_json={"chain": {"shot_id": "sh_1", "identity": {"cast": ["ent_a"]},
+                                                 "final": {"renderer": "ltx_25", "control_type": "union"}}})
+
+
+def test_chain_stops_when_the_identity_frame_fails(monkeypatch):
+    """不钉首帧的 LTX 成片是大头卡通、不是角色库里的人（用户实看到过）：宁可停下报原因。"""
+    from app.director import identity_frame
+
+    submitted = []
+    monkeypatch.setattr(identity_frame, "render", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("网关挂了")))
+    monkeypatch.setattr(jobs, "submit_final", lambda db, job, body: submitted.append(body))
+    job = _blender_job()
+    jobs._chain(_ChainDB(), job)
+    assert submitted == []
+    assert job.progress_json["next"]["status"] == "failed" and "网关挂了" in job.progress_json["next"]["error"]
+    assert job.progress_json["stage"] == "done"                   # 预演本身的进度不动
+
+
+def test_chain_pins_the_identity_frame_and_passes_the_shot_on(monkeypatch):
+    from app.director import identity_frame
+
+    submitted = []
+    monkeypatch.setattr(identity_frame, "render", lambda *a, **k: "http://x/ff.png")
+    monkeypatch.setattr(jobs, "submit_final",
+                        lambda db, job, body: submitted.append(body) or SimpleNamespace(id="djob_f"))
+    job = _blender_job()
+    jobs._chain(_ChainDB(), job)
+    (body,) = submitted
+    assert body["first_frame_url"] == "http://x/ff.png" and body["pin_first"] is True
+    assert body["chain"] == {"shot_id": "sh_1"}
+    assert job.progress_json["next"] == {"step": "final", "status": "submitted", "job_id": "djob_f",
+                                         "first_frame_url": "http://x/ff.png"}
+
+
+def test_continue_needs_a_finished_job_with_a_chain():
+    with pytest.raises(jobs.JobError, match="已成功"):
+        jobs.continue_chain(None, SimpleNamespace(status="failed", input_json={"chain": {"final": {}}}))
+    with pytest.raises(jobs.JobError, match="没有串联"):
+        jobs.continue_chain(None, SimpleNamespace(status="succeeded", input_json={}))
+
+
+# ── 画布轮询：这一镜的导演出片走到哪一步 ─────────────────────
+
+class _GetDB:
+    def __init__(self, **rows):
+        self.rows = rows
+
+    def get(self, _model, key):
+        return self.rows.get(key)
+
+
+def _shot(**cam):
+    return SimpleNamespace(camera_json={"director_run": {"blender_job_id": "b", "started_at": "t"}, **cam})
+
+
+def test_run_status_reports_a_failed_identity_frame_and_offers_to_continue():
+    from app.director.from_shot import run_status
+
+    b = SimpleNamespace(id="b", status="succeeded", error=None,
+                        progress_json={"next": {"step": "identity", "status": "failed", "error": "缺正脸参考"}})
+    st = run_status(_GetDB(b=b), _shot())
+    assert (st["step"], st["status"], st["error"], st["can_continue"], st["done"]) == \
+        ("identity", "failed", "缺正脸参考", True, False)
+
+
+def test_run_status_is_done_once_the_final_is_bound_to_the_shot():
+    from app.director.from_shot import run_status
+
+    b = SimpleNamespace(id="b", status="succeeded", error=None,
+                        progress_json={"next": {"step": "final", "status": "submitted", "job_id": "f"}})
+    f = SimpleNamespace(id="f", status="succeeded", error=None, progress_json={"percent": 100})
+    running = run_status(_GetDB(b=b, f=f), _shot())
+    assert running["step"] == "final" and not running["done"]          # 出完了但还没挂回
+    done = run_status(_GetDB(b=b, f=f), _shot(director={"blender_job_id": "b", "final_job_id": "f"}))
+    assert done["done"] and not done["can_continue"]
+
+
+def test_run_status_while_blender_is_rendering():
+    from app.director.from_shot import run_status
+
+    b = SimpleNamespace(id="b", status="running", error=None, progress_json={"percent": 40})
+    st = run_status(_GetDB(b=b), _shot())
+    assert (st["step"], st["status"], st["percent"]) == ("previs", "running", 40)
+    assert run_status(_GetDB(), SimpleNamespace(camera_json={})) is None
+
+
+def test_normalize_poses_maps_llm_synonyms_to_runtime_poses():
+    from app.director.planner import normalize_poses
+
+    proto = {"actors": [{"id": "p1", "pose": "cowering"}, {"id": "p2", "pose": "Fighting Stance"},
+                        {"id": "p3", "pose": "stand"}, {"id": "p4", "pose": "levitating"}],
+             "timeline": [{"op": "actor.set_pose", "actor": "p1", "pose": "standing"}]}
+    fixes = normalize_poses(proto)
+    assert [a["pose"] for a in proto["actors"]] == ["crouch", "fight", "stand", "stand"]
+    assert proto["timeline"][0]["pose"] == "stand"
+    assert len(fixes) == 4                     # 合法的不记
+
+
+def test_cancelled_run_task_also_cancels_gateway(monkeypatch):
+    from app.director.renderers import base
+    from app.models import TaskStatus
+
+    called = []
+
+    class T:
+        id, status = "gt1", TaskStatus.running
+
+    class Db:
+        def commit(self): pass
+        def get(self, *_): return T()
+
+    monkeypatch.setattr(base, "submit_task", lambda *a, **k: T())
+    monkeypatch.setattr(base, "cancel_task", lambda db, t: called.append(t.id))
+    import pytest
+    with pytest.raises(base.RendererError):
+        base.run_task(Db(), base.Capability.video_i2v, {}, purpose="x", cancelled=lambda: True)
+    assert called == ["gt1"]

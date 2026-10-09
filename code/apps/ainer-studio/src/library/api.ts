@@ -56,6 +56,11 @@ export interface CharCard {
   category?: string | null;
   pending?: number;
   entity_id?: string;
+  novel_id?: string | null;
+  /** 本书角色还没有定妆照时的说明 */
+  missing?: string;
+  /** 小说角色一键重出定妆照的进度（只在内存里，core 重启就没了） */
+  refs_job?: { state: "running" | "done" | "failed"; step: "front" | "views" | "sheet" | "done"; error?: string | null; notes?: string[] } | null;
 }
 
 export interface Voice {
@@ -94,9 +99,11 @@ export const lib = {
   applyStyle: (planId: string, presetId: string | null) =>
     call<{ plan_id: string; style_preset: unknown }>("POST", "/presets:apply-style", { plan_id: planId, preset_id: presetId }),
 
-  characters: (scope: "official" | "mine", f: { gender?: string; age?: string; culture?: string; q?: string } = {}) =>
+  characters: (scope: "book" | "official" | "mine", f: { gender?: string; age?: string; culture?: string; q?: string; novel_id?: string } = {}) =>
     call<CharCard[]>("GET", `/characters?${qs({ scope, ...f })}`),
   character: (cid: string) => call<CharCard>("GET", `/characters/${cid}`),
+  /** 小说角色一键重出定妆照（本机）：正面全身 → 其余视角 → 拼设定图 */
+  references: (cid: string) => call<NonNullable<CharCard["refs_job"]>>("POST", `/characters/${cid}:references`),
   voices: () => call<Voice[]>("GET", "/characters/voices"),
   generate: (cid: string, what: "all" | "front" | "views" | "expressions", redo = false) =>
     call<{ queued: number; pending: number }>("POST", `/characters/${cid}:generate`, { what, redo }),

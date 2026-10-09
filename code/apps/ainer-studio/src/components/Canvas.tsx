@@ -1,3 +1,5 @@
+import VideoFrame from "./VideoFrame";
+import { directorPending } from "../shotStatus";
 import { memo, useEffect, useMemo } from "react";
 import {
   Background, BackgroundVariant, Controls, Handle, MiniMap, Position, ReactFlow,
@@ -16,33 +18,36 @@ const GAP_Y = 30;
 const PER_ROW = 8;
 const LANE_GAP = 70;
 
-function frameDot(f: ShotCard["first"]) {
-  if (!f) return "dot";
-  if (f.status === "generating") return "dot run";
-  if (f.url && f.stale) return "dot stale";
-  if (f.url) return "dot ok";
-  return "dot";
-}
+const FLOW_STEP: Record<string, string> = { audio: "配音", frame: "分镜图", video: "出视频", director: "3D 导演" };
 
 const ShotNode = memo(function ShotNode({ data }: NodeProps<ShotNodeT>) {
   const s = data.shot;
-  const thumb = media(s.first?.url ?? s.last?.url);
+  // 视频才是现在的成品（首尾帧已作废）：有视频就取视频自己的第一帧，旧图只在没视频时兜底
+  const still = media(s.first?.url ?? s.last?.url);
+  const pending = directorPending(s);
+  // 创作画布的一键出片 / 出分镜图正跑到这一镜
+  const flow = s.canvas_run;
+  const flowStep = flow ? (FLOW_STEP[flow.step] ?? flow.step) : "";
   return (
     <div className={`shot-node${data.selected ? " selected" : ""}`}>
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-      {thumb
-        ? <img className="thumb" src={thumb} loading="lazy" alt="" />
-        : <div className="thumb empty">未出首帧</div>}
+      {s.video_url
+        ? <VideoFrame className="thumb" src={media(s.video_url)} />
+        : still
+          ? <img className="thumb" src={still} loading="lazy" alt="" />
+          : <div className="thumb empty">{pending ? "导演出片中…" : flow ? `创作画布 · ${flowStep}…` : "未出片"}</div>}
       <div className="meta">
         <span className="no">{s.order_no}</span>
         <span className="size">{s.shot_size}</span>
-        {s.regional && <span className="badge">分区 {s.regional.people} 人</span>}
+        {pending || flow
+          ? <span className="badge now" title={flow ? `创作画布一键出片：${flowStep}${flow.status === "pending" ? "（排队）" : ""}` : undefined}>
+            {flow ? (flow.status === "pending" ? "排队" : flowStep) : "出片中"}
+          </span>
+          : s.director?.done && <span className="badge" title="LLM 搭景 → Blender 预演 → 角色库的脸 → LTX 2.5">3D 导演</span>}
         <span className="dur">{(s.duration_ms / 1000).toFixed(1)}s</span>
       </div>
-      <div className="dots" title="首帧 · 尾帧 · 视频">
-        <span className={frameDot(s.first)} />
-        <span className={frameDot(s.last)} />
-        <span className={s.video_url ? "dot ok" : "dot"} />
+      <div className="dots" title="视频">
+        <span className={pending || flow ? "dot run" : s.video_url ? "dot ok" : "dot"} />
       </div>
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
     </div>
@@ -96,7 +101,7 @@ function layout(board: Board, selected: string | null) {
   return { nodes, edges };
 }
 
-function Flow({ board, selected, onSelect, focusScene }: Props) {
+function Flow({ board, selected, onSelect, focusScene, focusShot }: Props) {
   const { nodes, edges } = useMemo(() => layout(board, selected), [board, selected]);
   const flow = useReactFlow();
 
@@ -104,6 +109,7 @@ function Flow({ board, selected, onSelect, focusScene }: Props) {
   const target = focusScene ?? board.scenes[0]?.id ?? null;
   useEffect(() => {
     if (!target) return;
+    if (focusShot && !focusScene) return; // 深链带了镜头：下面那个效果飞到这一镜
     const ids = board.shots.filter(s => s.scene_id === target).map(s => ({ id: s.id }));
     if (!ids.length) return;
     const t = setTimeout(() => flow.fitView({
@@ -112,6 +118,18 @@ function Flow({ board, selected, onSelect, focusScene }: Props) {
     }), 0);
     return () => clearTimeout(t);
   }, [target, focusScene, board.plan.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 深链 ?shot=：飞到这一镜（连同同一行的邻镜，别放得太大）
+  useEffect(() => {
+    if (!focusShot) return;
+    const shot = board.shots.find(s => s.id === focusShot);
+    if (!shot) return;
+    const row = board.shots.filter(s => s.scene_id === shot.scene_id);
+    const i = row.findIndex(s => s.id === focusShot);
+    const near = row.slice(Math.max(0, i - 1), i + 2).map(s => ({ id: s.id }));
+    const t = setTimeout(() => flow.fitView({ nodes: near, duration: 0, padding: 0.2, maxZoom: 1 }), 30);
+    return () => clearTimeout(t);
+  }, [focusShot, board.plan.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <ReactFlow
@@ -139,6 +157,7 @@ interface Props {
   selected: string | null;
   onSelect: (id: string) => void;
   focusScene: string | null;
+  focusShot?: string | null;
 }
 
 export default function Canvas(props: Props) {

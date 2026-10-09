@@ -90,7 +90,22 @@ def _dim_key(dim: str) -> str:
 #: 明确的否定答案。「无补光」「机位固定」是**做出了决定**，
 #: 不是没填 —— 按长度或术语筛会把它们判成缺失，
 #: 而「有没有」类的维度本来就允许回答「没有」。
-_NEGATIVE = ("无", "没有", "不用", "不加", "固定", "静止", "保持", "免")
+#: 合法的「这一项不适用」写法。**「不适用」必须在里面** ——
+#: vfx 规格自己写着「多数镜头不需要视效，不要就明说不要」，
+#: 模型照做后把元素填「无」、其余四项填「不适用」，
+#: 结果「无」过了（前缀命中），「不适用」没过（3 字短于 _MIN_LEN 又不在表里），
+#: 于是一份完全正确的单子被判成缺四个维度，连带整镜的首帧生成被挡住。
+_NEGATIVE = ("无", "没有", "不用", "不加", "固定", "静止", "保持", "免",
+             "不适用", "不涉及", "不需要", "N/A", "n/a", "NA", "none", "None")
+
+#: 明确的禁止项。字段里写了「避免什么」就说明已经作出具体承诺，
+#: 此时里面顺带出现一个空洞形容词不该否掉整个字段。
+#:
+#: 起因：「肤色保护，在冷光下保持苍白但自然的肉色，避免发绿或死灰」
+#: 因为「自然的」被整条拒收，而这句话里「在冷光下保持苍白」
+#: 和「避免发绿或死灰」都是可执行的具体指令。空洞词规则是为
+#: 「适当调整」这种**整句都是空话**的答案写的，不是为了挑长句里的一个词。
+_CONCRETE_MARKERS = ("避免", "不要", "禁止", "不得", "而非", "不是", "切勿", "杜绝")
 
 
 def _is_term(spec: CrewSpec, val: str) -> bool:
@@ -126,6 +141,11 @@ def _check(spec: CrewSpec, payload: dict[str, Any]) -> tuple[list[str], list[str
             missing.append(dim.split("：")[0].split(":")[0])
             continue
         hit = [w for w in _EMPTY_WORDS if w in val]
+        # 写了明确禁止项 = 已经作出具体承诺，空洞形容词不是这句话的主语义。
+        # 不豁免的话，调色工种 7/35 镜会卡在「自然的肉色」这个标准术语上，
+        # 而那 7 镜连带整个首帧生成都被挡住。
+        if hit and any(m in val for m in _CONCRETE_MARKERS):
+            hit = []
         if hit:
             rejected.append(f"{dim.split('：')[0]}：「{val[:40]}」含空洞词 {hit}")
     return missing, rejected
@@ -442,9 +462,22 @@ def _en_only(value: Any) -> str:
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
-def _motion_issues(data: dict[str, Any]) -> list[str]:
-    """运动单的可执行性验收。只用形式化判据，不再调一次模型。"""
+def _motion_issues(data: dict[str, Any], motion_kind: str = "animate") -> list[str]:
+    """运动单的可执行性验收。只用形式化判据，不再调一次模型。
+
+    **验收标准随动静三态变**，一刀切会把意图当成缺陷：
+      animate — 主体或相机必须有可见位移，首尾必须不同
+      camera  — 主体可以一动不动，运动由相机承担，所以查相机
+      hold    — 本来就不动，位移类判据一概不适用
+
+    从前这里只收 data，不知道这一镜是什么类型，于是 35 镜里 27 镜被标 thin，
+    其中 21 镜（15 camera + 6 hold）是**按设计就不该动的**。
+    真正该看的「哪些 animate 镜缺动作」反而被淹在噪音里。
+    """
     issues: list[str] = []
+    kind = (motion_kind or "animate").strip().lower()
+    if kind not in {"animate", "camera", "hold"}:
+        kind = "animate"
     for key in _MOTION_DETAIL_FIELDS:
         if not as_text(data.get(key)).strip():
             issues.append(f"缺 {key}")
@@ -454,7 +487,8 @@ def _motion_issues(data: dict[str, Any]) -> list[str]:
     end = as_text(data.get("end_frame")).strip()
     if not start or not end:
         issues.append("起幅或落幅为空")
-    elif start == end:
+    elif start == end and kind != "hold":
+        # hold 镜的起幅落幅本来就该一样，那是「这一镜不动」的正确写法
         issues.append("起幅与落幅相同")
     if not as_text(data.get("start_frame_en")).strip() \
             or not as_text(data.get("end_frame_en")).strip():
@@ -462,15 +496,38 @@ def _motion_issues(data: dict[str, Any]) -> list[str]:
 
     deltas = [as_text(x).strip() for x in (data.get("deltas") or []) if as_text(x).strip()]
     deltas_en = [as_text(x).strip() for x in (data.get("deltas_en") or []) if as_text(x).strip()]
-    if len(deltas) < 2:
-        issues.append("首尾可见差异少于 2 项")
-    if len(deltas_en) < 2:
-        issues.append("英文首尾可见差异少于 2 项")
-    visible, why = sp.is_visible_change(
-        as_text(data.get("subject_move")) + "；" + as_text(data.get("camera_move"))
-    )
-    if not visible:
-        issues.append(f"主体与相机都没有可见位移：{why}")
+    if kind != "hold":
+        if len(deltas) < 2:
+            issues.append("首尾可见差异少于 2 项")
+        if len(deltas_en) < 2:
+            issues.append("英文首尾可见差异少于 2 项")
+
+    # **逐条判 deltas，不要把长文拼起来判。**
+    #
+    # is_visible_change 是为一句话的 derive_instruction 写的：它先查「明说不动」
+    # 的词（静止/不动/保持不变…），因为「油布掀开…沈砚依然静坐」里虽有「掀开」
+    # 但整句意思是没变。这个顺序在一句话上是对的，套到运动单上就失灵：
+    #
+    #   · subject_move 是两百字的结构化描述，「从静止状态开始迈步」里的
+    #     「静止」说的是起始状态，不是结论
+    #   · deltas 里常有一条连续性说明（「衣摆从静止垂落变为向后飘动」），
+    #     拼成一串后那一个词把整组判死
+    #
+    # 正确语义是「首尾之间**至少有一项**看得见的变化」，所以逐条判、取或。
+    # 实测这一版把 35 镜里的通过数从 8 提到 24 —— 之前那 16 条全是误报，
+    # 而误报多到这个程度，等于这份质量报告没人会看。
+    if kind != "hold":
+        candidates = [d for d in (as_text(x).strip() for x in (data.get("deltas") or [])) if d]
+        if kind == "camera":
+            # 相机镜的运动在相机上，主体不动是正常的
+            candidates.append(as_text(data.get("camera_move")))
+        else:
+            candidates.append(as_text(data.get("subject_move"))
+                              + "；" + as_text(data.get("camera_move")))
+        if not any(sp.is_visible_change(c)[0] for c in candidates if c.strip()):
+            why = sp.is_visible_change(candidates[-1])[1] if candidates else "没有写变化"
+            label = "camera 镜的相机没有可见运动" if kind == "camera" else "主体与相机都没有可见位移"
+            issues.append(f"{label}：{why}")
     english = " ".join(
         as_text(data.get(f"{key}_en")) for key in _MOTION_DETAIL_FIELDS
     ) + " " + " ".join(deltas_en)
@@ -575,7 +632,7 @@ def generate_motion(
             if _en_only(data.get(f"{key}_en"))
         ) or None
 
-        issues = _motion_issues(data)
+        issues = _motion_issues(data, (shot.camera_json or {}).get("motion_kind"))
         thin.extend({"shot": shot.order_no, "why": issue} for issue in issues)
         if not issues:
             # 分镜阶段的 derive_instruction 只是初判；动作导演把调度、

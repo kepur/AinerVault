@@ -1,0 +1,150 @@
+{
+  "created_at": "2026-10-09T06:51:11.654168+00:00",
+  "schema": "ainer.production/v0.1",
+  "scope": "solo free-canvas and source-backed asset integration",
+  "files": [
+    {
+      "path": "code/apps/ainer-core/app/api/v2/canvas.py",
+      "sha256": "a1cafbee5906d2cfe8d8b7adc722ee5bf231d273f46c418243c0f6f7bf4d76c7"
+    },
+    {
+      "path": "code/apps/ainer-core/app/api/v2/production.py",
+      "sha256": "6ccbda3dcba6543ce7dd4dd92819dea360d73df49e4608b9904a547c51708219"
+    },
+    {
+      "path": "code/apps/ainer-core/app/api/v2/char_sheet.py",
+      "sha256": "d847369bd8f3a24259e22622a74861d13ea22f1a29db77c45d2250baae731855"
+    },
+    {
+      "path": "code/apps/ainer-core/app/production/schema.py",
+      "sha256": "562891f4f9070e49ceb944a794b457cb4fc333e875fac0ee069aeb09505b1c31"
+    },
+    {
+      "path": "code/apps/ainer-core/app/production/service.py",
+      "sha256": "2c8a49a9494132b4c5b5cbf5bf5d0bac1e9435b8acd9f1a5c77f614626eecda3"
+    },
+    {
+      "path": "code/apps/ainer-core/app/pipelines/canvas_exec.py",
+      "sha256": "e11481fc86a7abcff80778c7b5fe52e314f627672491dba6a78d7f37f63a0c31"
+    },
+    {
+      "path": "code/apps/ainer-core/app/pipelines/char_sheet.py",
+      "sha256": "418ad939a33edde8e93644810783e3f9497ad1d753bcb30ce014553824693f90"
+    },
+    {
+      "path": "code/apps/ainer-core/app/capability/generic.py",
+      "sha256": "f50bd5767330c2b3f4a2bef777824954edf26e33dc22b1e4bbea26d76b25473e"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/model.ts",
+      "sha256": "360f3165080427fca470300823c729c688d32fce3d74d752be6d44083660c6b2"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/contract.ts",
+      "sha256": "17f3d42056b8bcaf2d68573f27bbb6f72e13584a6c5fe8d574d7c8fb4a8f607a"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/api.ts",
+      "sha256": "288e1845fcea84ae58abe4d08e96a2fa066a95b11619fb783288c2b663b90f52"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/demo.ts",
+      "sha256": "64c1c56ff4aed01d717608c40d5ae98d66a35035dcd18a964e9276c1123128c4"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/store.tsx",
+      "sha256": "7725a30049c8bf838a181a4f85320dae103613d1b6370d72042c752874d07279"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/importer.ts",
+      "sha256": "5eb5e8c930f5b0404a4c495beb37a2f1d9e0244b013a17798209465e200a9c0a"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/Flow.tsx",
+      "sha256": "21ce96134635846e1e76010fca40002d5eb5e75770d1c0bc387ee012a7ea023e"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/actions.ts",
+      "sha256": "eaeec1eef745c7f70d283b7676c7c5f5f0e1b24b614f0c863d92c97df06708ec"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/NewCanvasModal.tsx",
+      "sha256": "85d5bf98c8719afbcff20047bf2e5b0cd0de3dd6b98cf9298c8f328544c5d023"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/TopBar.tsx",
+      "sha256": "5ee9254e4800d65565960031d5d33db33a2dcb67bdd0803e73905ce1c7ef3dec"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/AssetsDrawer.tsx",
+      "sha256": "bb14ebb41441b04cb9052c49b70a934c41bdd69e653f982a9bef66a600860517"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/AddMenu.tsx",
+      "sha256": "cb9c03523482aa3f107f3222b2e277cfdc6e59db3ff32c8f86583e9bfe73612e"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/Dock.tsx",
+      "sha256": "07d0d89fc7b0f715880bd076a0aae25809180a3eefed2f15452d871b9466337f"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome/BottomBar.tsx",
+      "sha256": "c052888a4ff85297a830f4a53ebfb7cf24ff1b84dd060bfad294b78e76bbad10"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes/NodeShell.tsx",
+      "sha256": "b10a47ce36e5b07f05e29696936ef116ef1b5d8999bbe83d197ac870a3792867"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes/ImageNode.tsx",
+      "sha256": "57f18084fe19419909185693f1248c4994a0a9dfff15dbc7788200a06ba31291"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes/VideoNode.tsx",
+      "sha256": "28601bfa397b7d122ca1e7fcbdc6716949501cb75f78ba8f566664890a1766d6"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes/AudioNode.tsx",
+      "sha256": "0e1e2f0a1e731e36fde8366bbd87cd603a2df2e6776888005056ad7b1651e956"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes/index.ts",
+      "sha256": "80225f48a7dca1bf9461effa47c193b3c6fe51552df9f7a5d3e1135fa4ecdff1"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/nodes.css",
+      "sha256": "900210ce6e52ec6c4c36de353df5404eaa89fb3bc4e24fbcf23316acc9b305cd"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/canvas/chrome.css",
+      "sha256": "4c06c623661ff980d64393d03969e1cf514d546c42fc9b1bb5635e1d8eb0d45f"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/production/api.ts",
+      "sha256": "c9b539f31198410394c5ee38f21957c53cda3a49cb336706b59891cfd1b4efc7"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/production/CanonicalSheet.tsx",
+      "sha256": "1802d23d14038b4c0d1e90b13d2909ca4d17513756a4ffa37b944331177451cc"
+    },
+    {
+      "path": "code/apps/ainer-studio/src/library/Characters.tsx",
+      "sha256": "07b6027bf1969d89f63e9ecfc059a07243f81861f539fb2b595b43a278b0b363"
+    }
+  ],
+  "build": "npm run build passed",
+  "backend_syntax": "8 changed backend files parsed",
+  "functional_qa": "not_run_by_codex",
+  "media_qa": "not_run_by_codex",
+  "source_attribution": "shared checkout; hashes identify integrated contents, not isolated author commits",
+  "deployment": {
+    "previous_pid": 20478,
+    "pid": 23435,
+    "log": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/var/planA/core-solo-2026-10-09.log",
+    "code": "solo-free-canvas-final-source",
+    "checks": "build and read-only operational job guard; functional QA pending",
+    "initial_pid": 14492,
+    "startup_evidence": "Final PID 23435, Application startup complete; no functional requests dispatched by Codex"
+  },
+  "frontend_index_sha256": "fe7accea6cb1d1d6ea9d4c5a837d5f51dcd4e5c32b2149d387df9f68a985534f"
+}

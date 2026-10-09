@@ -897,7 +897,8 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
     # 于是「这一镜用到 谢文东」和台词里的 Thomas Ashford 对不上，
     # 手搓的人得自己回人名映射页去查谁是谁。
     # 两个都给：原名认人，译名对稿。
-    tf_id = _default_transform(db, chapter.novel_id)
+    tf_id = (plan.transform_id or (plan.config_json or {}).get("production_transform_id")
+             or _default_transform(db, chapter.novel_id))
     target_name = {
         n.entity_id: n.target_name
         for n in db.execute(select(EntityWorldName).where(
@@ -906,7 +907,9 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
 
     reference_names = {a.canonical_key: a.display_name for a in db.execute(
         select(AssetSpec).where(AssetSpec.novel_id == chapter.novel_id)).scalars()}
-    reference_names.update({e.canonical_key: e.display_name for e in ents.values()})
+    reference_names.update({e.canonical_key: (
+        f"{target_name[e.id]}（原名：{e.display_name}）" if target_name.get(e.id)
+        else e.display_name) for e in ents.values()})
     reference_names["world_style"] = "全书画风"
 
     def _frame(f: FrameSpec | None,
@@ -985,7 +988,8 @@ def storyboard(chapter_id: str, db: Session = Depends(get_db)) -> dict:
             "audio": [{
                 "id": a.id, "at_ms": (a.params_json or {}).get("at_ms", 0),
                 "kind": a.kind.value,
-                "speaker": ents[a.entity_id].display_name
+                "speaker": (f"{target_name[a.entity_id]}（原名：{ents[a.entity_id].display_name}）"
+                            if target_name.get(a.entity_id) else ents[a.entity_id].display_name)
                            if a.entity_id in ents else None,
                 "text": a.text,
                 "voice_id": (a.params_json or {}).get("voice_id"),

@@ -80,6 +80,21 @@ def plan_board(plan_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     scenes = {sc.id: sc for sc in db.execute(
         select(Scene).where(Scene.id.in_(list(scene_ids) or [""]))).scalars()}
 
+    # 创作画布：每镜所在的场次画布，和正在跑的一键出片（分镜画布据此显示「出片中」并轮询）
+    from app.models.studio_board import StudioBoard, StudioRun
+
+    board_of: dict[str, str] = {}
+    for b in db.execute(select(StudioBoard).where(StudioBoard.shot_plan_id == plan.id,
+                                                  StudioBoard.kind == "scene")).scalars():
+        for sid in ((b.scope_json or {}).get("shot_ids") or []):
+            board_of.setdefault(sid, b.id)
+    running: dict[str, dict[str, Any]] = {}
+    for r in db.execute(select(StudioRun).where(StudioRun.shot_plan_id == plan.id,
+                                                StudioRun.status.in_(("queued", "running")))).scalars():
+        for it in (r.items_json or []):
+            if isinstance(it, dict) and it.get("status") in ("pending", "running") and it.get("shot_id"):
+                running[it["shot_id"]] = {"run_id": r.id, "step": it.get("step"), "status": it.get("status")}
+
     def frame_out(f: FrameSpec | None) -> dict[str, Any] | None:
         if f is None:
             return None
@@ -102,6 +117,12 @@ def plan_board(plan_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
             "last": frame_out(fs.get("last")),
             "video_url": urls.get(s.video_asset_id) if s.video_asset_id else None,
             "dialogue_lines": lines.get(s.id, 0),
+            "canvas_id": board_of.get(s.id),
+            "canvas_run": running.get(s.id),
+            # 导演出片：最近一次在跑的（run）和已挂回的（done）；画布据此轮询 /director/shots/{id}/run
+            "director": {"run": (s.camera_json or {}).get("director_run"),
+                         "done": (s.camera_json or {}).get("director")}
+            if (s.camera_json or {}).get("director_run") or (s.camera_json or {}).get("director") else None,
             "regional": {
                 "source": regional.get("source"),
                 "people": len(regional.get("figures") or []),

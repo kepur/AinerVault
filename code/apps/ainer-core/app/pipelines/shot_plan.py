@@ -57,7 +57,7 @@ SHOT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "required": ["order", "block_ids", "description",
                              "first_frame", "last_frame",
-                             "first_frame_en", "last_frame_en"],
+                             "first_frame_en", "last_frame_en", "motion"],
                 "properties": {
                     "order": {"type": "integer"},
                     "block_ids": {"type": "array", "items": {"type": "string"}},
@@ -69,6 +69,7 @@ SHOT_SCHEMA: dict[str, Any] = {
                     "first_frame_en": {"type": "string"},
                     "last_frame_en": {"type": "string"},
                     "derive_instruction": {"type": "string"},
+                    "motion": {"type": "string", "enum": ["animate", "camera", "hold"]},
                 },
             },
         }
@@ -91,7 +92,8 @@ SHOT_SYSTEM = """你是分镜师。把剧本切成镜头，并为每个镜头写
 4. asset_keys 填用到的素材 canonical_key（服装/道具/场景/氛围）。
 5. first_frame 写首帧的画面内容：谁在哪、在做什么、什么状态。
    **只写内容，不写画风、不写材质细节** —— 那些由素材库提供。
-6. last_frame 写尾帧的画面内容。
+6. last_frame 写尾帧的画面内容。motion="hold" 或 "camera" 时留空字符串 ——
+   这两类没有派生尾帧，硬写一个只会让出帧环节白跑一次。
 
 6b. first_frame_en / last_frame_en：把上面两句写成**英文**。
     **图像模型不认中文** —— 中文喂进去出来的是一整版汉字纹样，
@@ -100,19 +102,44 @@ SHOT_SYSTEM = """你是分镜师。把剧本切成镜头，并为每个镜头写
       ✓ a man seated behind a door, sabre across his knees, eyes on the door gap
       ✗ Shen Yan sits behind the door and stares at the crack
     中文那两句是给人审核的，两份都要填。
-7. derive_instruction 用一句话说明「尾帧相对首帧变了什么」。
-   **必须是一个看得见的物理动作**：人或物在画面里的位移、开合、抬落。
+7. motion 必须先分成三类，再决定尾帧和 derive_instruction：
+
+   **"hold" = 人物、物件和摄影机都不动。**
+
+   画面在这段时间里没有物理变化：
+      ✓ 对白镜里听的一方，镜头就停在他脸上
+      ✓ 情绪停顿，人一动不动，靠时间本身施压
+      ✓ 空镜定场：屋脊、雨帘、一盏灯
+   标 hold 的镜头**不写 derive_instruction，尾帧留空**。
+   系统直接用首帧保持，不调用视频模型。
+
+   **"camera" = 主体没有首尾状态变化，但镜头仍然是动态的。**
+   用于 3—8 秒对白中的口型、呼吸、眨眼，以及推近、横摇、轻微手持：
+      ✓ 他说完一句话，摄影机缓慢推近，听者在背景中轻微移焦
+      ✓ 无对白的人物静坐，摄影机从侧面缓慢横移揭示门口
+   camera 不生成尾帧，last_frame / last_frame_en 留空；derive_instruction 必填，
+   写清连续运镜、口型或微表演。系统用首帧驱动视频模型，不能标成 hold。
+
+   **"animate" = 主体或关键物件有明确的首尾状态变化。**
+   此时 derive_instruction 必填，一句话说明「尾帧相对首帧变了什么」。
+   **必须是一个看得见的物理动作** —— 人或物在画面里的位移、开合、抬落：
       ✓ 他向前走两步，推开药匣子
       ✓ 他站起身，手按上刀柄
       ✓ 门被推开一半，雨水泼进门槛
       ✗ 脚步声由远及近          ← 声音的变化，画面上什么都不变
-      ✗ 他依然静坐              ← 明说没有变化，首尾帧会一模一样
+      ✗ 他依然静坐              ← 明说没有变化
       ✗ 他收起笑容              ← 表情微变，五秒内看不出来
 
-   写不出可见动作，说明**这一镜本来就不该单独成镜** ——
-   它该并进相邻的镜头，而不是硬凑一句变化说明。
-   宁可少一个镜头，也不要一个首尾帧相同的镜头：
-   那在成片里就是一张静止画面停几秒，观众会以为卡住了。
+   **关键分界：**写不出主体首尾变化，但有持续运镜、说话口型或微表演时标 camera；
+   主体与摄影机都不动才标 hold。不要为了凑 animate 编一句假动作。
+   从前这里要求「宁可少一个镜头」，结果是逼出「他收起笑容」这类假动作 ——
+   首尾帧生成出来几乎一样，视频模型插不出东西，白烧八十秒，
+   成片里还是一张静止画面。标 hold 是诚实的做法，且省掉那八十秒。
+
+   **但 hold 不是偷懒的出口。** 真静态镜控制在**四成以内**：
+   一场戏里连着三镜以上都是 hold，成片就是幻灯片。
+   有人在走、在递、在开门、在动手的，一律 animate。
+   拿不准时优先 animate —— 真动起来比停着安全。
 
    **每一镜的变化说明必须互不相同。** 几镜共用同一句，
    意味着那几镜的尾帧长得一样，剪在一起像同一个画面播了几遍。
@@ -139,7 +166,21 @@ class ShotPlanResult:
     #: 变化说明看不见、已被换成中性说法的镜头。**要报出来** ——
     #: 这个数字等于「有几镜的首尾帧不会有实质差别」，
     #: 而那正是成片看起来像幻灯片的直接原因
+    #:
+    #: 注意：模型主动标 motion="hold" 的镜头**不进这个列表**。
+    #: 那是「这一镜就该是静的」的明示判断，和「编了个看不见的动作」
+    #: 是两回事 —— 前者按静态镜走快路径，后者仍然要挡住重写。
     static_derives: list[dict] = field(default_factory=list)
+    #: 模型判定为静态、走定格/缓推而不出视频的镜头。**要报出来** ——
+    #: 静态镜省掉尾帧 27s + 视频 80s，但比例失控就成幻灯片了。
+    #: 列表长度 / shots 就是静态占比，超过四成该回去看提示词是不是太松。
+    held_shots: list[dict] = field(default_factory=list)
+    #: 只有首帧，但仍要由视频模型完成连续运镜／口型／微表演的镜头。
+    camera_shots: list[dict] = field(default_factory=list)
+    #: 静态镜被分到摇/手持/环绕、已收窄成定格的镜头。**要报出来** ——
+    #: 这个数字等于「导演的运镜比例实际被削了多少」，
+    #: 数字一大说明静态镜占比过高，该回去看分镜而不是调导演包
+    coerced_moves: list[dict] = field(default_factory=list)
     #: 模型漏填、按对白说话人补进去的出场人物。**要报出来** ——
     #: 这个数字等于「有几镜的画面里张嘴的是另一张脸」，
     #: 而台词、配音、时间轴全都对，只有把画面和台词摆在一起才看得出来
@@ -158,6 +199,11 @@ class ShotPlanResult:
             "move_distribution": self.move_distribution,
             "uncovered_blocks": self.uncovered_blocks,
             "static_derives": self.static_derives,
+            "held_shots": self.held_shots,
+            "camera_shots": self.camera_shots,
+            "coerced_moves": self.coerced_moves,
+            "held_ratio": (round(len(self.held_shots) / self.shots, 3)
+                           if self.shots else 0.0),
             "speaker_added": self.speaker_added,
             "split_for_length": self.split_for_length,
             "orphaned_assets": self.orphaned_assets,
@@ -356,6 +402,8 @@ def build_shot_plan(
     seed = int(fingerprint(script_doc.id, director.code)[:8], 16) % (2**31)
     size_alloc = _Allocator(camera.get("shot_sizes") or {}, total_shots, seed)
     move_alloc = _Allocator(camera.get("movement") or {}, total_shots, seed + 1)
+    #: 静态镜做不出摇/手持/环绕，被收窄成定格的记录
+    coerced_moves: list[dict] = []
 
     version = int(
         db.execute(
@@ -412,6 +460,24 @@ def build_shot_plan(
                 transform=transform, entity_catalog=entity_index.catalog(),
                 version=version,
             ))
+        # 语义约束不能只写在提示词里。模型一旦把整场对白都标成 hold，
+        # 后面每层都只会忠实地做成幻灯片。真静态镜最多四成；超出的
+        # 镜头提升为 camera，由连续运镜／口型承担动态，同时仍不伪造尾帧。
+        hold_budget = max(1, int(len(raw_shots) * 0.4)) if raw_shots else 0
+        held_seen = 0
+        for item in raw_shots:
+            kind = str(item.get("motion") or "animate").strip().lower()
+            if kind not in {"animate", "camera", "hold"}:
+                kind = "animate"
+            if kind == "hold":
+                held_seen += 1
+                if held_seen > hold_budget:
+                    kind = "camera"
+                    item["derive_instruction"] = (
+                        as_text(item.get("derive_instruction")).strip()
+                        or "摄影机缓慢推近，人物保持自然呼吸、眨眼或对白口型"
+                    )
+            item["motion"] = kind
         valid_ids = {b.id for b in scene_blocks}
         for item in raw_shots:
             block_ids = [b for b in (item.get("block_ids") or []) if b in valid_ids]
@@ -423,8 +489,15 @@ def build_shot_plan(
                 item.get("description"),
                 *[b.source_text for b in shot_blocks],
             )
+            motion_kind = str(item.get("motion") or "animate").strip().lower()
+            held = motion_kind == "hold"
+            camera_only = motion_kind == "camera"
             slices = _coverage_slices(
-                span, cap=sp.ACTION_MAX_MS if action else sp.STATIC_MAX_MS)
+                span,
+                cap=(sp.HELD_MAX_MS if held else
+                     sp.ACTION_MAX_MS if action and not camera_only else
+                     sp.STATIC_MAX_MS),
+            )
             if len(slices) > 1:
                 result.split_for_length.append({
                     "from_shot": order_no + 1, "span_ms": span,
@@ -443,6 +516,20 @@ def build_shot_plan(
                 order_no += 1
                 size = size_alloc.take() or "ms"
                 move = move_alloc.take() or "static"
+                # **定格镜只能定格或缓推。** 摇镜、手持、环绕要真实的三维位移，
+                # 一张静帧给不出来 —— 下游走的是 ffmpeg，能做的只有这两样。
+                # 导演包的分布里有 pan/handheld，照发给静态镜，
+                # 分镜单上就会写着「摇」而成片是定格，两边对不上。
+                # 这里收窄并报出来，让人知道导演的运镜比例被削了多少。
+                if held and move not in ("static", "push_in"):
+                    coerced_moves.append({"shot": order_no, "from": move})
+                    move = "static"
+                if camera_only and move == "static":
+                    coerced_moves.append({
+                        "shot": order_no, "from": "static", "to": "push_in",
+                        "why": "camera 镜必须有连续运镜或微表演",
+                    })
+                    move = "push_in"
 
                 shot = Shot(
                     id=new_id("sh"), shot_plan_id=plan.id,
@@ -454,6 +541,10 @@ def build_shot_plan(
                         "speed": float(camera.get("speed", 0.4)),
                         "lens_mm": camera.get("lens_mm"),
                         "angle": camera.get("angle_bias"),
+                        "motion_kind": motion_kind,
+                        **({"frame_mode": "first_only"} if
+                           (held or camera_only) else {}),
+                        **({"held_reason": "分镜判定为真正静态镜"} if held else {}),
                     },
                     description=str(item.get("description") or "") or None,
                     status=SpecStatus.pending,
@@ -521,11 +612,32 @@ def build_shot_plan(
                 # 后续动作导演会依据剧本、调度与八工种单，补齐完成该动作
                 # 所需的最小物理过程；在那之前，出帧与出视频都会被硬门禁挡住。
                 derive = as_text(item.get("derive_instruction")) or None
-                vis_ok, vis_why = sp.is_visible_change(derive)
-                if not vis_ok:
-                    result.static_derives.append({
-                        "shot": shot.order_no, "instruction": derive, "why": vis_why,
+                if held:
+                    # 主动标 hold 的不过这道门禁。门禁是用来抓「编了个看不见的
+                    # 动作」的，而这里模型明说了这一镜不动 —— 那是判断，不是失误。
+                    result.held_shots.append({
+                        "shot": shot.order_no,
+                        "description": str(item.get("description") or ""),
                     })
+                    derive = None
+                elif camera_only:
+                    result.camera_shots.append({
+                        "shot": shot.order_no,
+                        "description": str(item.get("description") or ""),
+                        "move": move,
+                    })
+                    vis_ok, vis_why = sp.is_camera_motion(derive)
+                    if not vis_ok:
+                        result.static_derives.append({
+                            "shot": shot.order_no, "instruction": derive,
+                            "why": "camera 镜缺连续运镜／口型／微表演：" + vis_why,
+                        })
+                else:
+                    vis_ok, vis_why = sp.is_visible_change(derive)
+                    if not vis_ok:
+                        result.static_derives.append({
+                            "shot": shot.order_no, "instruction": derive, "why": vis_why,
+                        })
 
                 db.add(FrameSpec(
                     id=new_id("fs"), shot_id=shot.id, role=FrameRole.last,
@@ -560,6 +672,8 @@ def build_shot_plan(
         ).scalars():
             old.status = DocStatus.archived
         plan.status = DocStatus.active
+
+    result.coerced_moves = coerced_moves
 
     db.flush()
     return result

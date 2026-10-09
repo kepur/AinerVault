@@ -9,11 +9,13 @@ import { presetDoc } from "./cameraPresets";
 import { shotReport } from "./shot";
 import { bake } from "./bake";
 import { motionDoc } from "./rig";
+import { stateAt } from "./state";
 
 (globalThis as unknown as { SceneRuntime: unknown }).SceneRuntime = {
   makeBuilder,
   applyOverrides,
   shotReport,
   bake,
+  stateAt,
   catalog: () => ({ ...catalogDoc(), cameraPresets: presetDoc(), motions: motionDoc() }),
 };

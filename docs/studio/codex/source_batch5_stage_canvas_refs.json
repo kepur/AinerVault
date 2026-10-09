@@ -1,0 +1,51 @@
+{
+  "batch": "shared_stage_canvas_references",
+  "files": {
+    "code/apps/ainer-core/app/production/stage_resources.py": "ff83a46949c3ac0dc8bfab3cdc59f686f414428af9e56f909de0f804a8deb843",
+    "code/apps/ainer-core/app/production/canvas_controls.py": "221333e3ce0fbcd8721577ef592bac511675b41efc4ec76fc021ebf68e1353c3",
+    "code/apps/ainer-core/app/production/service.py": "d1b91dcd59513fcf5d5e1ba63533dd7421a2a0d51abbf05b553c965011b93797",
+    "code/apps/ainer-core/app/production/stages.py": "2c9c9f69503f9f65547e4222c05c5f437b415f3dc69624a8af4cc85498b1ed27",
+    "code/apps/ainer-core/app/api/v2/shared_stages.py": "e4e880f010ed10e47fe622eeb75a9d8c934a6412b33d60c4599b8a2898099912",
+    "code/apps/ainer-core/app/api/v2/production.py": "2307c8317af8afb1e0ce33e279a54c226835395108dac14eaaad370e9196b7ac",
+    "code/apps/ainer-core/app/pipelines/canvas_exec.py": "3de94c9b729dae4bff4c81318bfdd7078ad0fc408112fbe35654405924339ccd",
+    "code/apps/ainer-core/app/capability/generic.py": "43853e79c6dd3af8ff19b9aacdc178a72b5e3b3456a489fd3ed947e0012e08f1",
+    "code/apps/ainer-studio/src/production/api.ts": "63d7f90e40315211d91507d6d6badd2312bf717aa672569bc9e47f57b541143e",
+    "code/apps/ainer-studio/src/production/stages.ts": "8a6a474530709155c3fb7f09aaacfb49783258b732a936cd59d1497698603aa4",
+    "code/apps/ainer-studio/src/production/SharedStageWorkspace.tsx": "ce72c8beb009dab045a4ff79242584bb9db681e24d04800db9b8fef8c31ac811",
+    "code/apps/ainer-studio/src/canvas/nodes/SharedStageNode.tsx": "c42bf4a772e4c6e8e666e4915d80813b52da218437d82a584224e87bc312ef99",
+    "code/apps/ainer-studio/src/canvas/nodes/index.ts": "d371b1c33f3f7808182640ece4345aeffa16ba74e979c42b548f4cf3cf3a8670",
+    "code/apps/ainer-studio/src/canvas/nodes/NodeShell.tsx": "96341913f2ffe155fa21102a909b465e82888922d263656d2bdbadd6ae4d2f37",
+    "code/apps/ainer-studio/src/canvas/model.ts": "1d73257b28c2f98e8a4b48100120cc37c2207a8c9999b763e686a02d9e9a5388",
+    "code/apps/ainer-studio/src/canvas/importer.ts": "33bd916a173ed923d21d00d7678d72b601e4a3884ad579e102ce660d80161954",
+    "code/apps/ainer-studio/src/canvas/actions.ts": "38b80d93a0ceaf8a90837f2bbefaab2cb70fbcd57ee4d60f2c60b9e669ff6e02",
+    "code/apps/ainer-studio/src/canvas/contract.ts": "204b9d127a455691c29053be00f4564b05a2b7d96acc82098113381f2cb2cd32",
+    "code/apps/ainer-studio/src/canvas/store.tsx": "c7d2db09b9df7e778a605161d42e8625ac790e8550441f3b199cb10dca9e2ec3",
+    "code/apps/ainer-studio/src/canvas/chrome/TopBar.tsx": "719e8a294b1865a309af6df3ee73d867739de042ba025528fe82d12e718517e7",
+    "code/apps/ainer-studio/src/canvas/chrome/Overlays.tsx": "1bb356e6f731c7707183f0667c787f31d0c6562820142f59b230bf240bee5625",
+    "code/apps/ainer-studio/src/canvas/chrome/BottomBar.tsx": "5f2e27219f01fdc813eaa3800ec724003691897b1b55b10b06c15b6da6c32e50",
+    "code/apps/ainer-studio/src/canvas/chrome/AddMenu.tsx": "ea8f9e564c8909bc8b5d7646d8d2b031700322f523e5cdbfc8887fed7525aff1",
+    "code/apps/ainer-studio/src/canvas/chrome/Dock.tsx": "47ba4121c0525d6726c458352fe10fb5e08f0b53a86308a7304b146ff88de9e8",
+    "code/apps/ainer-studio/src/canvas/tokens.css": "5b8277d16bca6bf9cd541724d38cbdb6ae0a72fae49b937f63c333da8ad8bde5"
+  },
+  "checks": {
+    "python_ast": 8,
+    "app_import_routes": 13,
+    "studio_build": "passed",
+    "functional_QA": "not_run",
+    "GPU": "not_submitted"
+  },
+  "deployment": {
+    "static_ast_files": 8,
+    "shared_stage_routes": 13,
+    "previous_pid": 5599,
+    "active_tasks": {
+      "StudioRun": 0,
+      "StudioNodeRun": 0,
+      "GenTask": 1,
+      "DirectorJob": 0
+    },
+    "functional_tests": "not_run",
+    "GPU_generation": "not_submitted",
+    "deployment": "deferred_active_jobs"
+  }
+}

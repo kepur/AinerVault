@@ -112,19 +112,24 @@ yaw 0 面向 +Z、yaw 90 面向 +X、yaw 180 面向 -Z。两个人对打时要�
                sky: day|dawn|dusk|night|overcast|studio, ground: grid|asphalt|grass|sand|snow|water|stone|floor|dirt, fog 0–1}}
   actors [{{id, name, type: human|vehicle|animal, model_ref, spawn {{position, rotation}}, pose?, appearance {{look: 英文外观描述}}}}]
   props [{{id, prefab, spawn {{position, rotation}}, params?}}]  —— 布景：建筑、路灯、树、车（不动的车也可以放这里）
-  cameras [{{id, name, lens_mm}}]  —— 机位先不写 keys，用时间线里的 camera.* 指令安排运镜
+  cameras [{{id, name, lens_mm}}]  —— 机位在时间线里必须安排运镜或取景
   timeline（time 秒，从 0 起）：
     actor.move_to {{actor, target_position, gait: walk|run, duration?}}     走/跑到某处（不写 duration 按步速算）
     actor.play_action {{actor, action, duration?, target_actor?}}          动作库里的动作；出拳踢腿写 target_actor
     actor.set_pose {{actor, pose}}                                         换姿势
     actor.look_at {{actor, target_actor}}                                  转身面向
-    camera.move {{camera, preset, target, duration}}                       运镜库里的运镜
+    camera.move {{camera, preset, target, duration}}                       运镜库里的运镜（如 push_in, pull_out, static, handheld, dolly_in, side_follow 等）
     camera.follow {{camera, target_actor, style: back|front|side, duration?}}
+    camera.frame {{camera, target, size: ms|cu|ws|mcu|ecu}}                 构图取景（固定机位也必须写 camera.frame 明确对准主体角色，如 target="p1", size="ms"）
     camera.cut {{camera}}                                                  从 time 起切到这台机位（至少要有一条 time=0 的）
   render_plan 不用写。
 
-规则：时间线里引用的 id 必须在 actors/props/cameras 里；time 不能超过 duration_sec；
-动作之间给够时间（出拳 0.6 秒、前踢 0.8 秒、倒地 1.2 秒）；布景别挡住机位（侧跟机位离人约 5 米）。
+规则：
+1. 影视预演必须动态生动（严禁场景静止呆滞）：
+   - 角色动作：主要角色在时间线里必须有连贯生动的动作表演（如 move_to 走位逼近、play_action 出拳/踢腿/闪避/格挡/倒地、set_pose 姿势切换、look_at 转身面向目标）。不能只有开局姿势而无任何时间线动作！
+   - 机位安排：每台机位必须在时间线明确指定取景或运镜（camera.move / camera.follow / camera.frame）。即便提示词要求“机位固定”或“无推拉摇移”，也绝不能只写 camera.cut！必须用 camera.frame（对准主体角色构图）或 camera.move(preset="static", target="p1") 明确对准主角！
+2. 动作节拍：出拳一般 0.6 秒、前踢 0.8 秒、倒地 1.2 秒；动作之间给够反应时间；两人交手必须互相有动作与受击/闪避互动。
+3. 时间线里引用的 id 必须在 actors/props/cameras 里；time 不能超过 duration_sec；布景别挡住机位。
 
 {{CATALOG}}
 
@@ -141,6 +146,85 @@ def _errors(exc: Exception) -> str:
     return str(exc)[:1500]
 
 
+#: 3D-BOX 运行时认的姿势（scene-runtime 的 POSES）。协议层 pose 只是字符串，LLM 常写 standing / cowering /
+#: leaning 这类近义词，校验放过、到 3D-BOX 编译才报错，整镜失败（实跑坏蛋第 1 镜遇到过）
+POSES = frozenset({"stand", "walk", "run", "sit", "crouch", "kneel", "point", "wave", "fight", "lie", "phone",
+                   "arms_crossed", "hands_up", "drive", "aim", "bow"})
+_POSE_ALIAS = {
+    "standing": "stand", "idle": "stand", "lean": "stand", "leaning": "stand", "neutral": "stand",
+    "walking": "walk", "running": "run", "sitting": "sit", "seated": "sit",
+    "crouching": "crouch", "squat": "crouch", "squatting": "crouch", "cower": "crouch", "cowering": "crouch",
+    "huddle": "crouch", "huddled": "crouch", "kneeling": "kneel", "pointing": "point", "waving": "wave",
+    "fighting": "fight", "fight_stance": "fight", "fighting_stance": "fight", "combat": "fight", "threaten": "fight",
+    "threatening": "fight", "aggressive": "fight", "lying": "lie", "lying_down": "lie", "fallen": "lie",
+    "crossed_arms": "arms_crossed", "arms_folded": "arms_crossed", "surrender": "hands_up", "hands_raised": "hands_up",
+    "driving": "drive", "aiming": "aim", "bowing": "bow", "on_phone": "phone", "calling": "phone",
+}
+
+
+def _fix_pose(v: Any) -> str:
+    k = str(v or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if k in POSES:
+        return k
+    if k in _POSE_ALIAS:
+        return _POSE_ALIAS[k]
+    return next((p for p in POSES if p in k), "stand")
+
+
+def normalize_poses(protocol: dict[str, Any]) -> list[str]:
+    """把演员初始姿势和 actor.set_pose 里的姿势落到运行时认的集合里（规则层，不再问模型）。返回修改记录。"""
+    fixes: list[str] = []
+    for a in as_items(protocol, "actors"):
+        if a.get("pose") is not None and a["pose"] not in POSES:
+            new = _fix_pose(a["pose"])
+            fixes.append(f"{a.get('id')} 姿势 {a['pose']} → {new}")
+            a["pose"] = new
+    for o in as_items(protocol, "timeline"):
+        if o.get("op") == "actor.set_pose" and o.get("pose") not in POSES:
+            new = _fix_pose(o.get("pose"))
+            fixes.append(f"{o.get('actor')} 姿势 {o.get('pose')} → {new}")
+            o["pose"] = new
+    return fixes
+
+
+def ensure_camera_framing(protocol: dict[str, Any]) -> list[str]:
+    """确保场景中每台机位都有明确的取景或运镜安排，避免机位没有任何关键帧导致画面空白/静止。"""
+    fixes: list[str] = []
+    cams = as_items(protocol, "cameras")
+    if not cams:
+        return fixes
+    timeline = protocol.setdefault("timeline", [])
+    actors = as_items(protocol, "actors")
+    first_actor = actors[0]["id"] if actors and actors[0].get("id") else None
+
+    framed_cams: set[str] = set()
+    for op in timeline:
+        op_name = op.get("op", "")
+        cid = op.get("camera")
+        if cid and op_name in ("camera.move", "camera.follow", "camera.frame", "camera.keys"):
+            framed_cams.add(cid)
+
+    for c in cams:
+        cid = c.get("id")
+        if not cid:
+            continue
+        if c.get("keys"):
+            framed_cams.add(cid)
+            continue
+        if cid not in framed_cams:
+            target = first_actor or "p1"
+            timeline.insert(0, {"op": "camera.frame", "time": 0, "camera": cid, "target": target, "size": "ms"})
+            fixes.append(f"机位「{cid}」缺乏取景关键帧，自动补充 camera.frame 对准 {target}")
+            framed_cams.add(cid)
+
+    has_cut = any(op.get("op") == "camera.cut" and op.get("time", 0) == 0 for op in timeline)
+    if not has_cut and cams and cams[0].get("id"):
+        timeline.insert(0, {"op": "camera.cut", "time": 0, "camera": cams[0]["id"]})
+        fixes.append(f"补充缺失的起幅切镜 camera.cut 到「{cams[0]['id']}」")
+
+    return fixes
+
+
 def generate_protocol(db: Session, prompt: str, *, duration: float | None = None, model: str | None = None,
                       scene_id: str | None = None) -> tuple[dict[str, Any], list[str]]:
     """一句话 → 协议 JSON（已校验）。返回 (协议, 修改记录)。"""
@@ -154,7 +238,10 @@ def generate_protocol(db: Session, prompt: str, *, duration: float | None = None
         data.setdefault("meta", {}).setdefault("source", {"kind": "llm", "prompt": prompt[:500]})
         try:
             sp = SceneProtocol.model_validate(data)
-            return sp.model_dump(mode="json", exclude_none=True), log
+            out = sp.model_dump(mode="json", exclude_none=True)
+            log += normalize_poses(out)
+            log += ensure_camera_framing(out)
+            return out, log
         except Exception as exc:          # noqa: BLE001
             msg = _errors(exc)
             log.append(msg)

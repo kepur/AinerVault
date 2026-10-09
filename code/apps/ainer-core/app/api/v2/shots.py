@@ -658,7 +658,29 @@ def create_sample(plan_id: str, body: SampleIn, db: Session = Depends(get_db)) -
 
 
 class FrameModeIn(BaseModel):
-    mode: str = Field(pattern="^(first_only|first_last)$")
+    mode: str = Field(pattern="^(hold|camera|animate|first_only|first_last)$")
+
+
+class ImageStyleIn(BaseModel):
+    style: str = Field(pattern="^(photoreal|anime|cinematic|auto)$")
+
+
+@router.patch("/shot-plans/{plan_id}/image-style")
+def image_style(plan_id: str, body: ImageStyleIn, db: Session = Depends(get_db)) -> dict:
+    plan = _plan(db, plan_id)
+    old = (plan.config_json or {}).get("style")
+    plan.config_json = {**(plan.config_json or {}), "style": body.style}
+    shots = list(db.execute(select(Shot).where(Shot.shot_plan_id == plan.id)).scalars())
+    for frame in db.execute(select(FrameSpec).where(
+        FrameSpec.shot_id.in_([s.id for s in shots]))).scalars():
+        frame.params_json = {**(frame.params_json or {}), "style": body.style,
+                            "needs_regeneration": bool(frame.asset_id) if old != body.style
+                            else (frame.params_json or {}).get("needs_regeneration", False)}
+    if old != body.style:
+        for shot in shots:
+            shot.video_asset_id = None
+    db.flush()
+    return {"plan_id": plan.id, "style": body.style, "changed": old != body.style}
 
 
 @router.patch("/shots/{shot_id}/frame-mode")
@@ -666,7 +688,24 @@ def frame_mode(shot_id: str, body: FrameModeIn, db: Session = Depends(get_db)) -
     shot = db.get(Shot, shot_id)
     if shot is None:
         raise HTTPException(404, "shot not found")
-    shot.camera_json = {**(shot.camera_json or {}), "frame_mode": body.mode}
+    # 兼容旧前端的 first_only / first_last，同时把真正语义落成三态。
+    kind = {"first_only": "camera", "first_last": "animate"}.get(
+        body.mode, body.mode
+    )
+    camera = dict(shot.camera_json or {})
+    camera["motion_kind"] = kind
+    if kind in {"hold", "camera"}:
+        camera["frame_mode"] = "first_only"
+    else:
+        camera.pop("frame_mode", None)
+    if kind == "hold":
+        camera["held_reason"] = "人工判定为真正静态镜"
+    else:
+        camera.pop("held_reason", None)
+    shot.camera_json = camera
+    # 制作方式变了，旧视频不能继续冒充新决定的产物。
+    shot.video_asset_id = None
     shot.edited_by_human = True
     db.flush()
-    return {"shot_id": shot.id, "mode": body.mode}
+    return {"shot_id": shot.id, "mode": kind,
+            "frame_mode": camera.get("frame_mode", "first_last")}

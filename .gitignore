@@ -16,3 +16,14 @@ build/
 
 # 同步方言落盘的产物。按内容寻址，重跑会重建，不入库
 code/apps/ainer-core/var/
+
+# 运行数据与流水线输入输出：从未跟踪，但一直占满 git status
+# （gitignore 不支持行尾注释，注释必须单独成行）
+# 数据库备份、日志、媒体产物
+var/
+# 小说原文输入（约 8MB，1923 个 txt）
+novel_texts/
+# 译本输出（约 8MB）
+modified_texts/
+# 本机 agent 会话配置
+.claude/

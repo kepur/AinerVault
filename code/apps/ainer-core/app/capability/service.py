@@ -14,7 +14,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.capability.client import CapabilityClient, canonical_idempotency_key
+from app.capability.client import (
+    CapabilityClient, canonical_idempotency_key, _CAP_MIN_TIMEOUT,
+)
 from app.capability.errors import (
     MAX_ATTEMPTS, RETRY_BACKOFF_SEC, CapabilityError, CapErrorCode,
 )
@@ -312,7 +314,10 @@ def submit_task(
     else:
         db.flush()
 
+    cap_kind = cap.value.split(".", 1)[0]
+    timeout_sec = _CAP_MIN_TIMEOUT.get(cap_kind, 300.0)
     options = TaskOptions(
+        timeout_ms=int(timeout_sec * 1000),
         callback_url=f"{settings.public_base_url}/api/v2/gen-tasks/callback",
         callback_secret=settings.callback_secret,
         max_cost=max_cost,
@@ -529,10 +534,20 @@ def _attach_to_ref(
             from app.pipelines.identity import REF_KIND_TO_VIEW
 
             epoch = db.get(AssetEpoch, ref_id)
-            if epoch is not None:
+            # **认不出的视角要报出来，不能让它被外层的 except 吞掉。**
+            # 加背视图那次：图出了、任务成功、产物也登记了，只有
+            # REF_KIND_TO_VIEW 里没有这一项 —— 回调跑在还没重启的服务
+            # 进程里，抛 KeyError，被吞，于是七个人的设定图全少一格，
+            # 而每一步都显示成功。
+            view = REF_KIND_TO_VIEW.get(ref_kind)
+            if view is None:
+                log.warning(
+                    "认不出的人物参考视角 %s（task=%s）—— 产物没挂回时期。"
+                    "多半是新增了视角而这个进程还是旧代码，重启后重挂即可",
+                    ref_kind, task.id)
+            if epoch is not None and view is not None:
                 doc = dict(epoch.reference_set_json or {})
                 views = dict(doc.get("views") or {})
-                view = REF_KIND_TO_VIEW[ref_kind]
                 current = dict(views.get(view) or {})
                 current.update({
                     "asset_id": assets[0].id,
@@ -572,6 +587,25 @@ def _attach_to_ref(
                 vid = next((a for a in assets if a.kind == AssetKind.video), None)
                 if vid is not None:
                     shot.video_asset_id = vid.id
+                # **静止判定要在结果落地时读，不是提交时读。**
+                # 工作台是异步的，提交那一刻 result_json 还是空的 ——
+                # 在那里读只会永远拿到 None（和 needs_regeneration 当初
+                # 同一类错：读结果的代码写在了提交那一侧）。
+                #
+                # 判定本身很有用：「首尾帧只有 1.2% 像素变化」说明这一镜
+                # 的尾帧没改动，该回去重写变化说明，而不是接受一段闷片。
+                # **判定在 result 的顶层，不在 result["video"] 里面。**
+                # 自述写的是「在 output.motion_decision 里说明」，
+                # 我当初猜成了 output.video.motion_decision —— 于是永远读到
+                # None，而这一层不会报错，只是判定悄悄丢了。
+                out = task.result_json or {}
+                if out.get("motion_decision"):
+                    cam = dict(shot.camera_json or {})
+                    cam["motion_decision"] = out.get("motion_decision")
+                    cam["motion_reason"] = out.get("motion_reason")
+                    if out.get("frame_delta") is not None:
+                        cam["frame_delta"] = out.get("frame_delta")
+                    shot.camera_json = cam
         elif ref_kind == "audio_spec":
             from app.models import AudioSpec, SpecStatus
 
@@ -657,6 +691,29 @@ def poll_task(db: Session, task: GenTask) -> GenTask:
                 db.flush()
             return task
     return apply_task_result(db, task, result)
+
+
+def cancel_task(db: Session, task: GenTask) -> GenTask:
+    """取消：先让中间层停掉（本机 GPU 队列里正在跑的 LTX 不停就一直占着卡），再把本地记成 cancelled。
+
+    中间层取消失败（不支持、已结束、连不上）不挡本地取消，只记一条警告。
+    """
+    if task.status in {TaskStatus.succeeded, TaskStatus.failed, TaskStatus.cancelled}:
+        return task
+    from app.models import CapabilityEndpoint
+
+    ep = db.get(CapabilityEndpoint, task.endpoint_id) if task.endpoint_id else None
+    if ep is not None and task.provider_task_id:
+        try:
+            with CapabilityClient(ep.base_url, auth=ep.auth_json or {}, timeout_sec=ep.timeout_sec,
+                                  dialect=ep.dialect or "capability") as c:
+                c.cancel(task.provider_task_id)
+        except Exception as exc:          # noqa: BLE001
+            task.warnings_json = [*(task.warnings_json or []), f"中间层取消失败：{exc}"[:300]]
+    task.status = TaskStatus.cancelled
+    task.finished_at = datetime.now(timezone.utc)
+    db.flush()
+    return task
 
 
 def due_for_poll(db: Session, limit: int = 50) -> list[GenTask]:

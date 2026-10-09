@@ -7942,9 +7942,10 @@
 	function bake(doc, o = {}) {
 		const fps = o.fps ?? doc.fps ?? 24;
 		const t0 = o.t0 ?? 0;
-		const frames = o.frames ?? frameCount(Math.max(.04, doc.duration - t0), fps);
+		if (o.sampleTimes && (!o.sampleTimes.length || o.sampleTimes.some((t) => !Number.isFinite(t) || t < 0 || t > doc.duration))) throw new Error("采样时间必须在舞台范围内");
+		const frames = o.sampleTimes?.length ?? o.frames ?? frameCount(Math.max(.04, doc.duration - t0), fps);
 		const ev = new SceneEval(doc);
-		const times = Array.from({ length: frames }, (_, i) => t0 + i / fps);
+		const times = o.sampleTimes ?? Array.from({ length: frames }, (_, i) => t0 + i / fps);
 		const byId = new Map(doc.objects.map((x) => [x.id, x]));
 		const skipped = (x) => {
 			for (let cur = x, d = 0; cur && d < 16; cur = cur.parent ? byId.get(cur.parent) : void 0, d++) if (cur.tags.includes("hidden") || cur.prefab === "marker" || cur.prefab === "arrow") return true;
@@ -8098,7 +8099,38 @@
 			},
 			cameras: cams,
 			cuts: doc.cuts,
-			timeline: doc.timeline ?? []
+			timeline: doc.timeline ?? [],
+			...o.sampleTimes ? { sceneTimes: times } : {}
+		};
+	}
+	//#endregion
+	//#region src/scene/state.ts
+	/** Arbitrary-time state uses the exact evaluator and rig used by preview and bake. */
+	function stateAt(doc, t, cameraId) {
+		if (!Number.isFinite(t) || t < 0 || t > doc.duration) throw new Error("场景时间超出舞台范围");
+		const ev = new SceneEval(doc);
+		const camera = cameraId ? doc.cameras.find((c) => c.id === cameraId) : ev.activeCamera(t);
+		if (cameraId && !camera) throw new Error("机位不存在");
+		return {
+			time_ms: t * 1e3,
+			coordinate_system: {
+				unit: "meter",
+				up: "+Y",
+				forward: "+Z",
+				handedness: "right"
+			},
+			instances: doc.objects.map((o) => ({
+				id: o.id,
+				kind: o.kind,
+				ref: o.ref ?? null,
+				parent: o.parent ?? null,
+				world: ev.world(o.id, t),
+				rig: o.kind === "character" ? jointsAt(ev, o, t, mannequinDims(o.body ?? "male", o.size[1])) : null
+			})),
+			camera: camera ? {
+				id: camera.id,
+				...ev.camera(camera, t)
+			} : null
 		};
 	}
 	//#endregion
@@ -8113,6 +8145,7 @@
 		applyOverrides,
 		shotReport,
 		bake,
+		stateAt,
 		catalog: () => ({
 			...catalogDoc(),
 			cameraPresets: presetDoc(),

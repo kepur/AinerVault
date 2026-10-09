@@ -1,4 +1,4 @@
-import type { Blocking, Board, CastMember, ChapterPlans, Figure } from "./types";
+import type { Blocking, Board, CastMember, ChapterPlans, DirectorRun, Figure } from "./types";
 
 const BASE = "/api/v2";
 
@@ -48,18 +48,14 @@ export const api = {
     figures: body.figures.map(({ entity_id, x, top, bottom, width }) => ({ entity_id, x, top, bottom, width })),
   }),
 
-  // 出图都是异步的：提交后靠后台轮询把结果挂回来，画布定时刷新看状态
-  firstFrame: (planId: string, shotId: string) =>
-    call("POST", `/shot-plans/${planId}/first-frames:generate`, {
-      shot_ids: [shotId], regenerate: true, confirm_cost: true,
-    }),
-  lastFrame: (planId: string, shotId: string) =>
-    call("POST", `/shot-plans/${planId}/last-frames:generate`, {
-      shot_ids: [shotId], regenerate: true, confirm_cost: true,
-    }),
-  // 3D 导演出片：LLM 按这一镜搭 3D-BOX 场景 → Blender 控制素材 → LTX 2.5 按控制出片 → 挂回镜头
-  directorShot: (shotId: string) =>
-    call<{ scene_id: string; blender_job_id: string; duration: number }>("POST", `/director/shots/${shotId}:render`, {}),
+  // 3D 导演出片：LLM 按这一镜搭 3D-BOX 场景 → Blender 预演 → 身份首帧（角色库的脸）→ LTX 2.5 按预演出片 → 挂回镜头
+  // sceneId：按这一镜已有的导演场景重出（3D-BOX 里调过的），不重新搭景
+  directorShot: (shotId: string, sceneId?: string) =>
+    call<{ scene_id: string; blender_job_id: string; duration: number }>("POST", `/director/shots/${shotId}:render`,
+      sceneId ? { scene_id: sceneId } : {}),
+  directorRun: (shotId: string) => call<{ run: DirectorRun | null }>("GET", `/director/shots/${shotId}/run`),
+  /** 预演已经渲好：从身份首帧（或失败的成片）接着跑，不重新搭景 */
+  directorContinue: (blenderJobId: string) => call("POST", `/director/jobs/${blenderJobId}:continue`),
   // LTX 2.5：不要首尾帧，一镜一次出片（有对白按配音驱动口型，没对白模型出同步音效）
   video: (planId: string, shotId: string, quality: "preview" | "final" = "final") =>
     call("POST", `/shot-plans/${planId}/videos:ltx25`, {

@@ -22,6 +22,8 @@ export interface BakeOptions {
   frames?: number;
   /** 从第几秒开始 */
   t0?: number;
+  /** Absolute world times, in output-frame order. Used for hold/reverse/retimed coverage. */
+  sampleTimes?: number[];
 }
 
 export interface BakedObject {
@@ -85,6 +87,7 @@ export interface Baked {
   cameras: Record<string, { name: string; frames: number[] }>;
   cuts: Cut[];
   timeline: TimelineOp[];
+  sceneTimes?: number[];
 }
 
 const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
@@ -97,9 +100,11 @@ export function frameCount(duration: number, fps: number): number {
 export function bake(doc: SceneDoc, o: BakeOptions = {}): Baked {
   const fps = o.fps ?? doc.fps ?? 24;
   const t0 = o.t0 ?? 0;
-  const frames = o.frames ?? frameCount(Math.max(0.04, doc.duration - t0), fps);
+  if (o.sampleTimes && (!o.sampleTimes.length || o.sampleTimes.some(t => !Number.isFinite(t) || t < 0 || t > doc.duration)))
+    throw new Error("采样时间必须在舞台范围内");
+  const frames = o.sampleTimes?.length ?? o.frames ?? frameCount(Math.max(0.04, doc.duration - t0), fps);
   const ev = new SceneEval(doc);
-  const times = Array.from({ length: frames }, (_, i) => t0 + i / fps);
+  const times = o.sampleTimes ?? Array.from({ length: frames }, (_, i) => t0 + i / fps);
 
   // 成片里不画的：隐藏的、标记（和它们的子物体）
   const byId = new Map(doc.objects.map(x => [x.id, x]));
@@ -191,5 +196,6 @@ export function bake(doc: SceneDoc, o: BakeOptions = {}): Baked {
     cameras: cams,
     cuts: doc.cuts,
     timeline: doc.timeline ?? [],
+    ...(o.sampleTimes ? { sceneTimes: times } : {}),
   };
 }

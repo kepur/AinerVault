@@ -17,10 +17,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.capability.mediastore import media_root, store_bytes
+from app.capability.mediastore import media_root, store_b64, store_bytes
 from app.capability.schemas import Capability
 from app.db import get_db
 from app.ids import new_id
+from app.pipelines import char_refs
 from app.models import Asset, AssetEpoch, EntityKind, Novel, Preset, WorldEntity
 from app.presets import jobs
 from app.presets import service as ps
@@ -58,12 +59,16 @@ def _urls(db: Session, ids: list[str]) -> dict[str, str]:
     return {a.id: a.url for a in db.execute(select(Asset).where(Asset.id.in_(ids))).scalars()}
 
 
-def _entity_cards(db: Session, only: str | None = None) -> list[dict[str, Any]]:
+def _entity_cards(db: Session, only: str | None = None, novel_id: str | None = None,
+                  bare: bool = False) -> list[dict[str, Any]]:
+    """小说角色卡：有参考图（定妆照）的时期才成卡；bare=True 时没有定妆照的角色也列出来（cover 为空，标 missing）。"""
     from app.pipelines.identity import reference_elements
 
     q = select(WorldEntity).where(WorldEntity.kind == EntityKind.character)
     if only:
         q = q.where(WorldEntity.id == only)
+    if novel_id:
+        q = q.where(WorldEntity.novel_id == novel_id)
     ents = {e.id: e for e in db.execute(q).scalars()}
     if not ents:
         return []
@@ -88,12 +93,25 @@ def _entity_cards(db: Session, only: str | None = None) -> list[dict[str, Any]]:
         described = " ".join(str((el.get(k) or {}).get("en") or "") for k in ("silhouette", "identity", "wardrobe"))
         out.append({
             "id": f"e:{eid}", "source": "novel", "entity_id": eid, "name": e.display_name,
-            "novel": novels.get(e.novel_id), "tags": _infer_tags(f"{described} {e.appearance or ''} {e.summary or ''}"),
+            "novel": novels.get(e.novel_id), "novel_id": e.novel_id, "tags": _infer_tags(f"{described} {e.appearance or ''} {e.summary or ''}"),
             "cover": views.get("front") or views.get("bust"), "views": {**views, **{k: v for k, v in exv.items() if k.startswith("expression")}},
             "look": (el.get("wardrobe") or {}).get("en"), "identity": identity,
             "voice": ((ex.payload_json or {}).get("voice") if ex else None), "epoch": ep.epoch_key,
-            "pending": jobs.pending(f"char:{ex.id}") if ex else 0,
+            "pending": (jobs.pending(f"char:{ex.id}") if ex else 0) + (1 if char_refs.busy(eid) else 0),
+            "refs_job": char_refs.status(eid),
         })
+    if bare:
+        for eid, e in ents.items():
+            if eid in epochs:
+                continue
+            out.append({
+                "id": f"e:{eid}", "source": "novel", "entity_id": eid, "name": e.display_name,
+                "novel": novels.get(e.novel_id), "novel_id": e.novel_id,
+                "tags": _infer_tags(f"{e.appearance or ''} {e.summary or ''}"),
+                "cover": None, "views": {}, "look": None, "identity": "", "voice": None, "epoch": None,
+                "pending": 1 if char_refs.busy(eid) else 0, "refs_job": char_refs.status(eid),
+                "missing": "还没有定妆照：去后台「世界模型 → 人物」出身份锚和参考图",
+            })
     return out
 
 
@@ -135,9 +153,15 @@ def _entity_extra(db: Session, eid: str) -> Preset:
 
 @router.get("")
 def list_characters(scope: str = "official", gender: str | None = None, age: str | None = None,
-                    culture: str | None = None, q: str | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+                    culture: str | None = None, q: str | None = None, novel_id: str | None = None,
+                    db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """scope：official 官方 / mine 我的（造型室存的 + 所有小说角色）/ book 这本书的角色（要 novel_id，连还没定妆照的也列出来）。"""
     ps.ensure_seeded(db, "character")
-    if scope == "official":
+    if scope == "book":
+        if not novel_id:
+            raise HTTPException(422, "scope=book 要带 novel_id")
+        rows = _entity_cards(db, novel_id=novel_id, bare=True)
+    elif scope == "official":
         rows = [_preset_card(p) for p in db.execute(select(Preset).where(Preset.kind == "character", Preset.official.is_(True))
                                                       .order_by(Preset.sort)).scalars()]
     else:
@@ -304,6 +328,18 @@ def _who(tags: dict[str, Any]) -> str:
     return f"{'an' if who[:1].lower() in 'aeio' and not who.startswith('European') else 'a'} {who}"
 
 
+@router.post("/{cid}:references")
+def regenerate_references(cid: str) -> dict[str, Any]:
+    """小说角色一键重出定妆照（本机）：正面全身 → 其余视角 → 拼设定图，后台串着跑。
+
+    定妆照画坏了（多出一双手、背景是厨房、抬着手）用这个：正面强制重出，其余视角因为上游换了自动跟着重出。
+    进度在角色卡的 refs_job 里（state running/done/failed，step front/views/sheet）。
+    """
+    if not cid.startswith("e:"):
+        raise HTTPException(422, "只有小说角色有定妆照参考集；官方 / 我的角色用「生成资产」")
+    return char_refs.start(cid[2:])
+
+
 @router.post("/{cid}:generate")
 def generate(cid: str, body: GenerateIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     """出角色资产。官方角色从零出（立绘→半身→三视图→表情）；小说角色已有参考集，只补表情九宫格。"""
@@ -456,3 +492,59 @@ def preview_voice(body: PreviewIn) -> dict[str, Any]:
                               payload={"text": body.text[:200], "language": body.language, "voice_id": body.voice_id},
                               on_done=lambda db, a: None))
     return {"job_id": j.id}
+
+
+# ── 从外部导入（Vision_Toolbox 照片库的人物卡）─────────────────
+
+class ImportIn(BaseModel):
+    #: 来源里的唯一键（如 vt:e:48459470749626704）；同一个人再导入就更新同一张卡，不会越导越多
+    key: str = Field(min_length=1, max_length=56)
+    name: str = Field(min_length=1, max_length=120)
+    category: str = "照片库人物"
+    look: str | None = None                       # 这一趟穿的（英文），造型室和出图用
+    identity: str | None = None                   # 身份英文描述：年龄性别打头、族裔、脸、体态（不含服装）
+    tags: dict[str, Any] = Field(default_factory=dict)        # {gender, age, culture}，和角色库筛选同一套
+    elements: dict[str, Any] = Field(default_factory=dict)    # 三要素 {identity, silhouette, wardrobe}: {zh, en}
+    images: dict[str, str] = Field(default_factory=dict)      # 视图 → data URL：front（全身）/ bust（半身）/ face（脸）
+    source: dict[str, Any] = Field(default_factory=dict)
+    generate_assets: bool = False                 # 导入后接着出三视图、表情九宫格（要本机出图网关在线）
+
+
+@router.post(":import")
+def import_character(body: ImportIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """真人照片做的人物卡进「我的角色库」：图存进本库媒体目录（按 sha256），三要素和身份描述写进 payload。
+
+    真人的脸来自照片，不用 t2i 从零出立绘；要三视图 / 表情时从这张全身照、半身照派生（generate_assets）。
+    """
+    key = f"import:{body.key}"
+    p = db.execute(select(Preset).where(Preset.kind == "character", Preset.key == key)).scalars().first()
+    old = dict(p.payload_json or {}) if p else {}
+    views = dict(old.get("views") or {})
+    fresh = False
+    for view, data in body.images.items():
+        if not data:
+            continue
+        mime = "image/png" if data.startswith("data:image/png") else "image/jpeg"
+        url = str(store_b64(data, mime=mime)["url"])
+        fresh = fresh or views.get(view) != url
+        views[view] = url
+    if fresh:   # 换了照片：从旧图派生的半身 / 三视图 / 九宫格都作废（新导进来的视图保留）
+        for k in _DERIVED:
+            if k not in body.images:
+                views.pop(k, None)
+    payload = {**old, "tags": body.tags or old.get("tags") or {}, "look": body.look or old.get("look"),
+               "identity": body.identity or old.get("identity"), "elements": body.elements or old.get("elements") or {},
+               "views": views, "source": body.source or old.get("source") or {}}
+    cover = views.get("front") or views.get("bust") or views.get("face")
+    if p is None:
+        p = Preset(id=new_id("ps"), kind="character", key=key, name=body.name[:120], category=body.category[:64],
+                   payload_json=payload, official=False, commercial=False, uses=0, sort=0, author="照片库", cover_url=cover)
+        db.add(p)
+    else:
+        p.name, p.category, p.payload_json, p.cover_url = body.name[:120], body.category[:64], payload, cover
+    db.flush()
+    queued = 0
+    if body.generate_assets and views.get("front") and not jobs.pending(f"char:{p.id}"):
+        queued = _enqueue_assets(p, front_url=views.get("front"), bust_url=views.get("bust"))
+    db.commit()
+    return {**_preset_card(p), "identity": payload.get("identity"), "elements": payload.get("elements"), "queued": queued}

@@ -220,6 +220,13 @@ STATIC_MAX_MS = 8000
 #: 一次踉跄，各自都是一个镜头。三秒会把两三个动作压进一镜，
 #: 而首尾帧只记得住头尾那两个，中间那个在成片里直接消失。
 ACTION_MAX_MS = 2000
+#: 分镜主动标为静态（motion="hold"）且**没有台词**的镜头。
+#:
+#: **4 秒不是 8 秒。** STATIC_MAX_MS 的 8 秒是给对话镜的 ——
+#: 画面定着，但声音一直在走，观众的注意力在台词上。
+#: 空镜定场、情绪停顿没有这层声音，8 秒纯定格观众会以为播放器卡了。
+#: 有台词的静态镜不走这条：它们按台词真实时长给，本来就不受上限钳制。
+HELD_MAX_MS = 4000
 #: 低于这个数观众来不及看清
 MIN_MS = 1200
 
@@ -239,15 +246,23 @@ def is_action_beat(*texts: str | None) -> bool:
     return any(w in blob for w in _ACTION_WORDS)
 
 
-def clamp_shot_ms(ms: int, *, action: bool) -> tuple[int, str]:
+def clamp_shot_ms(ms: int, *, action: bool, held: bool = False) -> tuple[int, str]:
     """把镜头长度收进可用区间，返回（新长度, 原因）。
 
     **超上限要切，不是警告。** 一个九秒的静止镜头在成片里就是九秒不动，
     而它在数据里看着完全正常 —— 只有播到那里的人会难受。
+
+    held 是分镜阶段模型明示的「这一镜不动」，**优先于 action 的关键词猜测**。
+    两者冲突时以 held 为准：关键词表是兜底，模型的标注是判断。
     """
-    cap = ACTION_MAX_MS if action else STATIC_MAX_MS
+    if held:
+        cap, label = HELD_MAX_MS, "定格"
+    elif action:
+        cap, label = ACTION_MAX_MS, "动态"
+    else:
+        cap, label = STATIC_MAX_MS, "静态"
     if ms > cap:
-        return cap, (f"{'动态' if action else '静态'}场景上限 {cap/1000:.0f}s，"
+        return cap, (f"{label}场景上限 {cap/1000:.0f}s，"
                      f"原 {ms/1000:.1f}s 会让同一个动作重复到疲劳")
     if ms < MIN_MS:
         return MIN_MS, f"低于 {MIN_MS/1000:.1f}s 观众来不及看清"
@@ -445,6 +460,17 @@ _VISIBLE = (
     "kneel", "fall", "swing", "point", "grip", "release", "enter", "exit",
 )
 
+#: 不靠第二张关键帧、但在连续视频里能明确看见的运动。
+#: 这组不能混进 _VISIBLE：首尾帧派生仍然只认主体/物件状态变化；
+#: 它专门服务 camera 镜的运镜、口型和微表演验收。
+_CAMERA_MOTION = (
+    "推近", "拉远", "横摇", "纵摇", "摇摄", "跟拍", "跟随", "移焦", "变焦",
+    "手持", "环绕", "口型", "嘴唇", "眨眼", "呼吸", "耸肩", "颤抖",
+    "dolly", "push-in", "push in", "pull-out", "pull out", "pan", "tilt",
+    "truck", "tracking", "follow", "orbit", "handheld", "rack focus", "zoom",
+    "lip", "mouth", "blink", "breath", "shoulder", "tremble",
+)
+
 
 def is_visible_change(text: str | None) -> tuple[bool, str]:
     """首尾帧之间的变化看不看得见。返回（看得见, 说不清的理由）。
@@ -469,6 +495,17 @@ def is_visible_change(text: str | None) -> tuple[bool, str]:
                        "声音归音轨，首尾帧要的是看得见的动作")
     return False, ("看不出这一镜有什么在动。首尾帧要的是物体或人的位移、"
                    "开合、抬落 —— 比如「他向前走两步」「推开药匣子」")
+
+
+def is_camera_motion(*texts: str | None) -> tuple[bool, str]:
+    """单首帧动态镜是否写清连续运镜、口型或微表演。"""
+    raw = " ".join((t or "").strip() for t in texts if (t or "").strip())
+    if not raw:
+        return False, "没有连续运镜、口型或微表演说明"
+    low = raw.lower()
+    if any(word in raw or word in low for word in _CAMERA_MOTION):
+        return True, ""
+    return False, "单首帧动态镜必须写清推拉摇移、移焦、口型或可见微表演"
 
 
 def duplicate_changes(items: list[tuple[int, str | None]]) -> list[dict[str, Any]]:
