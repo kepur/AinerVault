@@ -93,7 +93,13 @@ export function Nav({ view, onChange }: { view: View; onChange: (v: View) => voi
           }
           return (
             <button key={s.id} type="button" className={`stage-btn${cur === s.id ? " on" : ""}`}
-              title={s.hint} onClick={() => { if (cur !== s.id) onChange(s.views[0]); }}>
+              title={s.hint} onClick={() => {
+                if (cur !== s.id) {
+                  onChange(s.views[0]);
+                } else if (s.views.length && view !== s.views[0]) {
+                  onChange(s.views[0]);
+                }
+              }}>
               {s.label}
             </button>
           );

@@ -6,6 +6,7 @@
  * 挂到 .cv-root 下既逃开这个坑，又还在 tokens.css 的变量作用域里。
  */
 import { QuickFilm } from "./QuickFilm";
+import { ScreenplayConfigModal } from "./ScreenplayConfigModal";
 import {
   lazy, Suspense, useEffect, useLayoutEffect, useRef, useState,
   type ReactNode, type RefObject,
@@ -37,7 +38,7 @@ export function isTyping(t: EventTarget | null): boolean {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
 }
 
-function host(): HTMLElement {
+export function host(): HTMLElement {
   return (document.querySelector(".cv-root") as HTMLElement | null) ?? document.body;
 }
 
@@ -288,6 +289,7 @@ export function Overlays() {
   </Suspense>;
 
   if (o.kind === "quick") return <QuickFilm onClose={close} />;
+  if (o.kind === "screenplay_config") return <ScreenplayConfigModal nodeId={o.nodeId} presetId={o.presetId} onClose={close} />;
 
   if (o.kind === "media") {
     return (

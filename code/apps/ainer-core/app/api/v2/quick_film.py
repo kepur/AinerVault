@@ -88,3 +88,22 @@ class FilmPlanIn(BaseModel):
 def plan_film(body: FilmPlanIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     return quick_film.plan_idea(db, body.idea, body.shots, has_outfit=body.has_outfit, has_scene=body.has_scene)
 
+
+class ScreenplayExpandIn(BaseModel):
+    idea: str = Field(..., min_length=1, max_length=10000)
+    genre: str = Field("玄幻修仙逆袭")
+    background: list[str] = Field(default_factory=list)
+    characters: list[str] = Field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
+    style: str = Field("暗调奇幻 CG")
+    episodes: int = Field(35, ge=1, le=120)
+    structure: str = Field("五幕式")
+    mode: str = Field("domestic")
+    target_world: str | None = None
+
+
+@router.post("/screenplay-expand")
+def expand_screenplay_endpoint(body: ScreenplayExpandIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.pipelines import screenplay
+    return screenplay.expand_screenplay(db, body.model_dump())
+

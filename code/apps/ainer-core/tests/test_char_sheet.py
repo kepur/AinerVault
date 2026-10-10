@@ -350,3 +350,26 @@ def test_router_rejects_bad_person_up_front():
         _person_url(None, MediaIn())  # type: ignore[arg-type]
     with pytest.raises(Exception):
         CharSheetIn(person=MediaIn(url="/media/p.png"), preset="huge")
+
+
+def test_tiered_panel_resolutions_and_ref_megapixels():
+    # 全身三视图：512x768, 0.4 MP
+    for k in ("body_front", "body_back", "body_side"):
+        assert cs.panel_size_of(k) == (512, 768)
+        p = cs._edit_payload("prompt", f"{BASE}/media/a.png", [], 1, size=cs.panel_size_of(k))
+        assert (p["width"], p["height"]) == (512, 768)
+        assert p["params"]["ref_megapixels"] == 0.4
+
+    # 面部特写：384x448, 0.25 MP
+    for k in ("face_front", "face_left", "face_right", "face_back"):
+        assert cs.panel_size_of(k) == (384, 448)
+        p = cs._edit_payload("prompt", f"{BASE}/media/a.png", [], 1, size=cs.panel_size_of(k))
+        assert (p["width"], p["height"]) == (384, 448)
+        assert p["params"]["ref_megapixels"] == 0.25
+
+    # 表情特写：256x256, 0.25 MP
+    for k in cs.EXPR_KEYS:
+        assert cs.panel_size_of(k) == (256, 256)
+        p = cs._edit_payload("prompt", f"{BASE}/media/a.png", [], 1, size=cs.panel_size_of(k))
+        assert (p["width"], p["height"]) == (256, 256)
+        assert p["params"]["ref_megapixels"] == 0.25

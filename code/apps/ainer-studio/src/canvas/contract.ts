@@ -110,7 +110,7 @@ export interface CanvasStore {
 
   /* 全屏浮层（打开时画布暂停自己的快捷键） */
   overlay: { kind: "box"; id: string } | { kind: "stage"; shotId: string } | { kind: "media"; url: string; video: boolean }
-    | { kind: "shared_stage"; id?: string } | { kind: "quick" } | null;
+    | { kind: "shared_stage"; id?: string } | { kind: "quick" } | { kind: "screenplay_config"; nodeId?: string; presetId?: string } | null;
   openOverlay(o: CanvasStore["overlay"]): void;
 
   /* 画布首页 / 新建：不挂小说的自由画布（旅拍、相册、一个想法）和章节画布一样能开 */

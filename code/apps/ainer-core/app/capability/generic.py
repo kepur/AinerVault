@@ -117,7 +117,7 @@ class GenerateIn(BaseModel):
     negative_prompt: str | None = None
     refs: list[RefIn] = Field(default_factory=list)
     aspect_ratio: str = "16:9"
-    resolution: str = "720p"
+    resolution: str = "480p"
     duration_ms: int | None = None
     count: int = 1
     seed: int | None = None

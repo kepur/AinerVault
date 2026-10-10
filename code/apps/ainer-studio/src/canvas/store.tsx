@@ -427,7 +427,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   /** 当前画布的元信息（canvasGet 带回来的）：自由画布不在任何章节的列表里，顶栏的标题、类型从这里拿 */
   const [meta, , setMeta] = useRefState<CanvasMeta | null>(null);
   /** 服务端执行器：这张画布的执行状态、各节点最近一次运行 */
-  const [, execRef, setExec] = useRefState<ExecuteState | null>(null);
+  const [exec, execRef, setExec] = useRefState<ExecuteState | null>(null);
   const [, nodeRunsRef, setNodeRuns] = useRefState<Record<string, NodeRun>>({});
   const [pendingFit, setPendingFit] = useState<{ ids: string[] | null; select?: string } | null>(null);
 
@@ -1707,6 +1707,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
             if (latest && ACTIVE_RUN.has(latest.status)) trackRun(latest);
           }, () => undefined);
         }
+        pollRuns().catch(() => undefined);
       } catch (e) {
         if (!stale()) setError(`载入画布失败：${msg(e)}`);
       } finally {
@@ -2099,11 +2100,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     s.first?.status === "generating" || s.last?.status === "generating" || directorPending(s)) ?? false, [live.board]);
   r.boardBusy = boardBusy;
   const hasActive = tasks.some(t => isLive(t.status));
+  const hasExec = !!exec && EXEC_LIVE.has(exec.status);
   useEffect(() => {
-    if (!hasActive && !boardBusy) return;
+    if (!hasActive && !boardBusy && !hasExec) return;
     const timer = window.setInterval(() => { void m.tick(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [hasActive, boardBusy, m]);
+  }, [hasActive, boardBusy, hasExec, m]);
 
   /* ── 快捷键、离开前存盘 ── */
   useEffect(() => {

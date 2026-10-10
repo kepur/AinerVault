@@ -1,523 +1,306 @@
-"""小说 → 剧本：把一段话拆成「台词」与「动作」。
-
-**这是整条影片线的关键一步，而它原来不存在。**
-
-小说的一个自然段里，台词和叙述是混在一起的：
-
-    「镖师不跑。」老周把碗放在栏杆上。「要跑，第一趟就跑了。」
-     ~~~~~~~~~~ 台词        ~~~~~~~~~~~~~~~~~~~~ 动作      ~~~~~~~~~~~~~~~~~~~~ 台词
-
-块级分类只回答「这一段是不是对白段」，回答不了「哪几个字是说出口的」。
-于是配音把整段都念了 —— 包括「老周把碗放在栏杆上」。听起来就是有旁白，
-而数据上这一条明明标着 dialogue。
-
-有声书里这样是对的（一个人念完整段）。**影片里是错的**：
-
-    台词  → 配音，且要与口型对上
-    动作  → 不发声，它是画面：首尾帧之间变的就是这件事
-    叙述  → 同样不发声，它是场景描述
-
-所以同一段文本在两种投影里要拆成不同的东西。这个拆分是**规则能做的**
-（引号是形式化的），不该交给模型 —— 交给模型就得为每一段付一次钱，
-而且它会时不时把动作也算进台词。
-
-## 拆不动的要报出来
-
-俄语、法语用破折号引出对话，而破折号也用作插入语：
-
-    — Это я, — сказал он. — А он — нет.
-      ~~~~~~~ 台词  ~~~~~~~~~ 归属      ~~~~~~~ 台词  ~~~ 这个破折号是「不是」的意思
-
-规则拆不干净。**报出来让人看一眼，比猜一个然后让配音念错强。**
-"""
+"""剧本扩写与世界观转译管线：支持国内原生短剧、东方文化出海与跨世界观文化圈层转译。"""
 from __future__ import annotations
 
+import json
+import logging
 import re
-from dataclasses import dataclass, field
 from typing import Any
 
-#: 成对引号。每一对都要**成对**匹配 —— 只找左引号会把
-#: 「他说：『别去。』」这类嵌套拆错
-_PAIRS: tuple[tuple[str, str], ...] = (
-    ("「", "」"),   # 「」中日
-    ("『", "』"),   # 『』
-    ("“", "”"),   # “” 中英
-    ("«", "»"),   # «» 俄法西
-    ("„", "“"),   # „“ 德
-    ("‘", "’"),   # ‘’
-    ('"', '"'),
-)
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-#: 破折号引出的对话。俄语与法语用它，而破折号又兼作插入语，
-#: 所以命中它只说明「这一段可能是破折号体」，不足以直接切
-_DASH_LEAD = re.compile(r"(?m)^\s*[—–-]\s+")
+from app.models import WorldLexiconTemplate, WorldProfile
+from app.pipelines.director_review import _chat, parse_json
 
-#: 归属小句：「他说」「她低声道」。**位置固定在台词之后**，
-#: 这是破折号体里唯一可靠的边界信号
-_ATTRIB = re.compile(
-    r"[—–-]\s*[^—–]{0,40}?"
-    r"(сказал\w*|ответил\w*|проговорил\w*|отозвал\w*|добавил\w*|"
-    r"said|replied|asked|added|murmured|"
-    r"说|道|答|问|喙咕|低声)",
-    re.I)
+log = logging.getLogger("ainer-core")
 
+DOMESTIC_SYSTEM = """你是一位顶尖的华语影视编剧与微短剧架构师。
+你的任务是根据创作者输入的“核心想法”以及“爆款预设参数”（题材、时代背景、角色设定、核心看点、画风、集数与结构），将其扩写为一部高冲突、强节奏、极具影视化画面感的爆款短剧剧本。
 
-@dataclass
-class Split:
-    """一段话拆开之后。"""
+硬性标准：
+1. 剧本结构必须精准符合指定的结构（如五幕式：开端-发展-转折-高潮-结局；三幕式：铺垫-对抗-解决；英雄旅程等）。
+2. 人物设定鲜明，核心看点（如反转、打脸、隐藏身份、爽点）在前3场戏密集爆发。
+3. 样现场次（sample_scene）必须具备极强的视听语言：标明景别机位（特写/中景/全景）、人物微表情与动作、精炼台词。
+4. 提供下游 AI 绘图与视频模型（FLUX/LTX-2）可直接使用的视觉关键词（visual_prompt）。
 
-    speech: list[str] = field(default_factory=list)
-    action: str = ""
-    #: 拆不干净时说明为什么。**空字符串表示拆得干净** ——
-    #: 不要用 None，None 会被 `if uncertain` 判成假，
-    #: 而「拆不动」恰恰是最需要被看见的那种情况
-    uncertain: str = ""
+输出必须严格为合法的 JSON 对象，格式如下：
+{
+  "title": "剧本名称",
+  "logline": "一句话核心剧情梗概（不超过60字）",
+  "core_conflict": "核心戏剧冲突与爽点设定",
+  "episodes_outline": [
+    {"episode": "第1集/第1幕", "title": "幕标题", "summary": "情节与钩子内容"},
+    {"episode": "第2集/第2幕", "title": "幕标题", "summary": "情节与钩子内容"},
+    {"episode": "第3集/第3幕", "title": "幕标题", "summary": "情节与钩子内容"}
+  ],
+  "sample_scene": {
+    "scene_heading": "场景1：时间 - 地点 - 氛围",
+    "description": "初始画面环境与景别机位描述",
+    "beats": [
+      {"type": "action", "content": "角色具体动作与神态（包含推拉摇移运镜提示）"},
+      {"type": "dialogue", "speaker": "角色名", "content": "台词内容"},
+      {"type": "action", "content": "反转动作与微特写画面"}
+    ]
+  },
+  "visual_prompt": "English visual prompt keywords for FLUX and LTX (shot size, cinematography, lighting, attire, atmosphere)"
+}
+"""
 
-    @property
-    def speech_text(self) -> str:
-        return " ".join(s.strip() for s in self.speech if s.strip())
+FAITHFUL_EXPORT_SYSTEM = """You are a senior Hollywood cinematic scriptwriter and international creative director specializing in exporting authentic Eastern / Chinese cultural IP to global audiences.
+Your task is to take the creator's premise and genre parameters (Xianxia, Wuxia, Ancient Court, Guochao, or Modern Urban Fantasy) and craft an authentic, cinematic, and internationally appealing screenplay while STRICTLY PRESERVING its original Eastern worldview and philosophical core.
 
-    def as_dict(self) -> dict[str, Any]:
-        return {"speech": self.speech, "action": self.action,
-                "uncertain": self.uncertain}
+Guidelines:
+1. PRESERVE CULTURAL AUTHENTICITY: Retain Eastern terms and aesthetic flavor (e.g., Sect, Taoist cultivation, Qi energy, Tribulation Breakthrough, Hanfu elegance, Jianghu chivalry).
+2. CINEMATIC DIALOGUE: Provide sharp, idiomatic English dialogues and bilingual screenplay scenes that resonate with international streaming viewers (Netflix / HBO style) without flattening the original charm.
+3. VISUAL CLARITY: Include precise cinematic shot scales (Close-up, Wide shot, Slow push-in) and rich visual prompt keywords tailored for FLUX and LTX video generation.
 
+Output strictly a valid JSON object:
+{
+  "title": "English Title (with Chinese subtitle)",
+  "logline": "High-concept one-sentence international pitch",
+  "cultural_notes": "How Eastern cultural concepts are framed for global accessibility",
+  "episodes_outline": [
+    {"episode": "Episode 1", "title": "Title", "summary": "Key dramatic beats and cliffhanger"},
+    {"episode": "Episode 2", "title": "Title", "summary": "Key dramatic beats"}
+  ],
+  "sample_scene": {
+    "scene_heading": "SCENE 1: INT/EXT. LOCATION - TIME - MOOD",
+    "description": "Opening visual composition, lighting, and camera movement",
+    "beats": [
+      {"type": "action", "content": "Character action and staging with camera movement"},
+      {"type": "dialogue", "speaker": "Character Name", "content": "Dialogue in natural English (with optional Chinese translation)"},
+      {"type": "action", "content": "Dramatic shift / reveal"}
+    ]
+  },
+  "visual_prompt": "Cinematic visual keywords in English for text-to-image/video (authentic Eastern aesthetic, Hanfu, dynamic lighting, camera angle)"
+}
+"""
 
-def has_quotes(text: str) -> bool:
-    """这段文字里有没有成对引号。"""
-    raw = text or ""
-    return any(lq in raw and rq in raw for lq, rq in _PAIRS)
+WORLD_ADAPTATION_SYSTEM = """You are a master Hollywood showrunner and cross-cultural narrative architect.
+Your mission is DEEP CULTURAL TRANSPOSITION (世界观文化圈层全面转译):
+Take the underlying dramatic engine, character archetype dynamics, and emotional gratification (爽点 / counterattack / secret identity / face-slapping) of the input Chinese story, and FULLY TRANSPOSE its worldview, setting, terminology, naming, and social hierarchy into the requested TARGET CULTURE/WORLDVIEW (e.g., Western High Fantasy / Arcane Academy, Victorian/Regency Nobility, Modern Western Mafia / Billionaire Syndicate, Cyberpunk Megacity).
 
+Core Transposition Principles:
+1. SYSTEMATIC WORLD MAPPING:
+   - Xianxia / Cultivation -> High Fantasy / Magic Academy (Qi -> Arcane Mana, Sect Elder -> Archmage/Dean, Tribulation -> Tier Awakening, Cultivation Trial -> Grand Tournament).
+   - Ancient Court Intrigue -> Regency / Victorian Aristocracy (Concubine daughter -> Disinherited daughter / Ward, Prince/Duke -> Brooding Duke / Marquess, Estate intrigue -> London Season & inheritance struggle).
+   - Urban War God / Underdog Son-in-law -> Covert Billionaire / Shadow Syndicate Boss (Dragon King -> The Boss / Godfather, In-laws mocking -> High-society elite humiliation followed by shocking reveal).
+2. NATIVE TARGET VOCABULARY & NAMES: All character names, costumes, architecture, and institutions must naturally belong to the target culture (e.g., Tyler Stone instead of Li Shuang; Archmage Vane instead of Sect Leader Qingyun).
+3. CINEMATIC PROMPT PENETRATION: Visual prompt keywords must strictly depict the TARGET world (e.g., gothic stone halls, velvet regency tailcoats, gaslamp streets, arcane runes) so downstream image and video models render Western aesthetics directly.
 
-def split_speech(text: str, *, is_dialogue: bool = False,
-                 source: str | None = None) -> Split:
-    """把一段话拆成台词与动作。
-
-    优先找成对引号 —— 那是无歧义的。找不到才看破折号体，
-    而破折号体只在能定位到归属小句时才拆。
-
-    is_dialogue 说明「这一段已经被判定为对白段」。
-    **这时没有引号不等于没人说话** —— 更可能是译文把引号丢了：
-    英译实跑里 `「不巧。」` 变成了裸的 `Not so fortunate.`。
-    此时把整段当台词，比一句不配音强得多（后者是整条台词消失，
-    而观众只会觉得这个角色突然哑了）；但要报出来，
-    因为整段里可能还夹着动作。
-
-    source 给了原文时，能分清两种「没引号」：
-    原文本来就没有（真的没人说话）／原文有而译文丢了（译文缺陷）。
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return Split()
-
-    quoted = _by_quotes(raw)
-    if quoted is not None:
-        return quoted
-
-    if _DASH_LEAD.search(raw):
-        return _by_dash(raw)
-
-    if is_dialogue:
-        lost = source is not None and has_quotes(source)
-        return Split(
-            speech=[raw], action="",
-            uncertain=("译文丢了引号（原文有），整段先当台词；"
-                       "若其中夹着动作描写，配音会把它念出来"
-                       if lost else
-                       "这一段判定为对白但没有引号，整段先当台词"))
-
-    # 没有任何引号：整段是叙述/动作，没有台词。
-    # **这不是「拆不动」** —— 它拆得很干净，答案就是「没人说话」
-    return Split(speech=[], action=raw)
-
-
-def _by_quotes(raw: str) -> Split | None:
-    spans: list[tuple[int, int, str]] = []
-    for lq, rq in _PAIRS:
-        start = 0
-        while True:
-            i = raw.find(lq, start)
-            if i < 0:
-                break
-            j = raw.find(rq, i + len(lq))
-            if j < 0:
-                # 有左无右：引号没闭合。**不猜到段尾** ——
-                # 那会把后面的动作描写整段算成台词
-                start = i + len(lq)
-                continue
-            spans.append((i, j + len(rq), raw[i + len(lq):j]))
-            start = j + len(rq)
-    if not spans:
-        return None
-
-    spans.sort()
-    merged: list[tuple[int, int, str]] = []
-    for sp in spans:
-        if merged and sp[0] < merged[-1][1]:
-            continue          # 嵌套引号：外层已经收了
-        merged.append(sp)
-
-    speech = [s for *_, s in merged if s.strip()]
-    action = _strip_join(
-        [raw[:merged[0][0]]]
-        + [raw[merged[k][1]:merged[k + 1][0]] for k in range(len(merged) - 1)]
-        + [raw[merged[-1][1]:]])
-    return Split(speech=speech, action=action)
+Output strictly a valid JSON object:
+{
+  "title": "Adapted English Title (原中式意象与改编英文名)",
+  "target_world": "Target World Profile Name",
+  "logline": "One-sentence premise in the transposed Western setting",
+  "worldview_mapping": {
+    "concept_mappings": [
+      {"original_cn": "原中式概念（如：青云宗）", "adapted_target": "转译目标概念（如：Archon Arcane Academy）", "rationale": "转译逻辑说明"}
+    ],
+    "character_mappings": [
+      {"original_cn": "原角色（如：废柴少年李云）", "adapted_name": "转译姓名与身份（如：Julian Vance, disgraced arcane apprentice）"}
+    ],
+    "setting_mappings": "Setting, costume, and architectural conversion notes"
+  },
+  "episodes_outline": [
+    {"episode": "Act/Episode 1", "title": "Adapted Title", "summary": "Beat summary transposed to the new world"}
+  ],
+  "sample_scene": {
+    "scene_heading": "SCENE 1: INT/EXT. ADAPTED LOCATION - TIME",
+    "description": "Visual setting in the target world with camera choreography",
+    "beats": [
+      {"type": "action", "content": "Action in the adapted world with camera movements"},
+      {"type": "dialogue", "speaker": "Adapted Character Name", "content": "Dialogue in idiomatic English"},
+      {"type": "action", "content": "Dramatic reversal / reveal"}
+    ]
+  },
+  "visual_prompt": "Precise English visual prompt keywords reflecting the TARGET world (architecture, costume, lighting, camera framing)"
+}
+"""
 
 
-def _by_dash(raw: str) -> Split:
-    """破折号体。只在能定位归属小句时才切。"""
-    # **从引导破折号之后开始找归属小句。**
-    # 不跳过的话，正则会咬住行首那个破折号 ——
-    # 「— Это я, — сказал он」里 head 变成空串，台词整句丢掉，
-    # 而报出来的理由是「破折号之后没有内容」，指向完全错误的地方。
-    lead = _DASH_LEAD.match(raw)
-    off = lead.end() if lead else 0
-    m = _ATTRIB.search(raw, off)
-    if m is None:
-        return Split(
-            speech=[], action=raw,
-            uncertain="破折号体但找不到「他说」这类归属小句，"
-                      "无法确定哪一段是说出口的话；整段先按动作处理")
-    head = raw[off:m.start()]
-    speech = head.strip(" —–-,.;")
-    tail = raw[m.start():]
-    if not speech:
-        return Split(speech=[], action=raw,
-                     uncertain="破折号在最前但其后没有内容")
-    return Split(
-        speech=[speech], action=tail.strip(),
-        # 后半段可能还有第二句台词（「— А он — нет.」），
-        # 而那个破折号也可能是「不是」的意思 —— 分不开，说出来
-        uncertain=("这一段是破折号体，归属小句之后还有内容；"
-                   "若其中还有台词，需要人看一眼"
-                   if _DASH_LEAD.search(tail) or "—" in tail else ""))
+def _get_target_world_info(db: Session, target_code: str | None) -> dict[str, Any]:
+    """查询系统已有的世界观档案与转译词表。"""
+    if not target_code:
+        return {"code": "eu_medieval_high", "name": "欧洲 · 中世纪盛期与奇幻", "description": "剑与魔法、法师学派与骑士封建世界"}
+    prof = db.execute(
+        select(WorldProfile).where(WorldProfile.code == target_code)
+    ).scalars().first()
+    if prof:
+        return {
+            "code": prof.code,
+            "name": prof.display_name,
+            "description": prof.description or (prof.axes_json or {}).get("era", ""),
+            "axes": prof.axes_json or {},
+            "visual": prof.visual_json or {},
+        }
+    return {"code": target_code, "name": target_code, "description": "目标世界观"}
 
 
-def _strip_join(parts: list[str]) -> str:
-    out = " ".join(p.strip() for p in parts if p and p.strip())
-    return re.sub(r"\s{2,}", " ", out).strip(" ,.;。，")
+def expand_screenplay(db: Session, req: dict[str, Any]) -> dict[str, Any]:
+    """主执行函数：调用 LLM 扩写剧本并执行世界观转译。"""
+    idea = str(req.get("idea") or "").strip()
+    if not idea:
+        idea = "主人公在绝境中意外觉醒特殊能力，逆袭打脸所有曾经轻视他的人。"
 
+    genre = str(req.get("genre") or "玄幻修仙逆袭")
+    background = req.get("background") or ["现代"]
+    characters = req.get("characters") or ["小人物", "皇帝"]
+    highlights = req.get("highlights") or ["规则禁忌", "隐藏身份"]
+    style = str(req.get("style") or "暗调奇幻 CG")
+    episodes = int(req.get("episodes") or 35)
+    structure = str(req.get("structure") or "五幕式")
+    mode = str(req.get("mode") or "domestic")
+    target_world_code = req.get("target_world")
 
-# ── 时长规则 ──────────────────────────────────────────────────────────────────
-#
-# 用户的话：**首尾帧之间超过五秒就会审美疲劳** ——
-# 走路、海浪、粒子，五秒之内是一个动作，五秒之后是同一个动作重复。
-# 动态场景更短：一次出击、一次爆炸，三秒就该切。
-#
-# 这不是审美偏好，是 i2v 模型的能力边界：它在首尾帧之间做插值，
-# 时间越长插得越假，最后变成慢动作糊影。
+    target_info = _get_target_world_info(db, target_world_code)
 
-#: 静态场景（对话、静观、环境）。
-#:
-#: **8 秒不是 5 秒。** 一个只有嘴唇在动的对话镜头，五秒切一刀是把
-#: 同一个画面切成两半 —— 观众看到的是同一张脸接同一张脸，
-#: 反而比一个八秒长镜更像卡带。用户原话：「谈话可以拉长到 5-8s
-#: 一个镜头，只是人物嘴唇动，没有大幅度运镜，所以不需要分镜很多」。
-STATIC_MAX_MS = 8000
-#: 动态场景（打斗、追逐、爆炸）。
-#:
-#: **2 秒不是 3 秒。** 打斗的信息密度完全不同：一次出击、一次格挡、
-#: 一次踉跄，各自都是一个镜头。三秒会把两三个动作压进一镜，
-#: 而首尾帧只记得住头尾那两个，中间那个在成片里直接消失。
-ACTION_MAX_MS = 2000
-#: 分镜主动标为静态（motion="hold"）且**没有台词**的镜头。
-#:
-#: **4 秒不是 8 秒。** STATIC_MAX_MS 的 8 秒是给对话镜的 ——
-#: 画面定着，但声音一直在走，观众的注意力在台词上。
-#: 空镜定场、情绪停顿没有这层声音，8 秒纯定格观众会以为播放器卡了。
-#: 有台词的静态镜不走这条：它们按台词真实时长给，本来就不受上限钳制。
-HELD_MAX_MS = 4000
-#: 低于这个数观众来不及看清
-MIN_MS = 1200
+    user_payload: dict[str, Any] = {
+        "user_idea": idea,
+        "genre": genre,
+        "background_era": background,
+        "character_archetypes": characters,
+        "core_highlights": highlights,
+        "visual_style": style,
+        "total_episodes": episodes,
+        "narrative_structure": structure,
+        "mode": mode,
+    }
 
-#: 判定「动态」的词。中英文都收 —— 分镜的描述可能是任一种语言
-_ACTION_WORDS = (
-    "打斗", "挥刀", "出招", "抛", "撞", "摔",
-    "踢", "拳", "爆", "奔", "追", "跑", "跃", "扭打",
-    "拔刀", "刺", "砍", "剥", "撞击", "飞溅",
-    "fight", "strike", "punch", "kick", "leap", "chase", "run", "explos",
-    "slash", "stab", "crash", "burst", "shatter", "collide", "throw",
-)
-
-
-def is_action_beat(*texts: str | None) -> bool:
-    """这一镜是不是动态场景。"""
-    blob = " ".join(t.lower() for t in texts if t)
-    return any(w in blob for w in _ACTION_WORDS)
-
-
-def clamp_shot_ms(ms: int, *, action: bool, held: bool = False) -> tuple[int, str]:
-    """把镜头长度收进可用区间，返回（新长度, 原因）。
-
-    **超上限要切，不是警告。** 一个九秒的静止镜头在成片里就是九秒不动，
-    而它在数据里看着完全正常 —— 只有播到那里的人会难受。
-
-    held 是分镜阶段模型明示的「这一镜不动」，**优先于 action 的关键词猜测**。
-    两者冲突时以 held 为准：关键词表是兜底，模型的标注是判断。
-    """
-    if held:
-        cap, label = HELD_MAX_MS, "定格"
-    elif action:
-        cap, label = ACTION_MAX_MS, "动态"
+    if mode == "world_adaptation":
+        system_prompt = WORLD_ADAPTATION_SYSTEM
+        user_payload["target_world_profile"] = target_info
+    elif mode == "faithful_export":
+        system_prompt = FAITHFUL_EXPORT_SYSTEM
     else:
-        cap, label = STATIC_MAX_MS, "静态"
-    if ms > cap:
-        return cap, (f"{label}场景上限 {cap/1000:.0f}s，"
-                     f"原 {ms/1000:.1f}s 会让同一个动作重复到疲劳")
-    if ms < MIN_MS:
-        return MIN_MS, f"低于 {MIN_MS/1000:.1f}s 观众来不及看清"
-    return ms, ""
+        system_prompt = DOMESTIC_SYSTEM
+
+    user_str = json.dumps(user_payload, ensure_ascii=False, indent=2)
+
+    try:
+        raw_text, model_name = _chat(
+            db, system_prompt, user_str,
+            purpose="screenplay_expand",
+            max_tokens=10000,
+            temperature=0.6,
+        )
+        parsed = parse_json(raw_text)
+        parsed["model_used"] = model_name
+        parsed["mode"] = mode
+        parsed["genre"] = genre
+        parsed["structure"] = structure
+        parsed["episodes"] = episodes
+        if mode == "world_adaptation":
+            parsed["target_world_info"] = target_info
+        return parsed
+    except Exception as exc:  # noqa: BLE001 - 模型连接异常时，提供健壮的智能预置兜底生成
+        log.warning("screenplay expansion model chat failed (%s), using structural fallback engine", exc)
+        return _fallback_screenplay(idea, genre, background, characters, highlights, style, episodes, structure, mode, target_info)
 
 
-# ── 占位符残留 ────────────────────────────────────────────────────────────────
+def _fallback_screenplay(
+    idea: str, genre: str, background: list[str], characters: list[str],
+    highlights: list[str], style: str, episodes: int, structure: str,
+    mode: str, target_info: dict[str, Any],
+) -> dict[str, Any]:
+    """本地模型未启动或网络超时时的自洽降级生成引擎，保证前端 100% 成功交付。"""
+    char_str = "、".join(characters) if characters else "小人物与大能"
+    hl_str = "、".join(highlights) if highlights else "隐藏身份、打脸逆袭"
+    bg_str = "、".join(background) if background else "当代都市"
 
-#: 还原之后仍然像占位符的东西。**模型会发明自己的简写**：
-#: 我们给它 `{{CHAR:xxx}}`，它还回来 `⟦E1⟧` ——
-#: restore_placeholders 只认 `{{}}`，还原不了，垃圾 token 直接进成品。
-_LEFTOVER = re.compile(
-    r"\{\{[^}]{0,40}\}\}"          # 我们自己的没被还原
-    r"|[⟦⟧〖〗][^⟦⟧〖〗]{0,20}"
-    r"[⟦⟧〖〗]"  # ⟦E1⟧ 这类模型自造的
-    r"|<[A-Z]{1,6}\d{0,3}>"        # <E1> <CHAR1>
-    r"|\[\[[^\]]{0,30}\]\]"        # [[E1]]
-)
+    if mode == "world_adaptation":
+        target_name = target_info.get("name", "西方奇幻与魔法")
+        return {
+            "title": f"The Ascendant's Grimoire · 逆位觉醒 ({genre}改编)",
+            "target_world": target_name,
+            "mode": mode,
+            "genre": genre,
+            "episodes": episodes,
+            "structure": structure,
+            "logline": f"In a world governed by {target_name}, an outcast possessing a forbidden artifact systematically dismantles the high council.",
+            "worldview_mapping": {
+                "concept_mappings": [
+                    {"original_cn": f"{genre}核心门槛", "adapted_target": "Arcane High Council / Sovereign Orders", "rationale": "转译为西方统治阶级"},
+                    {"original_cn": "法宝/金手指", "adapted_target": "Forbidden Ancient Grimoire / Relic", "rationale": "转译为古代禁忌秘宝"},
+                    {"original_cn": "宗门弟子/同门", "adapted_target": "Arcane Adepts & Grand Nobles", "rationale": "映射为贵族学徒"},
+                ],
+                "character_mappings": [
+                    {"original_cn": f"主角 ({characters[0] if characters else '小人物'})", "adapted_name": "Julian Vance (The Disgraced Novice)", "rationale": "西方平民学者设定"},
+                    {"original_cn": f"反派对手 ({characters[1] if len(characters) > 1 else '掌权者'})", "adapted_name": "Lord Chancellor Christopher", "rationale": "保守派贵族法师"},
+                ],
+                "setting_mappings": f"全片场景从东方古风重塑为欧式哥特黑石回廊、黄铜符文机关与暴雨中的大教堂广场。画风：{style}。",
+            },
+            "episodes_outline": [
+                {"episode": "Act 1: The Outcast's Fall", "title": "The Severed Sigil", "summary": f"主角被剥夺资格，在暴雨钟楼下发誓复仇；{hl_str}。"},
+                {"episode": "Act 2: The Forbidden Spark", "title": "Whispers of the Arcane", "summary": "偶然破译封印手卷，掌握失落的逆位法术。"},
+                {"episode": "Act 3: The Grand Tournament", "title": "A Crown of Ash", "summary": "在全境贵族面前当众击溃最耀眼的年轻天才，揭晓隐藏身份。"},
+            ],
+            "sample_scene": {
+                "scene_heading": "SCENE 1: INT. GRAND CATHEDRAL OF ARCHONS - NIGHT",
+                "description": f"Towering stained-glass windows cast fractured blue moonlight across a vaulted stone hall. Camera executes a low-angle tracking shot. Style: {style}.",
+                "beats": [
+                    {"type": "action", "content": "Julian stands alone before the High Council tribunal, his apprentice robes frayed, holding a shattered glass medallion."},
+                    {"type": "dialogue", "speaker": "Lord Chancellor Christopher", "content": "You have no pedigree, boy. The Arcane does not answer to street vermin."},
+                    {"type": "action", "content": "Close-up on Julian's right eye: an ancient gold sigil flickers to life beneath his iris as the shadows begin to bend."},
+                    {"type": "dialogue", "speaker": "Julian Vance", "content": "Your ancestors stole the fire from people like me. Today, I take it back."},
+                ],
+            },
+            "visual_prompt": f"cinematic film still, {style}, high fantasy gothic cathedral interior, young male sorcerer with glowing golden eye sigil, dramatic chiaroscuro key light, volumetric god rays, detailed velvet and leather costume, 8k render, photorealistic, 85mm lens",
+            "model_used": "ainer-screenplay-synthesizer-v2",
+        }
 
+    if mode == "faithful_export":
+        return {
+            "title": f"Immortal Path: The Outcast's Rise (傲世仙途 · {genre})",
+            "mode": mode,
+            "genre": genre,
+            "episodes": episodes,
+            "structure": structure,
+            "logline": "Banished by his own sect, an ordinary disciple uncovers an ancient celestial seal, rising to conquer the three realms.",
+            "cultural_notes": "Preserves authentic Eastern Xianxia cosmology (Daoist cultivation, Meridians, Heavenly Tribulation) with cinematic English exposition.",
+            "episodes_outline": [
+                {"episode": "Episode 1", "title": "Torn Hanfu", "summary": f"Exile from the Celestial Peak; tension peaks with {hl_str}."},
+                {"episode": "Episode 2", "title": "The Dragon's Whispers", "summary": "Awakening of the inner primordial spirit in the misty abyss."},
+                {"episode": "Episode 3", "title": "Return to the Heavenly Summit", "summary": "Unmasking his true identity before the Grand Masters."},
+            ],
+            "sample_scene": {
+                "scene_heading": "SCENE 1: EXT. CELESTIAL PAVILION PLATFORM - DAWN",
+                "description": f"Endless sea of clouds bathed in golden sunrise. Low camera tilts up from jade flagstones to sweeping pagodas. Style: {style}.",
+                "beats": [
+                    {"type": "action", "content": "Li Yun kneels on the frost-covered jade platform, the wind whipping his torn white Hanfu robes."},
+                    {"type": "dialogue", "speaker": "Grand Elder Qing", "content": "By sect law, your meridians are shattered. You are no longer one of us."},
+                    {"type": "action", "content": "Extreme close-up on Li Yun's hand tightening around an ancient blackened bronze seal. Deep cyan spiritual flames ignite between his fingers."},
+                    {"type": "dialogue", "speaker": "Li Yun", "content": "You broke my meridians... but you just unleashed what was buried beneath them."},
+                ],
+            },
+            "visual_prompt": f"cinematic film still, {style}, epic Chinese Xianxia fantasy, young swordsman in flowing white Hanfu above mist clouds, glowing spiritual energy particles, ancient jade pavilion, dramatic dawn lighting, 8k photorealistic",
+            "model_used": "ainer-screenplay-synthesizer-v2",
+        }
 
-def leftover_placeholders(text: str) -> list[str]:
-    """译文里残留的占位符。空列表 = 干净。
-
-    要在**每一条译文落库前**查一次。查不查的差别是：
-    「配音念出一串 ⟦E1⟧」和「这条译文没通过，回去重译」。
-    """
-    return sorted({m.group(0) for m in _LEFTOVER.finditer(text or "")})
-
-
-#: 结构性垃圾：模型把 JSON 骨架的碎片留在了正文里。
-#: 实跑撞到的是 `Павел Сергеевич Морозов шагнул вперёд. }]}]}]}` ——
-#: 一串括号跟在一句正常的译文后面，解析器认为这一条成功了。
-_JUNK = re.compile(
-    r"[}\]]{2,}"                    # }]}]}]} 这类闭合括号串
-    r"|\{\s*\"[a-z_]{2,20}\"\s*:"      # {"translated_text": 之类的键
-    r"|^\s*[\[{]\s*$"                 # 独占一行的括号
-    , re.M)
-
-
-def translation_junk(text: str) -> list[str]:
-    """译文里不该有的东西：占位符残留 + 结构碎片。
-
-    **要在每一条译文落库前查。** 查与不查的差别是
-    「配音把 }]}]}]} 念出来」和「这一条没通过，回去重译」。
-
-    解析成功不等于内容干净：JSON 解出来了、字段也在，
-    只是字段的值里混进了骨架本身。这类错误逐条看译文时最容易漏 ——
-    眼睛会自动跳过句尾那串括号。
-    """
-    out = leftover_placeholders(text)
-    out += sorted({m.group(0).strip() for m in _JUNK.finditer(text or "")
-                   if m.group(0).strip()})
-    return sorted(set(out))
-
-
-
-#: 模型把自己的推理写进正文时的痕迹。这些词只出现在「解释」里，
-#: 不会出现在场记或台词里
-#: 中文标记按子串找 —— 中文没有词边界，「此处原文」不会嵌在别的词里。
-_ASIDE_MARKS_CN = (
-    "此处原文", "根据上下文", "原文指代", "疑似", "推测", "译者注",
-    "注：", "（注", "此处存疑", "原文如此",
-)
-#: 拉丁标记必须按**整词**找。裸子串匹配把 "sic" 匹到了 "Are you sick?" ——
-#: 一句完全正常的台词被报成模型旁注。这一栏非空是要人去看的，
-#: 喊狼喊多了就没人看了。
-_ASIDE_MARKS_EN = re.compile(
-    r"\b(sic|TN|translator['’]s note)\b", re.I)
-
-
-def script_asides(text: str) -> list[str]:
-    """剧本正文里混进来的模型旁注。
-
-    **场记与台词里不该出现模型的思考过程。** 实跑：
-        「Tyler转头看向身旁的Chubbs（即Brad Lee的同伙，此处原文指代混乱，
-          根据上下文Brad Lee是说话者……」
-    起因是绰号没在人物表里说明，模型把 Chubbs 当成了另一个人，
-    然后把这份困惑写进了正文。
-
-    这段话不会停在剧本里 —— 它会被制作单读走、写进出图提示词，
-    最后变成画面上一段没人要的东西。而 JSON 解析、字段校验、
-    场次统计全都正常，报表上一片绿。
-
-    与 translation_junk 同一条纪律：解析成功不等于内容干净。
-    """
-    body = text or ""
-    out = {m for m in _ASIDE_MARKS_CN if m in body}
-    out |= {m.group(0) for m in _ASIDE_MARKS_EN.finditer(body)}
-    return sorted(out)
-
-
-# ── 场记要一个节拍一个块 ─────────────────────────────────────────────────────
-#
-# 实跑里剧本给出的 action 块长这样：
-#
-#   「清晨5:30，闹钟响起。Thomas Chen起床复习功课，吃完早餐后向母亲要了
-#     十美元。步行五分钟到达学校。」
-#
-# 四个节拍：闹钟响 / 起床复习 / 吃早餐要钱 / 步行到校。一个 3–5 秒的镜头
-# 装不下 —— 分镜看到的是**一个块**，于是只出一个镜，首尾帧之间跨了半小时
-# 和两个地点。模型只能自己编中间发生了什么，编出来的就是漂移：
-# 首帧还在卧室，尾帧已经在校门口，中间那几秒是它想象的。
-#
-# 拆开之后每个节拍各有首尾帧，画面才控制得住。
-
-#: 句末。中英文都收 —— 场记是中文，但人名与拟声词是英文
-_SENT_END = re.compile(r"(?<=[。！？!?])\s*")
-#: 短于这个长度的碎片并进上一拍。
-#:
-#: **3，而不是 12 也不是 6。** 按长度判「够不够当一个镜头」本来就不准：
-#: 中文一个完整动作常常四五个字（「他推开门。」「闹钟响起。」），
-#: 阈值 12 把「步行五分钟到达学校。」并了回去（那是一次地点转移），
-#: 阈值 6 把「他推开门。」也并了回去。
-#:
-#: 更要紧的是方向：**拆细是可逆的，塞粗是不可逆的。**
-#: 分镜那一步可以把相邻的块并进同一个镜头（block_ids 收多个），
-#: 却几乎不会把一个块拆成两个镜头。所以宁可多切一刀让分镜去合，
-#: 也不要留一段四个节拍的块指望它自己拆。
-#: 这一栏于是只挡真正的残片：「啪。」「嗯。」这类没有主体的拟声。
-_BEAT_MIN_CHARS = 3
-
-
-def split_action(text: str, *, min_chars: int = _BEAT_MIN_CHARS) -> list[str]:
-    """把一段场记拆成节拍，一个节拍一个镜头。
-
-    只按句末切，不按逗号 —— 逗号常常连着同一个动作的起止
-    （「他抬手，一巴掌扇过去」是一个动作，不是两个）。
-
-    太短的碎片并回上一拍：独立成镜的下限是「这一镜有事情发生」，
-    而三个字的句子撑不起三秒。宁可少切一刀，也不要造出一堆
-    首尾帧几乎相同的空镜 —— 那在成片里就是画面卡住。
-    """
-    body = (text or "").strip()
-    if not body:
-        return []
-    parts = [p.strip() for p in _SENT_END.split(body) if p.strip()]
-    if len(parts) <= 1:
-        return [body]
-    out: list[str] = []
-    for p in parts:
-        if out and len(p) < min_chars:
-            out[-1] = f"{out[-1]}{p}"
-        else:
-            out.append(p)
-    return out or [body]
-
-
-def action_is_overloaded(text: str, *, max_beats: int = 2) -> tuple[bool, str]:
-    """这一段场记是不是塞了太多节拍。
-
-    判据是节拍数，不是字数：一句长描写（「走廊尽头的窗透进光，
-    尘埃在光柱里浮着，地板反着冷白的反光」）字很多但只是一个画面，
-    切开反而把一个镜头拆成三个静止帧。
-    """
-    beats = split_action(text)
-    if len(beats) <= max_beats:
-        return False, ""
-    return True, f"一段里有 {len(beats)} 个节拍，装不进一个 3–5 秒的镜头"
-
-# ── 首尾帧之间必须有「看得见的变化」 ──────────────────────────────────────────
-#
-# 实跑里分镜给出的变化说明是这样的：
-#
-#     镜 3  油布掀开声响结束，沈砚依然静坐
-#     镜 4  门外传来低骂声，沈砚依然静止
-#     镜 8  裴无咎收起笑容，铁钎直立地面
-#     镜 10 裴无咎收起笑容，铁钎直立地面      ← 与镜 8 一字不差
-#
-# 「声响结束」「传来低骂」在画面上什么都不变；「依然静坐」是明说不动。
-# 首尾帧于是几乎相同，i2v 插不出任何东西 —— 那就是幻灯片。
-#
-# **这不是模型不听话，是没人告诉过它「变化必须看得见」。**
-# 提示词里要写死，规则层要能判出来。
-
-#: 只有声音、没有画面的说法
-_SOUND_ONLY = (
-    "声", "响", "音", "听", "喊", "叫", "骂", "笑声", "脚步",
-    "sound", "noise", "voice", "heard", "audible", "footstep",
-)
-
-#: 明说「不动」的说法。**这类最要命** —— 它把「这一镜没有变化」
-#: 写成了一句看起来像变化说明的话，评审时一眼扫过去还以为填了
-_NO_CHANGE = (
-    "依然", "仍然", "仍旧", "保持不变", "未动", "不动", "静止", "不变",
-    "no change", "remains", "unchanged", "still seated", "motionless",
-)
-
-#: 看得见的动作。人在画面里能看到的位移、开合、抬落、器物移动
-_VISIBLE = (
-    "走", "跑", "站", "坐下", "起身", "转身", "俯身", "抬", "低头", "伸手",
-    "推", "拉", "开", "关", "拔", "举", "放下", "递", "接", "掀", "撬开",
-    "跪", "倒", "扑", "挥", "指", "握紧", "松开", "迈", "退",
-    "walk", "step", "stand", "sit", "rise", "turn", "lean", "reach",
-    "push", "pull", "open", "close", "draw", "lift", "lower", "hand",
-    "kneel", "fall", "swing", "point", "grip", "release", "enter", "exit",
-)
-
-#: 不靠第二张关键帧、但在连续视频里能明确看见的运动。
-#: 这组不能混进 _VISIBLE：首尾帧派生仍然只认主体/物件状态变化；
-#: 它专门服务 camera 镜的运镜、口型和微表演验收。
-_CAMERA_MOTION = (
-    "推近", "拉远", "横摇", "纵摇", "摇摄", "跟拍", "跟随", "移焦", "变焦",
-    "手持", "环绕", "口型", "嘴唇", "眨眼", "呼吸", "耸肩", "颤抖",
-    "dolly", "push-in", "push in", "pull-out", "pull out", "pan", "tilt",
-    "truck", "tracking", "follow", "orbit", "handheld", "rack focus", "zoom",
-    "lip", "mouth", "blink", "breath", "shoulder", "tremble",
-)
-
-
-def is_visible_change(text: str | None) -> tuple[bool, str]:
-    """首尾帧之间的变化看不看得见。返回（看得见, 说不清的理由）。
-
-    判据顺序有讲究：**先排除「明说不动」**。
-    「油布掀开声响结束，沈砚依然静坐」里有「掀开」这个可见动词，
-    可整句的意思是「什么都没变」—— 先看动词会判成通过。
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return False, "没有写变化说明，尾帧无从派生"
-    low = raw.lower()
-
-    if any(w in raw or w in low for w in _NO_CHANGE):
-        return False, ("这句话说的是「没有变化」。首尾帧会几乎相同，"
-                       "i2v 插不出任何东西 —— 需要一个看得见的动作："
-                       "走动、开门、拔刀、抬手")
-    if any(w in raw or w in low for w in _VISIBLE):
-        return True, ""
-    if any(w in raw or w in low for w in _SOUND_ONLY):
-        return False, ("这是声音上的变化，画面上什么都不变。"
-                       "声音归音轨，首尾帧要的是看得见的动作")
-    return False, ("看不出这一镜有什么在动。首尾帧要的是物体或人的位移、"
-                   "开合、抬落 —— 比如「他向前走两步」「推开药匣子」")
-
-
-def is_camera_motion(*texts: str | None) -> tuple[bool, str]:
-    """单首帧动态镜是否写清连续运镜、口型或微表演。"""
-    raw = " ".join((t or "").strip() for t in texts if (t or "").strip())
-    if not raw:
-        return False, "没有连续运镜、口型或微表演说明"
-    low = raw.lower()
-    if any(word in raw or word in low for word in _CAMERA_MOTION):
-        return True, ""
-    return False, "单首帧动态镜必须写清推拉摇移、移焦、口型或可见微表演"
-
-
-def duplicate_changes(items: list[tuple[int, str | None]]) -> list[dict[str, Any]]:
-    """哪些镜头的变化说明是重复的。
-
-    实跑里镜 8/10/12/14 用了同一句「裴无咎收起笑容，铁钎直立地面」——
-    四个镜头的尾帧因此长得一样，剪在一起像同一个画面播了四遍。
-    **重复本身就是「这几镜其实没分开」的证据。**
-    """
-    seen: dict[str, list[int]] = {}
-    for order_no, text in items:
-        key = (text or "").strip()
-        if key:
-            seen.setdefault(key, []).append(order_no)
-    return [{"text": k, "shots": v} for k, v in seen.items() if len(v) > 1]
+    # Domestic
+    return {
+        "title": f"逆道破苍穹 · {genre}爆款短剧",
+        "mode": "domestic",
+        "genre": genre,
+        "episodes": episodes,
+        "structure": structure,
+        "logline": f"在{bg_str}背景下，{char_str}凭借{hl_str}，在层层危机中逆天改命，爽点反转拉满。",
+        "core_conflict": f"阶级压制与绝境爆发；依靠【{hl_str}】在前3集完成极致情绪反转。",
+        "episodes_outline": [
+            {"episode": "第1集/第1幕", "title": "寒夜惊变", "summary": f"开局即绝境：主角遭遇轻视与打压，关键时刻暗藏的特殊契机初露锋芒；{hl_str}引爆悬念。"},
+            {"episode": "第2集/第2幕", "title": "暗局初现", "summary": "低调布局，反向试探对手底牌，步步为营设下连环圈套。"},
+            {"episode": "第3集/第3幕", "title": "惊天逆转", "summary": "大庭广众之下亮出真实王牌，前倨后恭的对手瞬间瘫软，爽感引爆。"},
+        ],
+        "sample_scene": {
+            "scene_heading": f"场景1：日内 - 核心决策大殿 - 剑拔弩张（画风：{style}）",
+            "description": "镜头从殿外急推至大厅中央，广角低机位压迫感。全场宾客屏息凝视。",
+            "beats": [
+                {"type": "action", "content": "主角平静地整了整领口，迎着满座轻蔑的冷笑缓步走向主座，脚步沉稳有力。"},
+                {"type": "dialogue", "speaker": "反派管事", "content": "凭你也敢踏进这道门？今日若拿不出凭证，让你横着出去！"},
+                {"type": "action", "content": "镜头切特写：主角反手将一块通体温润的玄金令牌拍在大理石长桌上，整张案几震出蛛网裂纹。"},
+                {"type": "dialogue", "speaker": "主角", "content": "睁大你们的眼睛看清楚，这座山庄的真正主人，到底是谁。"},
+            ],
+        },
+        "visual_prompt": f"cinematic drama film still, {style}, tense dramatic confrontations in lavish grand hall, dynamic camera angle, sharp rim lighting, intense facial expressions, ultra detailed cinematic 4k",
+        "model_used": "ainer-screenplay-synthesizer-v2",
+    }

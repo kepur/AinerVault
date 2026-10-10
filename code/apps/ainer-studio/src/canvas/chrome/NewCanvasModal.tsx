@@ -5,11 +5,12 @@
  * 2. 📄 空白画布：自由放置节点、自由生成
  */
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { cv, media } from "../api";
 import { buildIdeaGraph, type IdeaInputs } from "../idea/buildIdeaGraph";
 import type { MediaRef } from "../model";
 import { useCanvas } from "../store";
-import { errText, Icon, Spinner, useLatest } from "./Overlays";
+import { errText, host, Icon, Spinner, useLatest } from "./Overlays";
 
 type Tab = "idea" | "blank";
 type Slot = "person" | "outfit" | "scene";
@@ -195,7 +196,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  return (
+  return createPortal(
     <div className="cv-modal-back" onPointerDown={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="cv-newcanvas-modal cv-glass" role="dialog" aria-label="新建画布">
         {/* 头部标题与 Tab 切换 */}
@@ -530,6 +531,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    host(),
   );
 }

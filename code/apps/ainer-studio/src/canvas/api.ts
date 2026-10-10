@@ -13,7 +13,8 @@ import type { Job } from "../box/director";
 import type { Board, CastMember, ChapterPlans, DirectorRun } from "../types";
 import type {
   BoxInfo, CanvasCard, CanvasContext, CanvasDoc, CanvasMeta, ExecuteOptions, ExecuteState, FilmPlan, GenerateBody,
-  GenerateResult, GenTaskState, ModelOption, NodeRun, QuickFilmIn, QuickFilmJob, RunOptions, RunState, ScriptScene,
+  GenerateResult, GenTaskState, ModelOption, NodeRun, QuickFilmIn, QuickFilmJob, RunOptions, RunState,
+  ScreenplayExpandIn, ScreenplayResult, ScriptScene,
 } from "./model";
 
 export class HttpError extends Error {
@@ -185,6 +186,9 @@ export const cv = {
   /** 一句想法 → 本机 LLM 拆的导演分镜（场景、人物外观、2–4 镜首帧/运动/时长；镜头首尾呼应） */
   filmPlan: (body: { idea: string; shots: number; has_outfit: boolean; has_scene: boolean }) =>
     demo ? Promise.reject(new Error("演示数据不能拆分镜")) : call<FilmPlan>("POST", "/api/v2/studio/film-plans", body),
+  /** 想法/文本 + 设定器参数 → LLM 剧本扩写与世界观转译 */
+  screenplayExpand: (body: ScreenplayExpandIn) =>
+    demo ? Promise.reject(new Error("演示数据不能扩写剧本")) : call<ScreenplayResult>("POST", "/api/v2/studio/screenplay-expand", body),
 
   /* ── 快速成片（纳逗式一条龙：照片 + 一句话 → 定妆照 → 分镜图 → 短片），演示模式不支持 ── */
   quickStart: (body: QuickFilmIn) => demo ? Promise.reject(new Error("演示数据不能快速成片"))

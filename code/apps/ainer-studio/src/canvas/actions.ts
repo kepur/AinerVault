@@ -13,6 +13,7 @@ import { navigate } from "../ctx";
 import type { XYPosition } from "@xyflow/react";
 import type { CastMember, ShotCard } from "../types";
 import { directorPending } from "../shotStatus";
+import { errText } from "./chrome/Overlays";
 import { cv, media } from "./api";
 import type { CanvasStore } from "./contract";
 import {
@@ -176,12 +177,17 @@ export function refMediaOf(node: CNode, r: Resolved, s: CanvasStore): RefMedia {
   if (node.type === "audio") return { warn: "此生成入口尚未支持音频参考，音频节点可播放与编排" };
   if (node.type === "text") return { warn: "文字参考只以「标题」拼进提示词，不当参考图发；要用它的内容请写进提示词" };
   if (node.type === "box3d") {
-    // 白模本身发不出去：取它下游最近录好的预演
+    // 优先取白模下游最近录好的预演或渲染素材
     const p = s.downstream(node.id).map(d => d.node)
       .filter(n => n.data.role === "previs" && n.data.media?.url).pop();
-    if (!p?.data.media) return { warn: "白模还没录预演，先点「录预演」或「渲控制素材」" };
-    const m = p.data.media;
-    return { url: media(m.url)!, kind: m.mime?.startsWith("image/") ? "image" : "video", asset_id: m.asset_id, mime: m.mime };
+    if (p?.data.media) {
+      const m = p.data.media;
+      return { url: media(m.url)!, kind: m.mime?.startsWith("image/") ? "image" : "video", asset_id: m.asset_id, mime: m.mime };
+    }
+    if (r.kind === "box_project" && r.box?.thumb_url) {
+      return { url: media(r.box.thumb_url)!, kind: "image" };
+    }
+    return { warn: "白模还没保存缩略图或预演，先在 3D-BOX 中保存" };
   }
   const g = node.data.gen;
   if (g && g.status !== "succeeded" && !node.data.media) {
@@ -640,11 +646,198 @@ function mediaTail(s: CanvasStore, title: string, url: string | undefined, video
   ];
 }
 
+interface ParsedShot {
+  shotNo: number;
+  size: string;
+  cameraMove: string;
+  durationSec: number;
+  firstFrame: string;
+  motion: string;
+}
+
+export function parseDirectorShots(text: string): ParsedShot[] {
+  const shots: ParsedShot[] = [];
+  const regex = /【镜头\s*(\d+)(?:\s*·\s*([^·\n]+))?(?:\s*·\s*([^·\n]+))?(?:\s*·\s*([\d.]+)\s*s)?\s*】([\s\S]*?)(?=(?:【镜头\s*\d+|$))/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const shotNo = parseInt(match[1], 10);
+    const size = (match[2] || "MS").trim();
+    const cameraMove = (match[3] || "固定").trim();
+    const durationSec = match[4] ? parseFloat(match[4]) : 3;
+    const body = match[5] || "";
+    const firstMatch = body.match(/首帧[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=\n动作[：:]|\n\n|$)/);
+    const motionMatch = body.match(/动作[：:]\s*([^\n]+(?:\n[^\n]+)*?)(?=\n【|\n\n|$)/);
+    shots.push({
+      shotNo,
+      size,
+      cameraMove,
+      durationSec,
+      firstFrame: (firstMatch ? firstMatch[1] : body).trim(),
+      motion: (motionMatch ? motionMatch[1] : body).trim(),
+    });
+  }
+  return shots;
+}
+
+export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
+  const r = s.resolve(node.data.ref, node.data);
+  let text = resolvedText(r).trim();
+  let shots = parseDirectorShots(text);
+
+  if (!shots.length) {
+    try {
+      s.toast("正在调用导演大师模型规划分镜（SKILL_34）…", "info");
+      const plan = await cv.filmPlan({ idea: text, shots: 3, has_outfit: false, has_scene: false });
+      const shotDesc = plan.shots.map((sh, i) =>
+        `【镜头 ${i + 1} · ${sh.size.toUpperCase()} · ${sh.camera_move || "固定"} · ${sh.seconds}s】\n首帧：${sh.first_frame}\n动作：${sh.motion}`
+      ).join("\n\n");
+      text = `🎬 场景：${plan.scene}\n角色：${plan.look}\n环境音：${plan.audio}\n\n${shotDesc}`;
+      s.updateNodeData(node.id, { text });
+      shots = parseDirectorShots(text);
+    } catch (e) {
+      s.toast(`导演分镜规划失败：${errText(e)}`, "err");
+      return;
+    }
+  }
+
+  if (!shots.length) {
+    s.toast("未能解析出镜头信息，请确保文本包含【镜头 1 · ...】格式", "err");
+    return;
+  }
+
+  // 1. 发现画布上的角色设定图 / 定妆照
+  const sheetNode = s.nodes.find(n => n.type === "image" &&
+    (n.data.role === "sheet" || n.data.title.includes("定妆照") || n.data.recipe?.op === "sheet"))
+    || s.nodes.find(n => n.type === "image" && n.data.media?.url);
+
+  // 2. 发现画布上的 3D 白模
+  const boxNodes = s.nodes.filter(n => n.type === "box3d" || n.data.ref?.kind === "box_project");
+
+  // 3. 布局位置计算
+  const baseX = node.position.x;
+  const baseY = node.position.y;
+  const col1X = baseX + 380; // 分镜首帧图
+  const col2X = baseX + 720; // 单镜视频
+  const col3X = baseX + 1060; // 成片合成
+
+  const shotVideoIds: string[] = [];
+
+  for (let i = 0; i < shots.length; i++) {
+    const sh = shots[i];
+    const rowY = baseY + i * 260;
+    const boxForShot = boxNodes.length > 1
+      ? (i < shots.length - 1 ? boxNodes[0] : boxNodes[1])
+      : boxNodes[0];
+
+    // ① 创建分镜首帧图节点
+    const kfTitle = uniqueTitle(s, `分镜图 · 镜 ${sh.shotNo} (${sh.size})`);
+    const kfRefs: RecipeRef[] = [];
+    if (sheetNode) kfRefs.push({ node: sheetNode.id, role: "character" });
+    if (boxForShot) kfRefs.push({ node: boxForShot.id, role: "scene" });
+
+    const kfPrompt: PromptSeg[] = [{ t: "text", text: `[Shot ${sh.shotNo} · ${sh.size}] ${sh.firstFrame}` }];
+    const kfId = s.addNode("image", {
+      ref: freeRef(),
+      title: kfTitle,
+      role: "frame",
+      recipe: {
+        op: "image",
+        prompt: kfPrompt,
+        refs: kfRefs,
+      },
+    }, { x: col1X, y: rowY });
+
+    // 连线到分镜图
+    if (sheetNode) s.connect(sheetNode.id, kfId, "identity");
+    if (boxForShot) s.connect(boxForShot.id, kfId, "ref");
+
+    // ② 创建单镜视频节点
+    const vidTitle = uniqueTitle(s, `视频 · 镜 ${sh.shotNo} (${sh.durationSec}s)`);
+    const vidRefs: RecipeRef[] = [{ node: kfId, role: "first_frame" }];
+    if (boxForShot) vidRefs.push({ node: boxForShot.id, role: "control_video" });
+
+    const vidPrompt: PromptSeg[] = [{ t: "text", text: `[Camera: ${sh.cameraMove}] ${sh.motion}` }];
+    const vidId = s.addNode("video", {
+      ref: freeRef(),
+      title: vidTitle,
+      role: "generated",
+      recipe: {
+        op: "video",
+        duration_ms: Math.round(sh.durationSec * 1000),
+        prompt: vidPrompt,
+        refs: vidRefs,
+      },
+    }, { x: col2X, y: rowY });
+
+    // 连线到视频节点
+    s.connect(kfId, vidId, "ref");
+    if (boxForShot) s.connect(boxForShot.id, vidId, "control");
+
+    shotVideoIds.push(vidId);
+  }
+
+  // ③ 创建最终成片合成节点 (Concat)
+  const concatTitle = uniqueTitle(s, "成片合成 · 完整故事");
+  const concatY = baseY + (shots.length - 1) * 130;
+  const concatId = s.addNode("video", {
+    ref: freeRef(),
+    title: concatTitle,
+    role: "generated",
+    recipe: {
+      op: "concat",
+      prompt: [],
+      refs: shotVideoIds.map(vid => ({ node: vid, role: "reference" })),
+    },
+  }, { x: col3X, y: concatY });
+
+  for (const vid of shotVideoIds) {
+    s.connect(vid, concatId, "ref");
+  }
+
+  s.toast(`🎬 导演排镜完成：已拆出 ${shots.length} 组分镜图、单镜视频与成片合成节点网络！`, "ok");
+}
+
 function textActions(s: CanvasStore, node: CNode, r: Resolved): CanvasAction[] {
   const text = resolvedText(r);
   return [
     {
-      id: "build_box", label: "搭白模", icon: "◰", badge: "NEW",
+      id: "screenplay_config", label: "剧本设定器", icon: "✨", badge: "NEW",
+      title: "剧本设定器：Top 8 爆款预设、5维精细设定与跨世界观文化圈层转译",
+      run: () => s.openOverlay({ kind: "screenplay_config", nodeId: node.id }),
+    },
+    {
+      id: "director_plan", label: "导演拆分镜", icon: "🎬", badge: "NEW",
+      title: "调用系统导演大师 Skill (SKILL_34)：一键将这段文本拆成多镜头专业分镜网络（机位、景别、运镜、首尾帧过渡）",
+      disabled: text.trim() ? false : "这个节点还没有文字",
+      run: async () => {
+        try {
+          s.toast("正在调用导演大师模型规划分镜（SKILL_34）…", "info");
+          const plan = await cv.filmPlan({ idea: text.trim(), shots: 3, has_outfit: false, has_scene: false });
+          const at = placeBeside(s.nodes, node, "right", { w: 320, h: 220 })[0];
+          const shotDesc = plan.shots.map((sh, i) =>
+            `【镜头 ${i + 1} · ${sh.size.toUpperCase()} · ${sh.camera_move || "固定"} · ${sh.seconds}s】\n首帧：${sh.first_frame}\n动作：${sh.motion}`
+          ).join("\n\n");
+          const planId = s.addNode("text", {
+            ref: freeRef(),
+            title: uniqueTitle(s, `导演分镜 · ${plan.title || "分镜大纲"}`),
+            role: "note",
+            text: `🎬 场景：${plan.scene}\n角色：${plan.look}\n环境音：${plan.audio}\n\n${shotDesc}`,
+          }, at, { source: node.id, kind: "ref" });
+          s.toast(`已生成电影级导演分镜《${plan.title}》（${plan.shots.length} 镜）`, "ok");
+          s.select(planId);
+        } catch (e) {
+          s.toast(`导演分镜生成失败：${errText(e)}`, "err");
+        }
+      },
+    },
+    {
+      id: "orchestrate_shots", label: "导演排镜与成片", icon: "🎞", badge: "NEW",
+      title: "一键将导演分镜规划拆解成完整 DAG：多镜头分镜图 + 3D白模控制 + 视频生成 + 首尾帧接戏 + 自动缝合 Concat",
+      disabled: text.trim() ? false : "这个节点还没有文字",
+      run: () => orchestrateDirectorShots(s, node),
+    },
+    {
+      id: "build_box", label: "搭白模", icon: "◰",
       title: "让 3D-BOX 智能体按这段文字搭一个白模（人物、站位、动作、机位），长在右边",
       disabled: text.trim() ? false : "这个节点还没有文字",
       run: () => buildBoxFromText(s, node.id, node.data.title, text),

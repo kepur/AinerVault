@@ -571,3 +571,46 @@ export interface CanvasCard extends CanvasMeta {
   novel_title: string | null;
   chapter_title: string | null;
 }
+
+export interface ScreenplayExpandIn {
+  idea: string;
+  genre?: string;
+  background?: string[];
+  characters?: string[];
+  highlights?: string[];
+  style?: string;
+  episodes?: number;
+  structure?: string;
+  mode?: "domestic" | "faithful_export" | "world_adaptation";
+  target_world?: string;
+}
+
+export interface ScreenplayResult {
+  title: string;
+  logline: string;
+  genre?: string;
+  episodes?: number;
+  structure?: string;
+  mode: "domestic" | "faithful_export" | "world_adaptation";
+  core_conflict?: string;
+  cultural_notes?: string;
+  target_world?: string;
+  target_world_info?: {
+    code: string;
+    name: string;
+    description: string;
+  };
+  worldview_mapping?: {
+    concept_mappings?: { original_cn: string; adapted_target: string; rationale?: string }[];
+    character_mappings?: { original_cn: string; adapted_name: string; identity?: string; rationale?: string }[];
+    setting_mappings?: string;
+  };
+  episodes_outline: { episode: string; title: string; summary: string }[];
+  sample_scene: {
+    scene_heading: string;
+    description: string;
+    beats: { type: "action" | "dialogue"; speaker?: string; content: string }[];
+  };
+  visual_prompt?: string;
+  model_used?: string;
+}

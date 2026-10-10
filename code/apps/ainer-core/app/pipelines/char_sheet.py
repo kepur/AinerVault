@@ -50,8 +50,15 @@ if TYPE_CHECKING:                                      # 只给类型检查用�
 log = logging.getLogger("ainer-core")
 
 IMAGE_MODEL = "flux2-klein-4b-edit"
-#: klein 编辑的合法尺寸里唯一的竖幅；面部、表情也按它出，拼版时再裁成近方形
-PANEL_SIZE = (512, 768)
+#: 分级分辨率设计：
+#: - 全身三视图：512×768（细粒度全身，保证服装、鞋子、身形细节，约 480p 竖幅）
+#: - 面部多视角特写：384×448（~360p 肖像，比例 0.86 与版面完全贴合，聚焦面部，大幅削减 token 序列）
+#: - 九宫格表情特写：256×256（轻量极速，在 2400 宽画板上每个表情格仅占 ~160×187，降为 1/6 计算量，提速 3~5 倍）
+PANEL_SIZE_BODY = (512, 768)
+PANEL_SIZE_FACE = (384, 448)
+PANEL_SIZE_EXPR = (256, 256)
+#: 保持兼容的默认尺寸
+PANEL_SIZE = PANEL_SIZE_BODY
 STYLE = "photoreal"
 #: 参考图分辨率直接决定速度（0.4 约 25 秒/张，1.0 约 48 秒），输出本来就只有 0.4MP
 REF_MEGAPIXELS = 0.4
@@ -217,6 +224,19 @@ def panel_seed(base: int, key: str) -> int:
     return int(base) + PANEL_KEYS_STANDARD.index(key)
 
 
+def panel_size_of(key: str) -> tuple[int, int]:
+    """按格类别返回分级分辨率：
+    全身三视图 → 512×768；面部多视角 → 384×448；九宫格表情 → 256×256。
+    """
+    if key.startswith("body_"):
+        return PANEL_SIZE_BODY
+    if key.startswith("face_"):
+        return PANEL_SIZE_FACE
+    if key.startswith("expr_"):
+        return PANEL_SIZE_EXPR
+    return PANEL_SIZE_BODY
+
+
 def panel_key(p: Mapping[str, Any]) -> str | None:
     """面板 dict → 格的 key。
 
@@ -332,16 +352,20 @@ def resolve_person(url: str) -> str:
 
 # ── 能力调用 ────────────────────────────────────────────────────────────────
 
-def _edit_payload(prompt: str, base_url: str, refs: Sequence[str], seed: int) -> dict[str, Any]:
+def _edit_payload(prompt: str, base_url: str, refs: Sequence[str], seed: int,
+                  size: tuple[int, int] = PANEL_SIZE_BODY) -> dict[str, Any]:
     """klein 编辑的请求。尺寸必须显式给：不给就跟随底图，人物照片是什么比例出来就是什么比例。"""
+    w, h = size
+    # 参考图分辨率与输出动态适配（cap_api 范围 0.25~1.0），避免参考图过大白烧注意力
+    ref_mp = max(0.25, min(0.40, round(w * h / 1_000_000, 1)))
     return {
         "image": {"url": base_url}, "prompt": prompt,
-        "width": PANEL_SIZE[0], "height": PANEL_SIZE[1],
+        "width": w, "height": h,
         "style": STYLE, "strength": 0.9,
         # 网关只收 identity=true 的附加参考，并跳过和底图相同的那张
         "reference_images": [{"ref": {"url": u}, "role": "character", "identity": True, "tag": f"person {i + 2}"}
                              for i, u in enumerate(refs) if u and u != base_url],
-        "params": {"seed": seed, "style": STYLE, "ref_megapixels": REF_MEGAPIXELS},
+        "params": {"seed": seed, "style": STYLE, "ref_megapixels": ref_mp},
     }
 
 
@@ -530,7 +554,7 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
                 continue
             src = {"person": person, **{k: v[1] for k, v in made.items()}}
             payload = _edit_payload(panel_prompt(key, look), src[base_key], [src[r] for r in ref_keys],
-                                    panel_seed(base_seed, key))
+                                    panel_seed(base_seed, key), size=panel_size_of(key))
             try:
                 submitted[_submit(db, route, payload, ref_kind=ref_kind, ref_id=ref_id, force=force)] = key
             except Exception as exc:                   # noqa: BLE001 —— 一格交不上记下来，别的照出

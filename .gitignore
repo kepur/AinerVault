@@ -27,3 +27,6 @@ novel_texts/
 modified_texts/
 # 本机 agent 会话配置
 .claude/
+
+# TypeScript 增量构建缓存（上一次提交误带入）
+*.tsbuildinfo

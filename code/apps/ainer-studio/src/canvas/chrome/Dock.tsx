@@ -23,6 +23,7 @@ import {
 import { useCanvas, useNodeResolved } from "../store";
 import { askBox, regenerateBox } from "../three/actions";
 import { errText, Icon, MenuList, Popover, Spinner, useLatest, type MenuItem } from "./Overlays";
+import { PRESETS_TOP8 } from "./ScreenplayConfigModal";
 import {
   PromptEditor, segsEmpty, segsFromText, segsToPrompt, segsToText, type MentionItem, type PromptEditorHandle,
 } from "./PromptEditor";
@@ -70,13 +71,17 @@ interface GenOpts {
   count: number;
   refMode: RefMode;
 }
-const OPTS_KEY = "ainer.canvas.dock.v1";
-const DEFAULT_OPTS: GenOpts = { media: "video", model: {}, aspect: "16:9", resolution: "720p", durationS: 5, count: 1, refMode: "multi" };
+const OPTS_KEY = "ainer.canvas.dock.v2";
+const DEFAULT_OPTS: GenOpts = { media: "video", model: {}, aspect: "16:9", resolution: "480p", durationS: 5, count: 1, refMode: "multi" };
 
 function loadOpts(): GenOpts {
   try {
-    const raw = localStorage.getItem(OPTS_KEY);
-    if (raw) return { ...DEFAULT_OPTS, ...(JSON.parse(raw) as Partial<GenOpts>) };
+    const raw = localStorage.getItem(OPTS_KEY) || localStorage.getItem("ainer.canvas.dock.v1");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<GenOpts>;
+      // 本地模型默认速度为王：若仍为旧的 720p 默认值，直接自动对齐极速 480p (768/832x448)
+      return { ...DEFAULT_OPTS, ...parsed, resolution: parsed.resolution === "720p" ? "480p" : (parsed.resolution || "480p") };
+    }
   } catch { /* 隐私模式 / 被清掉：用默认 */ }
   return DEFAULT_OPTS;
 }
@@ -600,6 +605,33 @@ function GenPanel({ node, opts, setOpts, drafts }: {
             </div>
           ) : <div className="cv-menu-empty">画布上没有别的图、视频或白模了</div>}
         </Popover>
+      )}
+
+      {isText && (
+        <div className="cv-dock-script-bar">
+          <button
+            type="button"
+            className="cv-dock-script-btn"
+            title="打开剧本设定器：爆款预设、5维精细设定与跨文化世界观转译"
+            onClick={() => s.openOverlay({ kind: "screenplay_config", nodeId: node.id })}
+          >
+            <Icon name="sparkle" size={13} />
+            <span>✨ 剧本设定器</span>
+          </button>
+          <span className="cv-dock-script-sep" />
+          <span className="cv-dock-script-title">预设:</span>
+          {PRESETS_TOP8.map(p => (
+            <button
+              key={p.id}
+              type="button"
+              className="cv-dock-script-chip"
+              title={`点击应用《${p.name}》预设`}
+              onClick={() => s.openOverlay({ kind: "screenplay_config", nodeId: node.id, presetId: p.id })}
+            >
+              #{p.name.slice(0, 4)}
+            </button>
+          ))}
+        </div>
       )}
 
       <PromptEditor

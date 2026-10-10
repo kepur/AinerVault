@@ -88,8 +88,8 @@ IDENTITY_ROLES = ("character", "reference_sheet")
 #: 前端 RefRole → 契约 RefRole（同 generic._CORE_ROLE；那个是私有的，这里抄一份）
 CORE_ROLE = {"character": "character", "reference_sheet": "character", "style": "style", "scene": "scene",
              "reference": "scene", "control_video": "composition"}
-#: 现取内容的派生节点（剧本、镜头、角色视角、白模）：本轮执行器不支持当参考
-LIVE_REF_KINDS = frozenset({"story", "scene", "shot", "entity_view", "box_project"})
+#: 现取内容的派生节点（剧本、镜头、角色视角）：本轮执行器不支持直接当参考
+LIVE_REF_KINDS = frozenset({"story", "scene", "shot", "entity_view"})
 _VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v")
 HISTORY_KEEP = 12
 
@@ -430,7 +430,8 @@ def _sheet_picker(panels: list[dict[str, Any]], want: str) -> list[dict[str, Any
 def resolve_node(nodes: Mapping[str, Mapping[str, Any]], done: Mapping[str, Done],
                  status: Mapping[str, str], nid: str, *, role: str = "reference", panel: str | None = None,
                  self_id: str | None = None, pick_panels: PanelPicker | None = None,
-                 asset_url: AssetUrl | None = None, resource_media: ResourceMedia | None = None) -> list[Media]:
+                 asset_url: AssetUrl | None = None, resource_media: ResourceMedia | None = None,
+                 db: Any = None) -> list[Media]:
     """一个被引用的节点 → 它当前的媒体（分组展开成组里的图；定妆照展开成几格面板）。
 
     文字节点不出媒体（返回空）。上游配方节点失败过 → Skip；派生节点（剧本、镜头…）→ ExecError。
@@ -451,7 +452,8 @@ def resolve_node(nodes: Mapping[str, Mapping[str, Any]], done: Mapping[str, Done
                     raise Skip(f"上游「{title_of(child)}」失败")
                 continue
             out += resolve_node(nodes, done, status, cid, role=role, self_id=self_id,
-                                pick_panels=pick_panels, asset_url=asset_url, resource_media=resource_media)
+                                pick_panels=pick_panels, asset_url=asset_url, resource_media=resource_media,
+                                db=db)
         if not out:
             raise ExecError(f"分组「{title}」里还没有图")
         return out
@@ -484,11 +486,18 @@ def resolve_node(nodes: Mapping[str, Mapping[str, Any]], done: Mapping[str, Done
             url = asset_url(str(ref["id"]))
             if url:
                 m = {"url": url, "asset_id": ref["id"]}
+        elif isinstance(ref, dict) and ref.get("kind") == "box_project" and ref.get("id") and db is not None:
+            from app.models.scene3d import SceneProject
+            proj = db.get(SceneProject, str(ref["id"]))
+            if proj and proj.thumb_url:
+                m = {"url": proj.thumb_url}
     if m is not None:
         url = same_origin(m["url"])
         return [Media(node=nid, url=url, asset_id=m.get("asset_id"), kind=_kind_of(url, m.get("mime"), ntype),
                       label=title, role=role)]
     ref = data_of(node).get("ref") or {}
+    if isinstance(ref, dict) and ref.get("kind") == "box_project":
+        raise ExecError(f"3D 白模「{title}」尚未生成缩略图或预演：请在 3D-BOX 中保存场景或导出预演")
     if isinstance(ref, dict) and ref.get("kind") in LIVE_REF_KINDS:
         raise ExecError(f"「{title}」这类节点（剧本、镜头、角色视角）还不能当参考：先把图拿出来成一张图片节点")
     if nid == self_id:
@@ -987,7 +996,8 @@ class _Ctx:
                 continue
             out += resolve_node(self.nodes, self.done, self.status, r["node"],
                                 role=str(r.get("role") or "reference"), panel=r.get("panel") or None,
-                                self_id=self.node_id, asset_url=self.asset_url, resource_media=self.resource_media)
+                                self_id=self.node_id, asset_url=self.asset_url, resource_media=self.resource_media,
+                                db=self.db)
         return out
 
     def texts(self) -> dict[str, str]:
@@ -1246,6 +1256,8 @@ def _op_image(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     if len(images) < len(refs):
         ctx.note("出图用不上视频参考，已跳过")
     base = next((m for m in images if m.role in BASE_ROLES), None)
+    if base is None:
+        base = next((m for m in images if m.role in ("scene", "composition", "control")), None)
     model = str(recipe.get("model") or "")
     endpoint_id = recipe.get("endpoint_id") or None
     if not model:
@@ -1309,9 +1321,16 @@ def _op_video(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     first = next((m for m in images if m.role == "first_frame"), None) or \
         next((m for m in images if m.role == "base"), None)
     last = next((m for m in images if m.role == "last_frame" and m is not first), None)
-    if any(m is not first and m is not last for m in refs):
-        # LTX 2.5 不读一般参考图；人像靠首帧钉住（纳逗也是先出分镜图再动起来）
-        ctx.note("视频模型只用首帧/尾帧，其余参考没用上")
+    if first is None:
+        first = next((m for m in images if m is not last and m.role in ("character", "sheet", "reference_sheet", "reference", "composition")), None)
+    if first is None and images:
+        first = next((m for m in images if m is not last), None)
+
+    sheet = next((m for m in images if m is not first and m is not last and (m.role in IDENTITY_ROLES or "定妆照" in (m.label or ""))), None)
+    ctl_video = next((m for m in refs if m.kind == "video" and m.role in ("control", "previs", "composition")), None)
+
+    if any(m is not first and m is not last and m is not sheet and m is not ctl_video for m in refs):
+        ctx.note("视频模型已绑定首尾帧与角色/控制参考")
     model = str(recipe.get("model") or VIDEO_MODEL)
     cap, route, info = _need_model(ctx.db, [I2V], model, recipe.get("endpoint_id") or None)
     if first is None and not (info.supports or {}).get("text_to_video"):
@@ -1335,6 +1354,10 @@ def _op_video(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
             p["first_frame"] = _src(gateway_url(first.url))
         if last is not None:
             p["last_frame"] = _src(gateway_url(last.url))
+        if ctl_video is not None:
+            p["control"] = {"type": "union", "video": _src(gateway_url(ctl_video.url))}
+        elif sheet is not None:
+            p["reference_sheet"] = _src(gateway_url(sheet.url))
         payloads.append(p)
     ctx.progress(None, "交给本机出视频" if info.local else f"交给 {info.label} 出视频")
     tids = [_submit(ctx, cap, route, p) for p in payloads]
@@ -1356,7 +1379,7 @@ def _op_sheet(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
         res = char_sheet.generate_sheet(ctx.db, person_url=gateway_url(person.url), name=str(sheet.get("name") or ""),
                                         look=str(sheet.get("look") or ""), preset=preset,
                                         on_progress=lambda pct, step: ctx.progress(pct, step),
-                                        cancelled=ctx.stopping)
+                                        cancelled=ctx.stopping, force=True)
     except char_sheet.SheetError as exc:
         if ctx.stopping():
             raise Cancelled("已停止（定妆照没出完）") from exc
@@ -1507,7 +1530,7 @@ def _op_one_take(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], 
     frames: list[str] = []
     for s in segs:
         got = [m for m in resolve_node(ctx.nodes, ctx.done, ctx.status, s["node"], role="first_frame",
-                                       self_id=ctx.node_id, asset_url=ctx.asset_url) if m.kind == "image"]
+                                       self_id=ctx.node_id, asset_url=ctx.asset_url, db=ctx.db) if m.kind == "image"]
         if not got:
             raise ExecError(f"「{title_of(ctx.nodes.get(s['node']))}」没有图，钉不进一次成片")
         frames.append(gateway_url(got[0].url))
