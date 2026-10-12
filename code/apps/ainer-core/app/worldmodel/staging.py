@@ -85,17 +85,66 @@ def placement_error(cam: dict, actors: dict[str, tuple[Sequence[float], float]],
     return err / max(1, len(placements))
 
 
+def _screen_box(cam: dict, pos: Sequence[float], height: float, W: int, H: int, half_w: float = 0.25):
+    fx, fy, d = project(cam, pos, W, H)
+    hx, hy, _ = project(cam, [pos[0], pos[1], height], W, H)
+    if d <= 0.05 or math.isnan(fx):
+        return None, d
+    fpx = (cam["lens_mm"] / 36.0) * W
+    hw = fpx * half_w / d
+    cx = (fx + hx) / 2
+    return (cx - hw, min(hy, fy), cx + hw, max(hy, fy)), d
+
+
+def occlusion_penalty(cam: dict, actors: dict[str, tuple[Sequence[float], float]],
+                      others: dict[str, tuple[Sequence[float], float]], W: int, H: int,
+                      min_dist: float = 0.6) -> float:
+    """首帧里没有的人不能挡住首帧里的人，也不能贴着镜头（相机站在人身体里）。返回惩罚（0 = 干净）。"""
+    pen = 0.0
+    cp = cam["pos"]
+    for _, (pos, h) in {**actors, **others}.items():
+        if math.hypot(pos[0] - cp[0], pos[1] - cp[1]) < min_dist:
+            return 1e9
+    boxes = {a: _screen_box(cam, p, h, W, H) for a, (p, h) in actors.items()}
+    for o, (p, h) in others.items():
+        ob, od = _screen_box(cam, p, h, W, H)
+        if ob is None:
+            continue
+        for a, (ab, ad) in boxes.items():
+            if ab is None or od >= ad:
+                continue
+            ix = max(0.0, min(ab[2], ob[2]) - max(ab[0], ob[0]))
+            iy = max(0.0, min(ab[3], ob[3]) - max(ab[1], ob[1]))
+            area = max(1.0, (ab[2] - ab[0]) * (ab[3] - ab[1]))
+            pen += 0.2 * ix * iy / area
+    return pen
+
+
 def fit_camera(actors: dict[str, tuple[Sequence[float], float]], placements: dict[str, Sequence[float]],
                W: int, H: int, *, lens_choices=(24, 28, 35, 45, 55), heights=(1.1, 1.3, 1.5),
-               az_step_deg: int = 10, dists=(1.2, 1.6, 2.0, 2.6, 3.2, 4.0, 5.0)) -> tuple[dict, float]:
-    """网格搜索：绕在场人物质心的一圈机位 × 焦距 × 高度，挑与首帧框最贴的相机。"""
+               az_step_deg: int = 10, dists=(1.2, 1.6, 2.0, 2.6, 3.2, 4.0, 5.0),
+               az_range: tuple[int, int] = (0, 360), others: dict | None = None,
+               free_y: tuple[float, float] | None = None) -> tuple[dict, float]:
+    """网格搜索：绕在场人物质心的一圈机位 × 焦距 × 高度，挑与首帧框最贴的相机。
+
+    others：首帧里没有、但世界里此刻在场的人 —— 不许挡住首帧人物、不许贴脸（occlusion_penalty）。
+    free_y：相机允许的 y 范围（走廊两墙之间），防止机位进墙。
+    """
+    others = others or {}
+
+    def placement_error(cam, actors, placements, W, H):  # noqa: F811  局部：加上遮挡/空间约束
+        if free_y and not (free_y[0] <= cam["pos"][1] <= free_y[1]):
+            return 1e9
+        e = _placement_error(cam, actors, placements, W, H)
+        return e + occlusion_penalty(cam, actors, others, W, H) if e < 1e8 else e
+
     pts = np.array([p for p, _ in actors.values()], float)
     c = pts.mean(axis=0)
     best, best_e = None, float("inf")
     for lens in lens_choices:
         for ch in heights:
             for dist in dists:
-                for az in range(0, 360, az_step_deg):
+                for az in range(az_range[0], az_range[1], az_step_deg):
                     a = math.radians(az)
                     pos = [c[0] + math.cos(a) * dist, c[1] + math.sin(a) * dist, ch]
                     for aim_z in (0.9, 1.2):
@@ -147,3 +196,6 @@ def move_camera(cam: dict, move: dict, u: float) -> dict:
     elif kind == "zoom_in":
         return {**cam, "lens_mm": float(cam.get("lens_mm", 35)) * (1 + u * amt)}
     return {"pos": [float(x) for x in pos], "target": [float(x) for x in tgt], "lens_mm": cam.get("lens_mm", 35.0)}
+
+
+_placement_error = placement_error

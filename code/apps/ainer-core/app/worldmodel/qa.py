@@ -20,7 +20,8 @@ FFPROBE = "ffprobe"
 SMALL = (160, 96)
 
 TH = {"motion_diff": 1.0, "nondup": 0.5, "cam_scale": 0.02, "cam_shift": 0.015, "audio_rms_db": -45.0,
-      "audio_slack_s": 0.25, "first_corr": 0.55, "energy_inside": 0.45}
+      "audio_slack_s": 0.25, "first_corr": 0.55, "energy_inside": 0.45,
+      "coherence": 0.6}
 
 MOOD_WORDS = {
     "menace": ["menacing", "tense", "threatening"], "fear": ["fear", "trembl", "frighten", "tense"],
@@ -106,12 +107,14 @@ def camera_motion(fr: np.ndarray) -> dict[str, float]:
         return {"scale": 1.0, "shift_x": 0.0, "shift_y": 0.0}
     h, w = fr.shape[1:]
     best = (1.0, 0.0, 0.0, 0.0)
+    worst_c = 1.0
     for j in (len(fr) // 2, len(fr) - 1):
         s, dx, dy, c = _pair_motion(fr[0], fr[j])
+        worst_c = min(worst_c, c)
         if abs(s - 1) + math.hypot(dx / w, dy / h) >= abs(best[0] - 1) + math.hypot(best[1] / w, best[2] / h):
             best = (s, dx, dy, c)
     return {"scale": round(best[0], 4), "shift_x": round(best[1] / w, 4), "shift_y": round(best[2] / h, 4),
-            "match_corr": round(best[3], 3)}
+            "match_corr": round(best[3], 3), "min_match_corr": round(worst_c, 3)}
 
 
 def audio_rms_db(path: str) -> float:
@@ -157,7 +160,9 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
     res["motion"] = {**m, "ok": m["mean_diff"] >= TH["motion_diff"] and m["nondup"] >= TH["nondup"]}
     cm = camera_motion(fr)
     textured = float(fr.std()) >= 2.0  # 纯色画面上相位相关是噪声，不算机位运动
-    moved = textured and abs(cm["scale"] - 1) >= TH["cam_scale"] or math.hypot(cm["shift_x"], cm["shift_y"]) >= TH["cam_shift"]
+    # 缩放搜索撞到边界（0.80/1.25）= 没有找到一致的几何变换（画面崩/换景），不算有效运镜
+    in_range = 0.805 < cm["scale"] < 1.245
+    moved = textured and in_range and abs(cm["scale"] - 1) >= TH["cam_scale"] or math.hypot(cm["shift_x"], cm["shift_y"]) >= TH["cam_shift"]
     res["camera"] = {**cm, "planned": planned_move, "ok": moved if planned_move != "hold" else True}
     adb = audio_rms_db(video) if info["has_audio"] else -120.0
     a_ok = info["has_audio"] and abs(info["audio_duration_s"] - info["duration_s"]) <= TH["audio_slack_s"] \
@@ -171,6 +176,10 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
         c = _corr(image_gray(first_frame), fr[0])
         pos["first_frame_corr"] = round(c, 3)
         pos["ok"] = c >= TH["first_corr"]
+    if "min_match_corr" in cm:
+        # 连贯性：首帧经最佳缩放/平移后仍要和中帧、尾帧相像（拒绝后半段人物/场景崩坏）
+        pos["coherence"] = cm["min_match_corr"]
+        pos["ok"] = pos["ok"] and cm["min_match_corr"] >= TH["coherence"]
     if greybox and kind == "action":
         W, H = greybox["resolution"]
         boxes = [s["bbox"] for per in greybox["actors"].values() for s in per if s.get("bbox")]
