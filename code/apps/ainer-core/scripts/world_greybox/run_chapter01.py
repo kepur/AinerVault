@@ -402,6 +402,21 @@ def run_shot(db, s: dict, run: dict, st: dict):
     rec.setdefault("attempts", [])
     failed: list[str] = []
     best = None
+    # 续跑：已有成片按当前闸门重新判定（闸门改过也一致）
+    for a in rec["attempts"]:
+        if "qa" in a and Path(a["video"]).exists():
+            gb = {"camera_json": json.loads((Path(a["greybox_dir"]) / "camera.json").read_text())} \
+                if a.get("greybox_dir") else None
+            a["qa"] = gate(s, {**a, "greybox": gb}, run)
+            failed = a["qa"]["failed"]
+            if a["qa"]["pass"]:
+                break
+    if any(a.get("qa", {}).get("pass") for a in rec["attempts"]):
+        bi = next(i for i, a in enumerate(rec["attempts"]) if a.get("qa", {}).get("pass"))
+        rec["final"] = {"attempt_index": bi, "video": rec["attempts"][bi]["video"], "pass": True, "failed": []}
+        save_state(st)
+        log(f"shot {n}: existing attempt {bi} passes current gates")
+        return
     for attempt in range(len(rec["attempts"]), MAX_RETRY + 1):
         try:
             g = generate(db, s, run, rec, attempt, failed)

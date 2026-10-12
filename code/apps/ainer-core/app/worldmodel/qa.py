@@ -21,7 +21,7 @@ SMALL = (160, 96)
 
 TH = {"motion_diff": 1.0, "nondup": 0.5, "cam_scale": 0.02, "cam_shift": 0.015, "audio_rms_db": -45.0,
       "audio_slack_s": 0.25, "first_corr": 0.55, "energy_inside": 0.45,
-      "coherence": 0.6}
+      "identity": 0.6}
 
 MOOD_WORDS = {
     "menace": ["menacing", "tense", "threatening"], "fear": ["fear", "trembl", "frighten", "tense"],
@@ -93,7 +93,7 @@ def _shift(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
 
 def _pair_motion(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, float]:
     best, bs = -2.0, 1.0
-    for sc in np.arange(0.80, 1.2501, 0.005):
+    for sc in np.arange(0.70, 1.4501, 0.005):
         c = _corr(_zoom(a, sc)[10:-10, 16:-16], b[10:-10, 16:-16])
         if c > best:
             best, bs = c, float(sc)
@@ -115,6 +115,31 @@ def camera_motion(fr: np.ndarray) -> dict[str, float]:
             best = (s, dx, dy, c)
     return {"scale": round(best[0], 4), "shift_x": round(best[1] / w, 4), "shift_y": round(best[2] / h, 4),
             "match_corr": round(best[3], 3), "min_match_corr": round(worst_c, 3)}
+
+
+HUES = {  # 本章人物的标志色：Tyler 红发、Brad 绿发、Kyle 金发（也会吃到窗光，只当下限用）
+    "red": lambda r, g, b: (r > 150) & (r > g * 1.6) & (r > b * 1.8),
+    "green": lambda r, g, b: (g > 140) & (g > r * 1.4) & (g > b * 1.2),
+    "blond": lambda r, g, b: (r > 200) & (g > 170) & (b < 140) & (r - b > 80),
+}
+
+
+def identity_colors(path: str, min_presence: float = 0.0015) -> dict[str, Any]:
+    """人物身份保持（代理）：首帧里明显存在的标志色，在后半段每帧都不能掉到 60% 以下（人物融化/消失会掉）。"""
+    raw = subprocess.run([FFMPEG, "-v", "error", "-i", path, "-vf", f"scale={SMALL[0]}:{SMALL[1]}", "-pix_fmt", "rgb24",
+                          "-f", "rawvideo", "-"], capture_output=True, timeout=120).stdout
+    fr = np.frombuffer(raw, np.uint8).reshape(-1, SMALL[1], SMALL[0], 3).astype(np.float32)
+    if len(fr) < 4:
+        return {"ok": True, "ratios": {}}
+    ref = fr[1]  # 第 0 帧就是给定首帧，比生成帧更锐，用第 1 帧作基准
+    out = {}
+    for k, fn in HUES.items():
+        base = float(fn(ref[..., 0], ref[..., 1], ref[..., 2]).mean())
+        if base < min_presence:
+            continue
+        later = [float(fn(f[..., 0], f[..., 1], f[..., 2]).mean()) / base for f in fr[len(fr) // 2:]]
+        out[k] = round(min(later), 3)
+    return {"ok": all(v >= TH["identity"] for v in out.values()), "ratios": out}
 
 
 def audio_rms_db(path: str) -> float:
@@ -160,13 +185,13 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
     res["motion"] = {**m, "ok": m["mean_diff"] >= TH["motion_diff"] and m["nondup"] >= TH["nondup"]}
     cm = camera_motion(fr)
     textured = float(fr.std()) >= 2.0  # 纯色画面上相位相关是噪声，不算机位运动
-    # 缩放搜索撞到边界（0.80/1.25）= 没有找到一致的几何变换（画面崩/换景），不算有效运镜
-    in_range = 0.805 < cm["scale"] < 1.245
+    # 缩放搜索撞到边界（0.70/1.45）= 没有找到一致的几何变换（画面崩/换景），不算有效运镜
+    in_range = 0.705 < cm["scale"] < 1.445
     moved = textured and in_range and abs(cm["scale"] - 1) >= TH["cam_scale"] or math.hypot(cm["shift_x"], cm["shift_y"]) >= TH["cam_shift"]
     res["camera"] = {**cm, "planned": planned_move, "ok": moved if planned_move != "hold" else True}
     adb = audio_rms_db(video) if info["has_audio"] else -120.0
     a_ok = info["has_audio"] and abs(info["audio_duration_s"] - info["duration_s"]) <= TH["audio_slack_s"] \
-        and adb > TH["audio_rms_db"] and abs(info["duration_s"] - duration_s) <= 0.35
+        and adb > TH["audio_rms_db"] and duration_s - 0.15 <= info["duration_s"] <= duration_s + 0.6  # LTX 帧数取 8k+1，成片按目标时长裁
     if voice_s is not None:
         a_ok = a_ok and voice_s <= info["duration_s"] + 0.1
     res["audio"] = {"ok": a_ok, "rms_db": adb, "audio_s": info["audio_duration_s"], "video_s": info["duration_s"],
@@ -176,10 +201,9 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
         c = _corr(image_gray(first_frame), fr[0])
         pos["first_frame_corr"] = round(c, 3)
         pos["ok"] = c >= TH["first_corr"]
-    if "min_match_corr" in cm:
-        # 连贯性：首帧经最佳缩放/平移后仍要和中帧、尾帧相像（拒绝后半段人物/场景崩坏）
-        pos["coherence"] = cm["min_match_corr"]
-        pos["ok"] = pos["ok"] and cm["min_match_corr"] >= TH["coherence"]
+    ident = identity_colors(video)
+    pos["identity"] = ident["ratios"]
+    pos["ok"] = pos["ok"] and ident["ok"]
     if greybox and kind == "action":
         W, H = greybox["resolution"]
         boxes = [s["bbox"] for per in greybox["actors"].values() for s in per if s.get("bbox")]
