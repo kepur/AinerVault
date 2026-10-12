@@ -194,7 +194,7 @@ def test_seed_build_is_idempotent_and_checked(db):
     perf = db.get(WorldPerformance, r1["performance_id"])
     assert perf.check_report["ok"]
     takes = db.query(WorldTake).filter_by(performance_id=perf.id).all()
-    assert len(takes) == 20 and all(t.camera.get("move") for t in takes)
+    assert len(takes) == 19 and all(t.camera.get("move") for t in takes)
 
 
 def test_api_roundtrip(db):

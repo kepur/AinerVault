@@ -281,6 +281,54 @@ def designed_camera(shot: dict, positions: dict[str, list[float]]) -> dict:
 
 ROUTES = {"action": "ltx25_layout", "speech": "dialogue_a2v", "inner": "dialogue_a2v"}
 
+# ------------------------------------------------------------------ 第二个区域：放学后的傍晚街道（镜 19 的已审核首帧在这里）
+STREET_KEY = "town/evening_street"
+STREET_SCENE_KEY = SCENE_KEY + "#street"
+STREET_SHOTS = {19}
+STREET_HORIZON, STREET_CAM_H = 0.53, 0.93
+STREET_PLACEMENTS = {"thomas": [307, 76, 74, 390]}
+
+
+def street_ops() -> list[dict]:
+    ev = "bk 19 已审核首帧 as_01M4S1R2HTKEBQPHE3WKBWDTHS：傍晚住宅街道，路灯在左，木板房在右"
+    return [
+        {"op": "add_region", "key": STREET_KEY, "kind": "street", "name": "学校外的傍晚街道",
+         "bounds_aabb": {"min": [-4, -12, 0], "max": [60, 8, 8]}, "lod": "L0", "status": "provisional",
+         "aliases": ["街道", "street", "放学路上"]},
+        {"op": "add_portal", "from_key": REGION_KEY, "to_key": STREET_KEY},
+        {"op": "add_asset", "key": "road", "kind": "floor", "dims_m": [64, 20, 0.02]},
+        {"op": "add_asset", "key": "house", "kind": "building", "dims_m": [7.0, 6.0, 6.5]},
+        {"op": "add_asset", "key": "lamp_post", "kind": "prop", "dims_m": [0.2, 0.2, 4.5]},
+        {"op": "add_asset", "key": "curb", "kind": "structure", "dims_m": [64, 0.3, 0.15]},
+        {"op": "add_instance", "region_key": STREET_KEY, "key": "road", "asset_key": "road", "collision": False,
+         "xform": {"pos": [28, -2, -0.02]}},
+        *[{"op": "add_instance", "region_key": STREET_KEY, "key": f"house_{i}", "asset_key": "house",
+           "xform": {"pos": [6 + i * 9.0, -8.5, 0]}} for i in range(5)],
+        *[{"op": "add_instance", "region_key": STREET_KEY, "key": f"lamp_{i}", "asset_key": "lamp_post",
+           "xform": {"pos": [3 + i * 12.0, 3.2, 0]}} for i in range(4)],
+        {"op": "add_instance", "region_key": STREET_KEY, "key": "curb_right", "asset_key": "curb", "collision": False,
+         "xform": {"pos": [28, -3.0, 0]}},
+        {"op": "add_fact", "subject_kind": "region", "subject_key": STREET_KEY, "predicate": "time_of_day",
+         "value": "evening", "source": "user", "evidence_span": ev, "confidence": 0.8},
+        {"op": "add_fact", "subject_kind": "region", "subject_key": STREET_KEY, "predicate": "reached_from",
+         "value": REGION_KEY, "source": "explicit",
+         "evidence_span": "bk 19：……弯腰捡起地上的书包，走出教学楼。", "confidence": 0.8},
+    ]
+
+
+def street_camera() -> dict:
+    return staging.camera_from_horizon(STREET_HORIZON, STREET_CAM_H, OPENING_LENS, FRAME_W, FRAME_H)
+
+
+def street_tracks() -> dict:
+    p = staging.calibrate_actors(street_camera(), STREET_PLACEMENTS, FRAME_W, FRAME_H)["thomas"]
+    end = [p[0] + 0.9, p[1] - 1.1, 0.0]
+    yaw = _yaw_to(p, end)
+    return {"thomas": {"entity_id": ACTORS["thomas"]["entity_id"], "asset_key": "char_thomas",
+                       "keys": [{"t_ms": 0, "pos": p, "yaw_deg": yaw}, {"t_ms": 3125, "pos": end, "yaw_deg": yaw}],
+                       "clips": [{"clip": "walk", "start_ms": 0, "end_ms": 3125},
+                                 {"clip": "look_down", "start_ms": 0, "end_ms": 3125}]}}
+
 
 def build(db, *, max_rounds: int = 3, cameras: dict[int, dict] | None = None) -> dict:
     """建（或复用）第一章世界 → 应用章节 delta → 整场一次表演（带 world_check 有界修正）→ 20 个 take。幂等。"""
@@ -295,27 +343,41 @@ def build(db, *, max_rounds: int = 3, cameras: dict[int, dict] | None = None) ->
         w = ws.create_world(db, title=TITLE, novel_id=NOVEL_ID)
         d = ws.propose_delta(db, w.id, world_ops(), chapter_id=CHAPTER_ID, note="chapter 1: locker corridor")
         ws.apply_delta(db, d.id)
-    snap = ws.snapshot(db, w.id, region_keys=[REGION_KEY])
-    perf = ws.performance_for_scene(db, SCENE_KEY)
-    if perf is None or perf.world_id != w.id:
-        draft = {"region_key": REGION_KEY, "duration_ms": total_ms(), "tracks": tracks(), "rev": 1}
+    if not ws.search_regions(db, w.id, "evening_street"):
+        d = ws.propose_delta(db, w.id, street_ops(), chapter_id=CHAPTER_ID, note="chapter 1: street after school")
+        ws.apply_delta(db, d.id)
+    from app.worldmodel import geometry as geo
+
+    def staged(scene_key, region_key, duration, trk, mood):
+        perf = ws.performance_for_scene(db, scene_key)
+        if perf is not None and perf.world_id == w.id:
+            return perf
+        snap = ws.snapshot(db, w.id, region_keys=[region_key])
+        draft = {"region_key": region_key, "duration_ms": duration, "tracks": trk, "rev": 1}
         fixed, rounds = wc.bounded_stage(snap, draft, max_rounds)
-        perf = ws.create_performance(db, w.id, scene_key=SCENE_KEY, region_key=REGION_KEY, duration_ms=total_ms(),
-                                     tracks=fixed["tracks"], fps=24,
-                                     mood={str(s["n"]): s["mood"] for s in SHOTS})
+        perf = ws.create_performance(db, w.id, scene_key=scene_key, region_key=region_key, duration_ms=duration,
+                                     tracks=fixed["tracks"], fps=24, mood=mood)
         perf.rev = fixed["rev"]
         perf.check_report = {"rounds": rounds, "ok": rounds[-1]["ok"], "max_rounds": max_rounds}
         db.flush()
-    from app.worldmodel import geometry as geo
-    have = {t.shot_key for t in db.scalars(select(WorldTake).where(WorldTake.performance_id == perf.id))}
+        return perf
+
+    perf = staged(SCENE_KEY, REGION_KEY, total_ms(), tracks(), {str(s["n"]): s["mood"] for s in SHOTS})
+    street = staged(STREET_SCENE_KEY, STREET_KEY, 3125, street_tracks(), {"19": "loneliness"})
+    have = {t.shot_key for p in (perf, street)
+            for t in db.scalars(select(WorldTake).where(WorldTake.performance_id == p.id))}
     for s in timeline():
         key = f"chapter01/shot{s['n']:02d}"
         if key in have:
             continue
-        pos = {a: geo.lerp_track(tr["keys"], s["start_ms"])[0] for a, tr in perf.tracks.items()}
-        cam = (cameras or {}).get(s["n"]) or designed_camera(s, pos)
-        ws.add_take(db, perf, shot_key=key, start_ms=s["start_ms"], end_ms=s["end_ms"],
+        p = street if s["n"] in STREET_SHOTS else perf
+        start = 0 if p is street else s["start_ms"]
+        end = start + s["dur"]
+        pos = {a: geo.lerp_track(tr["keys"], start)[0] for a, tr in p.tracks.items()}
+        cam = (cameras or {}).get(s["n"]) or (street_camera() if p is street else designed_camera(s, pos))
+        ws.add_take(db, p, shot_key=key, start_ms=start, end_ms=end,
                     camera={**cam, "move": s["move"], "size": s["size"]}, order_no=s["n"], route=ROUTES[s["kind"]],
                     fps=s["fps"], focus=s["focus"], mood=s["mood"])
     db.flush()
-    return {"world_id": w.id, "performance_id": perf.id, "version": w.current_version}
+    return {"world_id": w.id, "performance_id": perf.id, "street_performance_id": street.id,
+            "version": w.current_version}
