@@ -1,14 +1,16 @@
+import { ComicLibrary } from "./ComicPanel";
 /**
  * 资产抽屉（左侧 340px）：角色 / 媒体 / 白模三页，点一下放到画布上；画布上已经有了就飞过去。
  *
  * 开关状态放在模块里（契约没有这一项）：底栏的「资产管理」按钮调 toggleAssets()。
  * 角色视角图按引用放（entity_view，派生节点，铁律 1）；媒体按 asset 放（已落库的 /media 地址，铁律 2）。
  */
-import { hrefFor, navigate } from "../../ctx";
+import { hrefFor, navigate, readCtx } from "../../ctx";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ProjectRow } from "../../box/api";
 import { prod, viewRef, viewSrc, SHEET_SECTIONS, VIEW_LABELS, type ResourceItem, type EpochOption, type CanonicalPack } from "../../production/api";
 import { cv, media, missing, type MediaItem } from "../api";
+import { comicRequest } from "../../workbench/api";
 import { nodeIdOf, type CNodeData, type NodeKind, type NodeRef } from "../model";
 import { useCanvas } from "../store";
 import { errText, Icon, Spinner, useLatest } from "./Overlays";
@@ -179,6 +181,8 @@ function LibraryTab({ mediaOnly = false }: { mediaOnly?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [query, setQuery] = useState("");
+  const [comicAssets,setComicAssets]=useState<Set<string>>(new Set());
+  const [scopeReady,setScopeReady]=useState(!mediaOnly);
   const commit = useCommit();
   const boardId = s.boardId;
   const load = async (offset = 0) => {
@@ -202,10 +206,19 @@ function LibraryTab({ mediaOnly = false }: { mediaOnly?: boolean }) {
     }).catch(e => { if (alive) setErr(errText(e)); }).finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
   }, [boardId, mediaOnly]);
+  useEffect(()=>{
+    let alive=true;
+    if(!mediaOnly){setScopeReady(true);return;}
+    setScopeReady(false);
+    comicRequest<{items:{asset_id:string;medium:string}[]}>('/studio/v1/productions/asset-ownership').then(d=>{
+      if(alive){setComicAssets(new Set(d.items.filter(a=>a.medium==='comic').map(a=>a.asset_id)));setScopeReady(true);}
+    }).catch(()=>{if(alive)setErr('素材版本检查未连接，请启动本地漫剧执行层后重开素材库。');});
+    return()=>{alive=false;};
+  },[boardId,mediaOnly]);
   if (!boardId) return <div className="cv-drawer-empty">先打开或新建一张画布，再引用素材。</div>;
-  const filtered = items.filter(it => !query || [it.resource?.name, it.resource?.screen_name, it.ref.id].some(v => v?.toLowerCase().includes(query.toLowerCase())));
+  const filtered = items.filter(it => (readCtx().workspace!=='free'||!it.resource?.novel_id) && (!mediaOnly || !comicAssets.has(it.ref.id)) && (!query || [it.resource?.name, it.resource?.screen_name, it.ref.id].some(v => v?.toLowerCase().includes(query.toLowerCase()))));
   return <div className="cv-library">
-    <div className="cv-drawer-note">{s.board?.novel_id ? "当前小说的素材" : "同一工作区的素材，可自由引用"}</div>
+    <div className="cv-drawer-note">{s.board?.novel_id ? "当前小说的素材" : "自由创作的独立素材"}</div>
     <input className="cv-input" aria-label="筛选已载入素材" placeholder="筛选已载入的名称或编号" value={query} onChange={e => setQuery(e.target.value)} />
     {err && <div className="cv-drawer-note" role="alert">{err}<button className="cv-link" type="button" onClick={() => void load()}>重试</button></div>}
     {!items.length && !busy && !err && <div className="cv-drawer-empty">还没有素材。可上传文件，或到角色库创建。</div>}
@@ -215,7 +228,7 @@ function LibraryTab({ mediaOnly = false }: { mediaOnly?: boolean }) {
       if (!mediaOnly) return <EntityAssets key={it.ref.id} item={it} />;
       const src = resource.media?.url ? media(resource.media.url) : null;
       const kind = resource.kind;
-      const supported = ["image", "video", "audio"].includes(kind || "") && !!src;
+      const supported = scopeReady && ["image", "video", "audio"].includes(kind || "") && !!src;
       return <button key={it.ref.id} className="cv-box-row" type="button" disabled={!supported}
         title={supported ? "引用到画布，保留素材版本" : "该文件暂不能作为画布节点"}
         onClick={() => { if (supported) commit(kind as NodeKind, { ref: it.ref, title: resource.name || it.ref.id, role: kind === "image" ? "upload" : undefined }); }}>
@@ -349,24 +362,16 @@ function BoxTab() {
 }
 
 export function AssetsDrawer() {
-  const s = useCanvas();
-  const isOpen = useAssetsOpen();
-  const [tab, setTab] = useState<Tab>("cast");
-  if (!isOpen || s.overlay) return null;
-  return (
-    <aside className="cv-drawer cv-glass" aria-label="资产管理" onWheel={e => e.stopPropagation()}>
-      <div className="cv-drawer-head">
-        <b>资产管理</b>
-        <button type="button" className="cv-ibtn" title="关闭" onClick={() => setAssetsOpen(false)}><Icon name="close" size={16} /></button>
-      </div>
-      <div className="cv-seg cv-drawer-tabs">
-        <button type="button" className={tab === "cast" ? "is-on" : ""} onClick={() => setTab("cast")}><Icon name="user" size={13} />角色与场景</button>
-        <button type="button" className={tab === "media" ? "is-on" : ""} onClick={() => setTab("media")}><Icon name="image" size={13} />媒体</button>
-        <button type="button" className={tab === "box" ? "is-on" : ""} onClick={() => setTab("box")}><Icon name="cube" size={13} />白模</button>
-      </div>
-      <div className="cv-drawer-body">
-        {tab === "cast" ? (s.demo ? <LegacyCastTab /> : <LibraryTab />) : tab === "media" ? (s.demo ? <LegacyMediaTab /> : <LibraryTab mediaOnly />) : <BoxTab />}
-      </div>
-    </aside>
-  );
+  const s=useCanvas(),isOpen=useAssetsOpen();
+  const [tab,setTab]=useState<Tab>("cast");
+  if(!isOpen || s.overlay)return null;
+  const comic=readCtx().medium==="comic" || s.nodes.some(n=>n.data.comic);
+  return <aside className="cv-drawer cv-glass" aria-label="资产管理" onWheel={e=>e.stopPropagation()}>
+    <div className="cv-drawer-head"><b>{comic?'漫剧素材库':'资产管理'}</b><button type="button" className="cv-ibtn" title="关闭" onClick={()=>setAssetsOpen(false)}><Icon name="close" size={16}/></button></div>
+    {comic?<ComicLibrary/>:<><div className="cv-seg cv-drawer-tabs">
+      <button type="button" className={tab==='cast'?'is-on':''} onClick={()=>setTab('cast')}>角色与场景</button>
+      <button type="button" className={tab==='media'?'is-on':''} onClick={()=>setTab('media')}>媒体</button>
+      <button type="button" className={tab==='box'?'is-on':''} onClick={()=>setTab('box')}>白模</button>
+    </div><div className="cv-drawer-body">{tab==='cast'?(s.demo?<LegacyCastTab/>:<LibraryTab/>):tab==='media'?(s.demo?<LegacyMediaTab/>:<LibraryTab mediaOnly/>):<BoxTab/>}</div></>}
+  </aside>;
 }

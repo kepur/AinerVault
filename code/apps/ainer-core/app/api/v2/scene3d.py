@@ -87,6 +87,43 @@ class ProjectPatch(BaseModel):
     settings: dict[str, Any] | None = None
 
 
+def _studio_memberships(db: Session) -> dict[str, dict[str, Any]]:
+    """Resolve old director projects from existing shot references, without a migration."""
+    from app.models import Chapter, DirectorScene, ScriptDoc, Shot, ShotPlan, StudioBoard
+    memberships, shots = {}, {}
+    query = select(Shot.id, Shot.shot_plan_id, Shot.order_no, Shot.camera_json, ScriptDoc.chapter_id, Chapter.novel_id).join(
+        ShotPlan, Shot.shot_plan_id == ShotPlan.id).join(ScriptDoc, ShotPlan.script_doc_id == ScriptDoc.id).join(
+        Chapter, ScriptDoc.chapter_id == Chapter.id).order_by(Shot.updated_at.desc())
+    for sid, plan, order, camera, chapter, novel in db.execute(query):
+        shots[sid] = {"novel_id": novel, "chapter_id": chapter, "shot_plan_id": plan, "shot_id": sid, "shot_order": order}
+        run = camera.get("director_run") if isinstance(camera, dict) else None
+        pid = run.get("box_project_id") if isinstance(run, dict) else None
+        if pid and pid not in memberships:
+            memberships[pid] = shots[sid]
+    # A shot may have replaced its director_run; the saved scene still owns the old project.
+    for pid, notes in db.execute(select(DirectorScene.box_project_id, DirectorScene.notes_json).where(DirectorScene.box_project_id.is_not(None))):
+        sid = notes.get("shot_id") if isinstance(notes, dict) else None
+        if sid in shots:
+            memberships.setdefault(pid, shots[sid])
+    for board in db.scalars(select(StudioBoard).where(StudioBoard.novel_id.is_not(None)).order_by(StudioBoard.updated_at.desc())):
+        doc = board.doc_json or {}
+        for node in doc.get("nodes", []):
+            ref = node.get("data", {}).get("ref", {})
+            if ref.get("kind") == "box_project" and ref.get("id"):
+                memberships.setdefault(ref["id"], {"novel_id": board.novel_id, "chapter_id": board.chapter_id,
+                    "shot_plan_id": board.shot_plan_id, "medium": "comic" if (doc.get("production") or {}).get("medium") == "comic" else "video"})
+    return memberships
+
+
+def _studio_project_out(p: SceneProject, memberships: dict, *, full=False):
+    out = service.project_out(p, full=full)
+    settings = p.settings_json or {}
+    binding = {} if settings.get("studio_workspace") == "free" else memberships.get(p.id, {})
+    out.update({k: v for k, v in binding.items() if not out.get(k)})
+    out["studio_scope"] = {"medium": settings.get("studio_medium", binding.get("medium", "video")), "chapter_id": settings.get("studio_chapter") or binding.get("chapter_id")}
+    return out
+
+
 @router.get("/projects")
 def list_projects(plan_id: str | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     """白模项目列表。plan_id：只列这份分镜的白模（导演出片搭的那些，按镜号排），每项带 shot_id / shot_order。
@@ -96,7 +133,8 @@ def list_projects(plan_id: str | None = None, db: Session = Depends(get_db)) -> 
     """
     if not plan_id:
         rows = db.execute(select(SceneProject).order_by(SceneProject.updated_at.desc()).limit(200)).scalars()
-        return [service.project_out(p, full=False) for p in rows]
+        memberships = _studio_memberships(db)
+        return [_studio_project_out(p, memberships) for p in rows]
     from app.models import Shot
 
     by_box: dict[str, Shot] = {}
@@ -107,8 +145,9 @@ def list_projects(plan_id: str | None = None, db: Session = Depends(get_db)) -> 
             by_box[pid] = sh
     q = select(SceneProject).where((SceneProject.id.in_(list(by_box))) | (SceneProject.shot_plan_id == plan_id))
     out = []
+    memberships = _studio_memberships(db)
     for p in db.execute(q).scalars():
-        d = service.project_out(p, full=False)
+        d = _studio_project_out(p, memberships)
         sh = by_box.get(p.id)
         d.update({"shot_id": sh.id if sh else None, "shot_order": sh.order_no if sh else None})
         out.append(d)
@@ -132,7 +171,7 @@ def create_project(body: ProjectIn, db: Session = Depends(get_db)) -> dict[str, 
 @router.get("/projects/{pid}")
 def get_project(pid: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     p = _project(db, pid)
-    out = service.project_out(p)
+    out = _studio_project_out(p, _studio_memberships(db), full=True)
     run = agent.active_run(pid)
     out["active_run"] = run.id if run else None
     return out

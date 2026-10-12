@@ -72,7 +72,7 @@ REF_KIND = "char_sheet"
 REF_ID_MAX = 32
 #: 人物照片给 data: 时的上限（正常应先上传成 /media）
 MAX_DATA_BYTES = 20 * 1024 * 1024
-PRESETS = ("standard", "quick")
+PRESETS = ("standard", "quick", "prop")
 
 
 class SheetError(RuntimeError):
@@ -102,11 +102,15 @@ EXPR_KEYS: tuple[str, ...] = (
     "expr_think", "expr_disgust", "expr_doubt",
 )
 
+PROP_KEYS: tuple[str, ...] = ("prop_front", "prop_side", "prop_iso", "prop_macro")
+
 SECTIONS: tuple[Section, ...] = (
     Section("body", "角色全景前后侧三视图", "三视图", ("body_front", "body_back", "body_side"), 3),
     Section("face", "角色面部多视角特写", "面部特写", ("face_front", "face_left", "face_right", "face_back"), 2),
     Section("expr", "九宫格表情特写", "表情", EXPR_KEYS, 3),
 )
+
+PROP_SECTION = Section("prop", "道具多角度展示与工艺细节", "道具展台", PROP_KEYS, 4)
 
 LABELS: dict[str, str] = {
     "body_front": "前视图", "body_back": "后视图", "body_side": "侧视图",
@@ -115,13 +119,18 @@ LABELS: dict[str, str] = {
     "expr_happy": "乐", "expr_surprise": "惊", "expr_fear": "恐",
     "expr_think": "思", "expr_disgust": "厌", "expr_doubt": "疑",
 }
-_KEY_BY_LABEL = {v: k for k, v in LABELS.items()}
+PROP_LABELS: dict[str, str] = {
+    "prop_front": "正立面主视图", "prop_side": "侧方位透视", "prop_iso": "45°立体全貌", "prop_macro": "材质与细节特写",
+}
+ALL_LABELS: dict[str, str] = {**LABELS, **PROP_LABELS}
+_KEY_BY_LABEL = {v: k for k, v in ALL_LABELS.items()}
 
 PANEL_KEYS_STANDARD: list[str] = [k for s in SECTIONS for k in s.keys]
 #: 快速版：下游出分镜真正会引用的几格（identity_panels 挑的就是它们）
 PANEL_KEYS_QUICK: list[str] = ["body_front", "body_back", "body_side", "face_front"]
+PANEL_KEYS_PROP: list[str] = list(PROP_KEYS)
 
-#: 每格从哪儿改：(底图, 附加身份参考)。"person" = 人物照片，其余是别的格。
+#: 每格从哪儿改：(底图, 附加身份参考)。"person" = 人物/道具底图照片，其余是别的格。
 #: 底图管构图和身份；附加参考在网关那边要标 identity 才送得进去（见 _edit_payload）
 SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "body_front": ("person", ()),
@@ -134,6 +143,16 @@ SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "face_back": ("face_front", ()),
     **{k: ("face_front", ()) for k in EXPR_KEYS},
 }
+
+PROP_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
+    # 道具定妆照：以道具原图出主视图，再派生侧位、45度、微距细节
+    "prop_front": ("person", ()),
+    "prop_side": ("prop_front", ()),
+    "prop_iso": ("prop_front", ()),
+    "prop_macro": ("prop_front", ()),
+}
+
+ALL_SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {**SOURCES, **PROP_SOURCES}
 
 #: 九宫格每格的表情（写成模型看得懂的面部动作，不写抽象情绪词）
 EXPRESSIONS: dict[str, str] = {
@@ -154,12 +173,33 @@ _STUDIO = ("Plain light grey seamless studio background, soft even studio lighti
 
 
 def panel_keys(preset: str) -> list[str]:
+    if preset == "prop":
+        return list(PANEL_KEYS_PROP)
     return list(PANEL_KEYS_QUICK if preset == "quick" else PANEL_KEYS_STANDARD)
 
 
-def panel_prompt(key: str, look: str = "") -> str:
+def panel_prompt(key: str, look: str = "", style: str = "photoreal") -> str:
     """这一格的英文提示词。klein 编辑要祈使句指令，不要画面描述。"""
+    if style == "anime":
+        prompt = panel_prompt(key, look)
+        for old in ("photorealistic photo", "hyperrealistic product photography", "studio photo"):
+            prompt = prompt.replace(old, "2D cel-shaded animated drama illustration")
+        return prompt + " Keep the same anime design and clean linework."
+    if style != "photoreal":
+        raise ValueError("Unsupported character card style")
     look = " ".join((look or "").split())[:400]
+    if key.startswith("prop_"):
+        prop_studio = ("Plain light neutral grey studio background, soft even studio commercial lighting, hyperrealistic product photography. "
+                       "One single prop item, razor-sharp material focus, no humans, no text, no watermark.")
+        same_prop = "the same prop item as in the reference image"
+        if key == "prop_front":
+            return f"Make a clean front elevation view of {same_prop}, centered horizontally and vertically, showing the exact silhouette, shape, and proportions. {prop_studio}"
+        if key == "prop_side":
+            return f"Turn {same_prop} to a strict side profile view, centered, showing its thickness, edge contour, and lateral craftsmanship. {prop_studio}"
+        if key == "prop_iso":
+            return f"Show {same_prop} in a dynamic 45-degree isometric three-quarter perspective angle, highlighting its 3D depth, bevels, and form. {prop_studio}"
+        if key == "prop_macro":
+            return f"Macro extreme close-up of {same_prop}, focusing on the intricate textures, material reflection, surface wear or engraving details, sharp shallow depth of field. {prop_studio}"
     if key == "body_front":
         wear = f" Outfit and hairstyle: {look.rstrip('.')}." if look else " Keep the same outfit."
         return (f"Make a full-body studio photo of {_SAME}. Keep the face, hairstyle, skin tone and body shape "
@@ -201,9 +241,9 @@ def plan_layers(keys: Sequence[str]) -> list[list[str]]:
     """
     wanted = list(dict.fromkeys(keys))
     for k in wanted:
-        if k not in SOURCES:
+        if k not in ALL_SOURCES:
             raise KeyError(k)
-        base, refs = SOURCES[k]
+        base, refs = ALL_SOURCES[k]
         for dep in (base, *refs):
             if dep != "person" and dep not in wanted:
                 raise ValueError(f"{k} 依赖 {dep}，但 {dep} 不在要出的格里")
@@ -211,8 +251,8 @@ def plan_layers(keys: Sequence[str]) -> list[list[str]]:
     placed: set[str] = set()
     while len(placed) < len(wanted):
         layer = [k for k in wanted if k not in placed
-                 and all(d == "person" or d in placed for d in (SOURCES[k][0], *SOURCES[k][1]))]
-        if not layer:                                  # SOURCES 写出环才会到这里
+                 and all(d == "person" or d in placed for d in (ALL_SOURCES[k][0], *ALL_SOURCES[k][1]))]
+        if not layer:                                  # ALL_SOURCES 写出环才会到这里
             raise ValueError("定妆照的格之间有循环依赖")
         layers.append(layer)
         placed.update(layer)
@@ -221,16 +261,18 @@ def plan_layers(keys: Sequence[str]) -> list[list[str]]:
 
 def panel_seed(base: int, key: str) -> int:
     """固定种子：同一 base 下每格各自递增，保证可复现、互相不撞。"""
-    return int(base) + PANEL_KEYS_STANDARD.index(key)
+    all_keys = PANEL_KEYS_STANDARD + [k for k in PANEL_KEYS_PROP if k not in PANEL_KEYS_STANDARD]
+    idx = all_keys.index(key) if key in all_keys else 0
+    return int(base) + idx
 
 
 def panel_size_of(key: str) -> tuple[int, int]:
     """按格类别返回分级分辨率：
-    全身三视图 → 512×768；面部多视角 → 384×448；九宫格表情 → 256×256。
+    全身三视图 → 512×768；面部多视角 / 道具 → 384×448；九宫格表情 → 256×256。
     """
     if key.startswith("body_"):
         return PANEL_SIZE_BODY
-    if key.startswith("face_"):
+    if key.startswith("face_") or key.startswith("prop_"):
         return PANEL_SIZE_FACE
     if key.startswith("expr_"):
         return PANEL_SIZE_EXPR
@@ -246,7 +288,7 @@ def panel_key(p: Mapping[str, Any]) -> str | None:
     for field in ("key", "label"):
         v = p.get(field)
         if isinstance(v, str):
-            if v in LABELS:
+            if v in ALL_LABELS:
                 return v
             if v in _KEY_BY_LABEL:
                 return _KEY_BY_LABEL[v]
@@ -256,14 +298,16 @@ def panel_key(p: Mapping[str, Any]) -> str | None:
 #: 当「身份」引用时给哪几格：全身正面管衣服身形、正脸管长相、侧面管轮廓。
 #: 刚好 3 张 —— klein 编辑最多 4 张图，底图（场景）占一张
 CHARACTER_PANELS = ("body_front", "face_front", "body_side")
+PROP_PANELS = ("prop_front", "prop_iso", "prop_macro", "prop_side")
 #: 当底图 / 其他角色只要一张：全身正面最能代表「这个人穿成这样」；没有就往后退
-SINGLE_PANELS = ("body_front", "face_front", "body_side", "body_back")
+SINGLE_PANELS = ("body_front", "face_front", "prop_front", "prop_iso", "body_side", "body_back")
 
 
 def identity_panels(panels: Sequence[Mapping[str, Any]] | None, want: str) -> list[dict[str, Any]]:
     """下游引用定妆照时挑哪几格（原样返回传入的面板 dict）。
 
     want=character → [body_front, face_front, body_side]（有哪个给哪个）；
+    want=prop → [prop_front, prop_iso, prop_macro]；
     want=base（以及 first_frame / reference / style 等只要一张的角色）→ [body_front]，没有就退到下一格。
     """
     by_key: dict[str, dict[str, Any]] = {}
@@ -274,6 +318,8 @@ def identity_panels(panels: Sequence[Mapping[str, Any]] | None, want: str) -> li
                 by_key[k] = dict(p)
     if want == "character":
         return [by_key[k] for k in CHARACTER_PANELS if k in by_key]
+    if want == "prop":
+        return [by_key[k] for k in PROP_PANELS if k in by_key]
     for k in SINGLE_PANELS:
         if k in by_key:
             return [by_key[k]]
@@ -496,6 +542,8 @@ def _store_sheet(db, img: Image.Image, meta: dict[str, Any]) -> tuple[str, str]:
 # ── 主流程 ──────────────────────────────────────────────────────────────────
 
 def _section_of(key: str) -> Section:
+    if key in PROP_KEYS:
+        return PROP_SECTION
     return next(s for s in SECTIONS if key in s.keys)
 
 
@@ -527,7 +575,8 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
         except Exception as exc:                       # noqa: BLE001 —— 进度写不进去不该让出图失败
             log.warning("char_sheet 进度回调失败：%s", exc)
 
-    sec_total = {s.key: sum(1 for k in s.keys if k in keys) for s in SECTIONS}
+    all_sections = (*SECTIONS, PROP_SECTION) if preset == "prop" else SECTIONS
+    sec_total = {s.key: sum(1 for k in s.keys if k in keys) for s in all_sections}
     sec_done = dict.fromkeys(sec_total, 0)
     made: dict[str, tuple[str, str]] = {}               # key → (asset_id, 绝对 url)
     missing: dict[str, str] = {}
@@ -545,11 +594,11 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
             raise SheetCancelled("已停止")
         submitted: dict[str, str] = {}                   # task_id → key
         for key in layer:
-            base_key, ref_keys = SOURCES[key]
+            base_key, ref_keys = ALL_SOURCES[key]
             deps = [d for d in (base_key, *ref_keys) if d != "person"]
             bad = next((d for d in deps if d not in made), None)
             if bad is not None:
-                missing[key] = f"上游「{LABELS[bad]}」没出成"
+                missing[key] = f"上游「{ALL_LABELS[bad]}」没出成"
                 finished(key)
                 continue
             src = {"person": person, **{k: v[1] for k, v in made.items()}}
@@ -558,7 +607,8 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
             try:
                 submitted[_submit(db, route, payload, ref_kind=ref_kind, ref_id=ref_id, force=force)] = key
             except Exception as exc:                   # noqa: BLE001 —— 一格交不上记下来，别的照出
-                db.rollback()
+                if db is not None:
+                    db.rollback()
                 missing[key] = f"提交失败：{exc}"[:200]
                 finished(key)
 
@@ -574,6 +624,8 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
             missing[submitted[tid]] = f"超过 {TASK_TIMEOUT_S // 60} 分钟没出完"
         if "body_front" in missing:
             raise SheetError(f"前视图没出成：{missing['body_front']}")
+        if "prop_front" in missing:
+            raise SheetError(f"正立面主视图没出成：{missing['prop_front']}")
 
     report(96, "拼版")
     images = {k: im for k, (_aid, url) in made.items() if (im := _load_image(url)) is not None}
@@ -589,9 +641,9 @@ def generate_sheet(db, *, person_url: str, name: str = "", look: str = "", prese
     return {
         "sheet": {"asset_id": sheet_id, "url": same_origin(sheet_url)},
         "panels": [{"key": k, "view_key": {"expr_sorrow": "expr_sad", "expr_happy": "expr_laugh"}.get(k, k),
-                    "label": LABELS[k], "asset_id": made[k][0], "url": same_origin(made[k][1])}
+                    "label": ALL_LABELS[k], "asset_id": made[k][0], "url": same_origin(made[k][1])}
                    for k in keys if k in made and k in images],
-        "missing": [{"key": k, "label": LABELS[k], "error": missing[k]} for k in keys if k in missing],
+        "missing": [{"key": k, "label": ALL_LABELS[k], "error": missing[k]} for k in keys if k in missing],
         "seed": base_seed, "preset": preset,
     }
 
@@ -757,6 +809,8 @@ class _Grid:
 
 
 def _grids(preset: str) -> list[_Grid]:
+    if preset == "prop":
+        return [_Grid(PROP_SECTION.title, PROP_SECTION.keys, 4, FACE_ASPECT, False, LABEL_SIZE, False)]
     body, face, expr = SECTIONS
     out = [_Grid(body.title, body.keys, 3, BODY_ASPECT, False, LABEL_SIZE, False)]
     if preset == "quick":
@@ -784,7 +838,7 @@ def _grid_height() -> int:
 
 
 def compose_sheet(panels: Mapping[str, Image.Image], name: str = "", preset: str = "standard") -> Image.Image:
-    """把各格拼成一张「角色定妆照」（纯函数，不读盘不连库）。
+    """把各格拼成一张「角色/道具定妆照」（纯函数，不读盘不连库）。
 
     缺的格画成「未生成」占位，版式不变 —— 一眼看出哪格要重出。
     """
@@ -799,7 +853,8 @@ def compose_sheet(panels: Mapping[str, Image.Image], name: str = "", preset: str
 
     widths = [g.width(gh) for g in grids]
     W = 2 * MARGIN + sum(widths) + (len(grids) - 1) * (2 * SECTION_PAD + 1)
-    _tw, title_h, _t = _text_size(probe, "角色定妆照", f_title)
+    main_title = "道具定妆照" if preset == "prop" else "角色定妆照"
+    _tw, title_h, _t = _text_size(probe, main_title, f_title)
     rule_y = MARGIN + title_h + 30
     sec_top = rule_y + 40
     _sw, sec_h, _st = _text_size(probe, "角色", f_section)
@@ -810,14 +865,19 @@ def compose_sheet(panels: Mapping[str, Image.Image], name: str = "", preset: str
     draw = ImageDraw.Draw(sheet)
 
     # 页眉：大标题（+ 名字），右侧小字写版本，下面一条细线
-    tw, th, tt = _text_size(draw, "角色定妆照", f_title)
-    _draw_text(draw, (MARGIN, MARGIN - tt), "角色定妆照", f_title, INK)
+    tw, th, tt = _text_size(draw, main_title, f_title)
+    _draw_text(draw, (MARGIN, MARGIN - tt), main_title, f_title, INK)
     name = " ".join((name or "").split())[:24]
     if name:
         nw, nh, nt = _text_size(draw, f"·  {name}", f_name)
         # 名字和标题底边对齐（字号不同，按各自字形的底对齐）
         _draw_text(draw, (MARGIN + tw + 22, MARGIN + th - nh - nt), f"·  {name}", f_name, SUB)
-    meta = "标准版 · 16 格" if preset == "standard" else "快速版 · 4 格"
+    if preset == "prop":
+        meta = "道具展台 · 4 角度"
+    elif preset == "quick":
+        meta = "快速版 · 4 格"
+    else:
+        meta = "标准版 · 16 格"
     mw, mh, mt = _text_size(draw, meta, f_meta)
     _draw_text(draw, (W - MARGIN - mw, MARGIN + th - mh - mt), meta, f_meta, SUB)
     draw.line([(MARGIN, rule_y), (W - MARGIN, rule_y)], fill=RULE, width=2)
@@ -870,7 +930,7 @@ def compose_sheet(panels: Mapping[str, Image.Image], name: str = "", preset: str
             draw.rounded_rectangle([tx, ty, tx + tw_ - 1, ty + th_ - 1], radius=RADIUS, fill=EMPTY, outline=FRAME)
             ew, eh, et = _text_size(draw, "未生成", f_empty)
             _draw_text(draw, (tx + (tw_ - ew) / 2, ty + (th_ - eh) / 2 - et), "未生成", f_empty, EMPTY_INK)
-        label = LABELS.get(key, key)
+        label = ALL_LABELS.get(key, key)
         f_label = _font(g.label_size, g.label_bold)
         lw, lh, lt = _text_size(draw, label, f_label)
         # 标签在图块正下方居中，竖直方向落在标签区中间偏上（离图近、离下一行远，分组才清楚）

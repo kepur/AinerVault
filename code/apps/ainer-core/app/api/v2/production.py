@@ -147,6 +147,8 @@ def list_resources(board_id: str, kind: Literal["entity", "asset", "audio"] = "e
             q = select(WorldEntity).where(WorldEntity.workspace_id == row.workspace_id)
             if context.novel_id:
                 q = q.where(WorldEntity.novel_id == context.novel_id)
+            else:
+                q = q.where(WorldEntity.novel_id.is_(None))
             if entity_kind is not None:
                 q = q.where(WorldEntity.kind == entity_kind)
             if query:
@@ -155,6 +157,8 @@ def list_resources(board_id: str, kind: Literal["entity", "asset", "audio"] = "e
             q = select(Asset).where(Asset.workspace_id == row.workspace_id)
             if context.novel_id:
                 q = q.where(Asset.novel_id.in_([context.novel_id]) | Asset.novel_id.is_(None))
+            else:
+                q = q.where(Asset.novel_id.is_(None))
             if kind == "audio":
                 q = q.where(Asset.kind == AssetKind.audio)
             if query:

@@ -71,7 +71,7 @@ function TextNode({ id, data, selected }: NodeProps<CNode>) {
       selected={selected}
       width={WIDTH[role]}
       badges={role === "prompt" ? <span className="cv-badge">提示词</span> : undefined}
-      onOpen={free ? () => setEditing(true) : undefined}
+      onOpen={free && !data.comic ? () => setEditing(true) : undefined}
     >
       <div className={`cv-text cv-text--${role}${editing ? " is-editing" : ""}`}>{body}</div>
       {tap}

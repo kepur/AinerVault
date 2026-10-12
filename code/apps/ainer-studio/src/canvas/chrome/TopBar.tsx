@@ -2,12 +2,13 @@
  * 顶栏：左边品牌 + 面包屑（小说 › 章节 › 分镜 vN，每段都能点开换），右边保存状态、任务、整理、导出、视图。
  * 整条是透明的、只有胶囊接鼠标（pointer-events），画布在它下面照样能拖。
  */
-import { hrefFor, navigate } from "../../ctx";
+import { navigate, readCtx } from "../../ctx";
+import { comicSources } from "../comic";
 import { useReactFlow } from "@xyflow/react";
-import { useState, type ReactNode } from "react";
-import { taskOpen } from "../actions";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { freeRef, taskOpen } from "../actions";
 import { cv, HttpError, media } from "../api";
-import type { CanvasStore, SaveState } from "../contract";
+import type { SaveState } from "../contract";
 import {
   DOC_SCHEMA, isDerived, type CanvasDoc, type CanvasMeta, type CEdge, type CNode, type DocNode, type RunItem, type RunOptions,
   type RunState, type TaskKind, type TrackedTask,
@@ -15,6 +16,7 @@ import {
 import { useCanvas } from "../store";
 import { errText, Icon, MenuList, Popover, Spinner, useLatest, type MenuItem } from "./Overlays";
 import { NewCanvasModal } from "./NewCanvasModal";
+import {ShotManager} from './ShotManager';
 
 const SAVE: Record<SaveState, { text: string; tone: string; title: string } | null> = {
   idle: null,
@@ -29,7 +31,7 @@ const SAVE: Record<SaveState, { text: string; tone: string; title: string } | nu
 };
 
 const KIND_CN: Record<TaskKind, string> = {
-  director: "导演出片", ltx25: "文字出片", gen: "生成", blender: "渲控制素材", box_agent: "搭景", run: "一键出片", quick: "快速成片",
+  comic: "漫剧制作", director: "导演出片", ltx25: "文字出片", gen: "生成", blender: "渲控制素材", box_agent: "搭景", run: "一键出片", quick: "快速成片",
 };
 const STATUS_CN: Record<TrackedTask["status"], string> = {
   queued: "排队中", running: "进行中", succeeded: "完成", failed: "失败", cancelled: "已取消",
@@ -80,6 +82,7 @@ function exportDoc(nodes: CNode[], edges: CEdge[], viewport: CanvasDoc["viewport
     } else {
       data = { ...d };
       delete (data as Record<string, unknown>).orphan;
+      if(d.comic){delete data.comicLive;delete data.media;delete data.text;}
     }
     return { id: n.id, type: n.type ?? "text", position: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, data };
   };
@@ -99,12 +102,6 @@ const KIND_TAG: Record<CanvasMeta["kind"], string> = { plan: "总览", scene: "�
 
 function boardLabel(b: CanvasMeta): string {
   return `${KIND_TAG[b.kind]} · ${b.title}${b.stale ? "（分镜已重编，对不上了）" : ""}`;
-}
-
-/** 分镜画布的地址：同一本书、同一章、同一份分镜；带上选中的镜头（画布 canvas 参数保留，切回来还是这张） */
-function storyboardPatch(s: CanvasStore) {
-  const ref = s.selected?.data.ref;
-  return { plan: s.planId || null, ...(ref?.kind === "shot" ? { shot: ref.id } : {}) };
 }
 
 /** 画布列表下面：把选中的镜头单独建一张、新建空白画布、重新按场次分 */
@@ -604,20 +601,33 @@ function TasksPill() {
   );
 }
 
-export function TopBar({ nav }: { nav?: ReactNode }) {
+export function TopBar({ nav, initialManager=false, initialAssemble=false, onManual }: { nav?: ReactNode;initialManager?:boolean;initialAssemble?:boolean;onManual:(id:string,manual?:boolean)=>void }) {
   const s = useCanvas();
   const rf = useReactFlow<CNode, CEdge>();
   const [viewEl, setViewEl] = useState<HTMLElement | null>(null);
   const [newCanvasOpen, setNewCanvasOpen] = useState(false);
+  const [managerOpen,setManagerOpen]=useState(initialManager);
+  const [manualEl,setManualEl]=useState<HTMLElement|null>(null);
   const { pick } = s;
 
   const novel = pick.novels.find(n => n.id === s.novelId);
   const chapter = pick.chapters.find(c => c.id === s.chapterId);
   const plan = pick.plans.find(p => p.id === s.planId);
   const save = SAVE[s.save];
+  const comic=readCtx().medium==='comic';
+  const editNode=(id:string,manual=true)=>{s.select(id);s.focusNode(id);onManual(id,manual);};
+  const assemblyOpened=useRef(false);
+  useEffect(()=>{if(initialAssemble&&!assemblyOpened.current&&!s.loading){const n=s.nodes.find(n=>n.data.comic?.step==='assemble');if(n){assemblyOpened.current=true;editNode(n.id,false);}}},[initialAssemble,s.loading,s.nodes]);
+  const manualComic=()=>{
+    const selected=s.selected?.data.comic;
+    const linked=s.edges.filter(e=>e.source===s.selected?.id).map(e=>s.nodes.find(n=>n.id===e.target)).find(n=>n?.data.comic?.step==='video');
+    const node=(selected?.step==='video'?s.selected:null)||linked||s.nodes.find(n=>n.data.comic?.step==='video'&&n.data.comic.source_id===selected?.source_id)||s.nodes.find(n=>n.data.comic?.step==='video');
+    if(node)editNode(node.id);else setManagerOpen(true);
+  };
 
-  const doExport = () => {
+  const doExport = async () => {
     const doc = exportDoc(s.nodes, s.edges, rf.getViewport());
+    if(comic&&readCtx().production){const p=(await comicSources(readCtx().production!)).production;doc.production={id:p.id,medium:'comic',script_doc_id:p.script_doc_id};}
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -630,11 +640,11 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
   };
 
   return (
-    <header className="cv-topbar">
+    <header className={`cv-topbar${comic?' is-comic':''}`}>
       <div className="cv-topbar-side">
-        <div className="cv-brand cv-glass">Ainer <b>Studio</b><span>创作画布</span></div>
-        <button type="button" className="cv-pill cv-glass" onClick={() => s.openHome()} title="打开所有画布">
-          <Icon name="grid" size={13} />我的画布
+        <div className="cv-brand cv-glass">Ainer <b>Studio</b><span>{comic?'动态漫画':'创作画布'}</span></div>
+        <button type="button" className="cv-pill cv-glass" onClick={() => comic?navigate('hub',{hub:'production'}):s.openHome()} title={comic?'当前制作项目的流程与状态':'打开所有画布'}>
+          <Icon name="grid" size={13} />{comic?'制作总览':'我的画布'}
         </button>
         <nav className="cv-crumbs cv-glass" aria-label="小说、章节、分镜">
           <Crumb label={novel?.title || s.live.novelTitle || "选小说"} title="换一本小说" empty="还没有小说"
@@ -643,38 +653,33 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
           <Crumb label={chapter?.title || s.live.chapterTitle || "选章节"} title="换一章" empty="这本小说还没有章节"
             items={pick.chapters.map(c => ({ id: c.id, text: c.title || `第 ${c.order_no} 章`, hint: `#${c.order_no}`, active: c.id === s.chapterId, onPick: () => pick.setChapter(c.id) }))} />
           <span className="cv-crumb-sep">›</span>
-          <Crumb label={plan ? `分镜 v${plan.version}` : "选分镜"} title="换一份分镜计划（画布挂在分镜计划上）" empty="这一章还没有分镜计划"
+          {!comic&&<><Crumb label={plan ? `分镜 v${plan.version}` : "选分镜"} title="换一份分镜计划（画布挂在分镜计划上）" empty="这一章还没有分镜计划"
             items={pick.plans.map(p => ({
               id: p.id, text: `分镜 v${p.version}`, active: p.id === s.planId, onPick: () => pick.setPlan(p.id),
               hint: `${p.shots} 镜${p.sample ? " · 试片" : ""}`,
-            }))} />
-          <span className="cv-crumb-sep">›</span>
+            }))} /><span className="cv-crumb-sep">›</span></>}
           <Crumb label={s.board?.title || "选画布"} title="所有画布：自由画布、分镜画布和按场次创建的画布" empty="还没有画布，可以直接新建"
             items={s.boards.map(b => ({
               id: b.id, text: boardLabel(b), active: b.id === s.boardId, onPick: () => pick.setBoard(b.id),
               hint: b.shots != null ? `${b.videos ?? 0}/${b.shots} 镜` : b.purpose || "空白",
             }))}
-            footer={close => <BoardActions close={close} onOpenNew={() => setNewCanvasOpen(true)} />} />
+            footer={comic?undefined:close => <BoardActions close={close} onOpenNew={() => setNewCanvasOpen(true)} />} />
         </nav>
-        <button type="button" className="cv-pill cv-glass"
+        {!comic&&<button type="button" className="cv-pill cv-glass"
           title="新建空白画布，自由添加素材、文字、分组和连线"
           onClick={() => setNewCanvasOpen(true)}>
           <Icon name="plus" size={13} />新建画布
-        </button>
-        {s.planId && (
-          <a className="cv-pill cv-glass" href={hrefFor("canvas", storyboardPatch(s))}
-            onMouseDown={e => { e.currentTarget.href = hrefFor("canvas", storyboardPatch(s)); }}
-            onClick={e => { if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); navigate("canvas", storyboardPatch(s)); } }}
-            title="回到分镜画布（整章时间线，章节视频在那里串起来；选中的镜头跟过去）">
-            <Icon name="left" size={14} />分镜画布
-          </a>
-        )}
+        </button>}
         {s.demo && <span className="cv-demo-pill" title="?demo=1：没连后端，数据是内置的演示故事；改动只存在这个浏览器里">演示数据</span>}
         {s.loading && <span className="cv-pill cv-glass"><Spinner size={12} />载入中</span>}
         {s.error && <span className="cv-pill cv-glass is-err" title={s.error}><Icon name="warn" size={14} />载入失败</span>}
       </div>
 
       <div className="cv-topbar-side">
+        <button type="button" className="cv-pill cv-glass" disabled={!s.board||s.loading} onClick={e=>{if(comic)manualComic();else setManualEl(e.currentTarget);}} title={comic?'直接编辑当前镜头的方案、帧率、动作与音效':'在画布上手动制作图片或视频'}><Icon name="plus" size={14}/>{comic?'手动出片':'手动创作'}</button>
+        <button type="button" className="cv-pill cv-glass" aria-expanded={managerOpen} onClick={()=>setManagerOpen(!managerOpen)} title="在画布内管理首帧、视频与镜头状态"><Icon name="grid" size={14}/>分镜管理</button>
+        <button type="button" className="cv-pill cv-glass" title="带着当前作品和章节进入翻译工作台" onClick={() => navigate("translation")}>翻译</button>
+        <button type="button" className="cv-pill cv-glass" title="切换制作类型并打开各自的画布" onClick={() => navigate("flow",{medium:comic?'video':'comic'})}>{comic?'视频制作':'动态漫画'}</button>
         {save && (
           s.save === "conflict"
             ? <button type="button" className={`cv-pill cv-glass cv-save t-${save.tone}`} title={save.title} onClick={() => s.reloadCanvas()}>
@@ -685,23 +690,22 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             </span>
         )}
         <TasksPill />
-        <ExecutePill />
-        <RunPill />
+        {!comic&&<><ExecutePill /><RunPill /></>}
         <div className="cv-pillgroup cv-glass">
           <button type="button" className="cv-pg-btn" disabled={!s.board || s.demo}
             title={s.demo ? "共享舞台需要真实画布；演示模式不连接后端" : "自己搭舞台，多个镜头复用站位、动作和机位"}
             onClick={() => s.openOverlay({ kind: "shared_stage" })}>共享舞台</button>
-          <FilmButton />
-          <button type="button" className="cv-pg-btn" title="按场次泳道重新排派生节点（钉住的不动）" onClick={() => s.relayout()}>
-            <Icon name="grid" size={14} />整理
+          {!comic&&<FilmButton />}
+          <button type="button" className="cv-pg-btn" title="按流程排列节点，避免重合；钉住的与分组保留" onClick={() => s.relayout()}>
+            <Icon name="grid" size={14} />整理布局
           </button>
           <button type="button" className="cv-pg-btn" title={`下载画布文档 canvas-${s.planId || "draft"}.json（只含布局和引用）`} onClick={doExport}>
             <Icon name="download" size={14} />导出
           </button>
           {nav && (
-            <button type="button" className={`cv-pg-btn${viewEl ? " is-open" : ""}`} title="切到别的视图（分镜画布、3D-BOX、角色库、风格广场）"
+            <button type="button" className={`cv-pg-btn${viewEl ? " is-open" : ""}`} title="按故事翻译、角色素材、画布导演、漫剧成片切换工作台"
               onClick={e => setViewEl(viewEl ? null : e.currentTarget)}>
-              <Icon name="layout" size={14} />视图<Icon name="down" size={12} />
+              <Icon name="layout" size={14} />工作台<Icon name="down" size={12} />
             </button>
           )}
         </div>
@@ -713,6 +717,12 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
         </Popover>
       )}
       {newCanvasOpen && <NewCanvasModal onClose={() => setNewCanvasOpen(false)} />}
+      {managerOpen&&<ShotManager onClose={()=>setManagerOpen(false)} onEdit={editNode}/>}
+      {manualEl&&<Popover anchor={manualEl} placement="bottom-end" onClose={()=>setManualEl(null)}><MenuList items={[
+        {id:'video',label:'手动视频',hint:'模型、帧率、参考与运镜参数',onPick:()=>{const id=s.addNode('video',{ref:freeRef(),title:'',role:'generated'});editNode(id);setManualEl(null);}},
+        {id:'image',label:'手动图片',hint:'基础卡、首帧与参考图编辑',onPick:()=>{const id=s.addNode('image',{ref:freeRef(),title:'',role:'generated'});editNode(id);setManualEl(null);}},
+        ...(s.selected?[{id:'selected',label:'编辑选中节点',hint:s.selected.data.title,onPick:()=>{editNode(s.selected!.id);setManualEl(null);}}]:[]),
+      ]}/></Popover>}
 
     </header>
   );

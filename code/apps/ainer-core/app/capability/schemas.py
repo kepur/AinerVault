@@ -24,6 +24,7 @@ class Capability(str, Enum):
     audio_voice_list = "audio.voice_list"
     audio_music = "audio.music"
     audio_sfx = "audio.sfx"
+    audio_foley = "audio.foley"
     video_i2v = "video.image_to_video"
 
 

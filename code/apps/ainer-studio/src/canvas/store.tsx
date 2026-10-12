@@ -11,6 +11,8 @@
  *
  * Provider 必须包在 ReactFlowProvider 里面（用到 useReactFlow）。
  */
+import { comicSources, comicTask, hydrateComic, hydrateDoc, comicConnectionAllowed, comicBoards } from "./comic";
+import {comicLayout, freeGraphLayout} from './comicLayout';
 import { prod } from "../production/api";
 import { readCtx, writeCtx } from "../ctx";
 import {
@@ -169,7 +171,8 @@ function toDocNode(n: CNode, dropGen = false): DocNode {
     const { orphan, gen, ...rest } = d;
     void orphan;
     data = dropGen || gen === undefined ? rest : { ...rest, gen };
-    if (rest.media) data = { ...data, media: docMedia(rest.media) };
+    if (rest.comic) { delete data.comicLive; delete data.media; delete data.text; }
+    if (!rest.comic && rest.media) data = { ...data, media: docMedia(rest.media) };
     // 历史里的旧图同样只许同源地址（铁律 2）
     if (rest.history) data = { ...data, history: rest.history.map(docMedia).filter((m): m is MediaRef => !!m) };
   }
@@ -288,17 +291,19 @@ function guessMime(url: string, kind: string): string {
 const sameGen = (a: GenState | null | undefined, b: GenState) =>
   !!a && a.status === b.status && a.progress === b.progress && a.error === b.error && a.task_id === b.task_id;
 
-const IDENTITY_IMAGE = new Set(["character", "sheet", "view", "upload", "generated"]);
+const IDENTITY_IMAGE = new Set(["character", "sheet", "view", "upload", "generated", "prop_sheet"]);
 
 /**
  * 连线语义按两端推断（onConnect 与 AddMenu 的「接在这一侧」共用）：
  *   定妆照/设定图/上传/生成的图 → 视频或白模 = identity（谁的脸）
  *   白模 → 视频、预演/控制素材 → 视频 = control（构图、站位、运镜）
+ *   风格图 → 视频或图片 = style
  *   其余 = ref
  */
 export function inferEdgeKind(source: Pick<CNode, "type" | "data">, target: Pick<CNode, "type">): EdgeKind {
   const t = target.type;
   const role = source.data.role ?? "";
+  if (role === "style") return "style";
   if (source.type === "image" && IDENTITY_IMAGE.has(role) && (t === "video" || t === "box3d")) return "identity";
   if (source.type === "stage" || source.type === "coverage") return "control";
   if (source.type === "box3d" && t === "video") return "control";
@@ -392,7 +397,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const [demo] = useState(readDemo);
   const [demoReady, setDemoReady] = useState(!demo);
 
-  const q = useMemo(() => new URLSearchParams(location.search), []);
+  const q = useMemo(() => {
+    const params=new URLSearchParams(location.search);
+    if(readCtx().workspace==='free')for(const k of ['novel','chapter','plan','shot','char','production','project'])params.delete(k);
+    return params;
+  }, []);
   /**
    * 画布首页：地址栏既没有 canvas 也没有书/章/计划时显示（不再默认跳第一本书 ——
    * 自由画布（旅拍、相册、一个想法）和小说章节画布是平级的入口）。
@@ -445,6 +454,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     local: false,
     dirty: false,
     blocked: false,
+    comicPid: "",
+    comicMeta: undefined as CanvasDoc["production"],
     saveTimer: 0,
     pendingSnap: null as Snap | null,
     /** 正在发的那一串 PUT（flushSave 要能 await 到「这一刻的快照存好了」） */
@@ -513,6 +524,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const vp = rfRef.current.getViewport();
       return {
         schema: DOC_SCHEMA,
+        ...(r.comicMeta ? {production:r.comicMeta}:{}),
         viewport: { x: round(vp.x), y: round(vp.y), zoom: round(vp.zoom, 3) },
         nodes: nodesRef.current.map(n => toDocNode(n, execGen(n.data.gen))),
         edges: edgesRef.current.filter(e => !e.data?.derived).map(e => ({
@@ -636,7 +648,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         else if (e) drop.add(c.id);
       }
       let next = rest.length ? applyEdgeChanges(rest, edgesRef.current) : edgesRef.current;
-      if (drop.size) next = next.filter(e => !drop.has(e.id));
+      if (drop.size) { const targets=edgesRef.current.filter(e=>drop.has(e.id)).map(e=>e.target);next = next.filter(e => !drop.has(e.id));invalidateComic(targets); }
       setEdges(next);
       if (drop.size || rest.some(c => c.type !== "select")) bump();
       if (drop.size) scheduleSave();
@@ -646,18 +658,51 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     function addEdge(source: string, target: string, kind: EdgeKind, sourceHandle?: string | null, targetHandle?: string | null): boolean {
       if (source === target || !nodeById(source) || !nodeById(target)) return false;
       if (edgesRef.current.some(e => e.source === source && e.target === target)) return false;
+      if(!comicConnectionAllowed(nodesRef.current,edgesRef.current,source,target))return false;
       const e: CEdge = {
         id: `u:${source}>${target}`, source, target, type: "glow",
         sourceHandle: sourceHandle ?? null, targetHandle: targetHandle ?? null, data: { kind },
       };
       setEdges([...edgesRef.current, e]);
+      invalidateComic([target]);
       bump();
       scheduleSave();
       return true;
     }
 
-    const isValidConnection: IsValidConnection<CEdge> = c =>
-      c.source !== c.target && !edgesRef.current.some(e => e.source === c.source && e.target === c.target);
+    const isValidConnection: IsValidConnection<CEdge> = c => {
+      if (c.source === c.target) return false;
+      if (edgesRef.current.some(e => e.source === c.source && e.target === c.target)) return false;
+      const src = nodeById(c.source);
+      const dst = nodeById(c.target);
+      if (!src || !dst) return false;
+      if(src.data.comic||dst.data.comic)return comicConnectionAllowed(nodesRef.current,edgesRef.current,src.id,dst.id);
+
+      // 工业级 ABCD 规范 1：原始纯文本不可直接直连视频生成节点！必须先经由剧本排镜、定妆照或白模过渡
+      if (src.type === "text" && dst.type === "video") {
+        return false;
+      }
+
+      // 工业级 ABCD 规范 2：3D 白模节点到同一视频生成节点最多连接 2 个（主运镜机位 + 辅助机位）
+      if (src.type === "box3d" && dst.type === "video") {
+        const existingBoxes = edgesRef.current.filter(e => {
+          if (e.target !== dst.id) return false;
+          const upstreamNode = nodeById(e.source);
+          return upstreamNode?.type === "box3d";
+        });
+        if (existingBoxes.length >= 2) {
+          return false;
+        }
+      }
+
+      return true;
+    };
+
+    function invalidateComic(targets:string[]){
+      const seen=new Set<string>(),todo=[...targets];
+      while(todo.length){const id=todo.shift()!;if(seen.has(id))continue;seen.add(id);todo.push(...edgesRef.current.filter(e=>e.source===id).map(e=>e.target));}
+      setNodes(nodesRef.current.map(n=>seen.has(n.id)&&n.data.comic&&['frame','video','tail','assemble'].includes(n.data.comic.step)?{...n,data:{...n.data,media:null,comic:{...n.data.comic,dirty:true},comicLive:{...n.data.comicLive,state:'引用已更改，待重新制作'}}}:n));
+    }
 
     /** 连好以后告诉人这条线意味着什么（连线本身不改后端；要改就点提示里的动作） */
     function hintAfterConnect(src: CNode, dst: CNode) {
@@ -665,27 +710,44 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       if (dst.type === "box3d" && dst.data.ref.kind === "box_project") {
         const boxId = dst.data.ref.id;
         if (src.type === "image") {
-          const res = resolveRef(lv, src.data.ref, src.data);
-          if (res.kind === "entity_view") {
-            const view = src.data.ref.kind === "entity_view" ? src.data.ref.view : undefined;
-            toast(`「${res.member.name}」连到了白模`, "info", {
-              label: "放进白模",
-              run: () => { addCharacterToBox(S(), boxId, res.member, view).catch(e => toast(`放进白模失败：${msg(e)}`, "err")); },
-            });
+          if (src.data.role === "prop") {
+            toast(`已连接道具「${src.data.title}」，可在 3D 白模中摆放道具物件`, "info");
           } else {
-            toast("已连上。白模里的人偶只认角色库的角色（连定妆照节点才能放进去）", "info");
+            const res = resolveRef(lv, src.data.ref, src.data);
+            if (res.kind === "entity_view") {
+              const view = src.data.ref.kind === "entity_view" ? src.data.ref.view : undefined;
+              toast(`「${res.member.name}」连到了白模`, "info", {
+                label: "放进白模",
+                run: () => { addCharacterToBox(S(), boxId, res.member, view).catch(e => toast(`放进白模失败：${msg(e)}`, "err")); },
+              });
+            } else {
+              toast("已连上。白模里的人偶只认角色库的角色（连定妆照节点才能放进去）", "info");
+            }
           }
         } else if (src.type === "text") {
           const text = resolvedText(resolveRef(lv, src.data.ref, src.data)).trim();
           if (text) {
-            toast("要按这段文字改白模吗？", "info", {
-              label: "按这段改景",
+            toast("要按这段剧本文字改白模搭景吗？", "info", {
+              label: "按剧本改景",
               run: () => { askBox(S(), dst.id, boxId, text).catch(e => toast(`改景失败：${msg(e)}`, "err")); },
             });
           }
         }
-      } else if (src.type === "image" && dst.type === "video" && dst.data.ref.kind === "shot") {
-        toast("已作为参考；导演出片的脸来自角色库", "info");
+      } else if (dst.type === "video") {
+        if (src.type === "box3d") {
+          const count = edgesRef.current.filter(e => e.target === dst.id && nodeById(e.source)?.type === "box3d").length;
+          toast(`已绑定 3D 白模作为运镜与动作控制（已接入 ${count}/2 个白模）`, "info");
+        } else if (src.type === "image") {
+          if (src.data.role === "prop_sheet" || src.data.role === "prop") {
+            toast("已连接道具定妆照作为道具外观与工艺一致性参考", "info");
+          } else if (src.data.role === "sheet" || src.data.ref.kind === "entity_view") {
+            toast("已连接定妆照作为角色身份一致性参考", "info");
+          } else if (dst.data.ref.kind === "shot") {
+            toast("已作为参考；导演出片的脸来自角色库", "info");
+          } else {
+            toast("已作为画面参考图连接", "info");
+          }
+        }
       }
     }
 
@@ -693,6 +755,32 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       const src = nodeById(c.source);
       const dst = nodeById(c.target);
       if (!src || !dst) return;
+
+      if (src.type === "text" && dst.type === "video") {
+        toast("规范拦截：纯文本不可直连生成视频。请先生成剧本/定妆照/白模，或使用【🎬 导演排镜】！", "err", {
+          label: "🎬 导演排镜",
+          run: () => {
+            const text = resolvedText(resolveRef(liveRef.current, src.data.ref, src.data)).trim();
+            if (text) {
+              S().openOverlay({ kind: "screenplay_config", nodeId: src.id });
+            }
+          },
+        });
+        return;
+      }
+
+      if (src.type === "box3d" && dst.type === "video") {
+        const existingBoxes = edgesRef.current.filter(e => {
+          if (e.target !== dst.id) return false;
+          const upstreamNode = nodeById(e.source);
+          return upstreamNode?.type === "box3d";
+        });
+        if (existingBoxes.length >= 2) {
+          toast("规范拦截：单个视频镜头最多绑定 2 个 3D 白模作为运镜与构图控制", "err");
+          return;
+        }
+      }
+
       if (!addEdge(c.source, c.target, inferEdgeKind(src, dst), c.sourceHandle, c.targetHandle)) return;
       hintAfterConnect(src, dst);
     };
@@ -1039,7 +1127,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
 
     function relayout() {
-      const pos = autoLayout(liveRef.current);
+      const pos = r.comicPid ? comicLayout(nodesRef.current) : readCtx().workspace==='free' ? freeGraphLayout(nodesRef.current,edgesRef.current) : autoLayout(liveRef.current);
       let moved = 0;
       setNodes(nodesRef.current.map(n => {
         // 编进分组的不动：自动布局给的是绝对坐标，分组里的是相对坐标
@@ -1051,7 +1139,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       bump();
       if (moved) scheduleSave();
       window.requestAnimationFrame(() => { void rfRef.current.fitView({ padding: 0.1, duration: 400 }); });
-      toast(moved ? "已整理（钉住的和自己加的节点没动）" : "已经是整理好的样子", "ok");
+      toast(moved ? "已按流程整理，钉住的节点与分组保留" : "已经是整理好的样子", "ok");
     }
 
     function syncGraph() {
@@ -1064,7 +1152,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     }
 
     /* ── 现取数据 ── */
+    async function refreshComic(): Promise<void> {
+      if (!r.comicPid) return;
+      const pid=r.comicPid, board=r.loadedBoard;
+      const snapshot=await comicSources(pid);
+      if (r.loadedBoard!==board || r.comicPid!==pid) return;
+      setNodes(nodesRef.current.map(n=>({...n,data:hydrateComic(n.data,snapshot)})));
+      bump();
+    }
+
     async function reloadLiveImpl(full: boolean): Promise<void> {
+      if(r.comicPid){await refreshComic();return;}
       const plan = r.loadedPlan;
       if (!plan) return;
       if (r.reload) {
@@ -1275,6 +1373,19 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       } else {
         patchTask(t.key, { status: st.status, progress: st.progress });
       }
+    }
+
+    async function advanceComic(t: TrackedTask) {
+      const st=await comicTask(t.remote), node=nodeById(t.nodeId);
+      const gen:GenState={task_id:t.remote,status:st.status as GenState['status'],progress:st.progress,error:st.error?.message};
+      if(node?.data.comic){
+        const output=st.output as {asset?:{asset_id:string};video?:{asset_id:string}}|null;
+        const aid=output?.asset?.asset_id || output?.video?.asset_id;
+        updateNodeData(node.id,{gen,comic:{...node.data.comic,...(st.status==='succeeded'?{dirty:false,...(aid?{output_asset_id:aid}:{})}:['failed','cancelled'].includes(st.status)?{dirty:true}:{})},...(['failed','cancelled'].includes(st.status)&&['frame','video','tail','assemble'].includes(node.data.comic.step)?{media:null}:{})});
+      }
+      patchTask(t.key,{status:st.status as TrackedTask['status'],progress:st.progress*100,error:st.error?.message});
+      if(st.status==='succeeded')await refreshComic();
+      else if(st.status==='failed')toast(st.error?.message||'漫剧制作失败','err');
     }
 
     async function advanceBlender(t: TrackedTask) {
@@ -1547,7 +1658,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     async function advanceOne(t: TrackedTask) {
       try {
-        if (t.kind === "run") await advanceRun(t);
+        if (t.kind === "comic") await advanceComic(t);
+        else if (t.kind === "run") await advanceRun(t);
         else if (t.kind === "quick") await advanceQuick(t);
         else if (t.kind === "director") await advanceDirector(t);
         else if (t.kind === "ltx25") advanceLtx(t);
@@ -1598,6 +1710,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
     /* ── 载入 ── */
     function resetGraph() {
+      r.comicPid="";r.comicMeta=undefined;
       r.loadedPlan = "";
       r.loadedBoard = "";
       r.hidden = new Set();
@@ -1657,6 +1770,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           throw e;
         }
         if (stale()) return;
+        let saved = rec.version ? validDoc(rec.doc) : null;
+        const context=readCtx();
+        if(context.medium==='comic'&&(!saved?.production||(context.production&&saved.production.id!==context.production)))throw new Error('正在切换到当前漫剧项目的独立画布');
+        if(context.medium!=='comic'&&saved?.production)throw new Error('这张画布属于动态漫画，请先切换制作类型');
+        if(!new URLSearchParams(location.search).has('workspace')&&!rec.novel_id)writeCtx({workspace:'free'});
         const plan = rec.plan_id ?? "";
         const chap = rec.chapter_id || "";
         const [board, cast, script] = plan ? await Promise.all([
@@ -1668,11 +1786,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         r.versions.set(boardId, rec.version);
         r.local = false;
         setMeta(rec);
+        if(readCtx().workspace==='free'&&(rec.novel_id||rec.chapter_id||rec.plan_id))throw new Error('这是小说制作画布，请在小说空间打开');
         setNovelId(rec.novel_id ?? "");
         setChapterId(rec.chapter_id ?? "");
         setPlanId(rec.plan_id ?? "");
         rememberAll({ project: null, novel: rec.novel_id, chapter: rec.chapter_id, plan: rec.plan_id, canvas: rec.id, shot: null });
-        const saved = rec.version ? validDoc(rec.doc) : null;
+        r.comicPid=saved?.production?.id||"";r.comicMeta=saved?.production;
+        if(saved?.production) saved=hydrateDoc(saved,await comicSources(saved.production.id));
         const ctx = rec.context;
         const scope = { shotIds: ctx.shot_ids ? new Set(ctx.shot_ids) : null, castIds: ctx.cast_ids ? new Set(ctx.cast_ids) : null };
         const boxes = await fetchBoxes(boxIdsOf(board, saved?.nodes ?? [], scope.shotIds));
@@ -1693,7 +1813,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         // 任务不进文档：自由生成占位节点上的 gen 状态、范围内在跑的导演出片、没跑完的一键出片，就是续上轮询的线索
         for (const n of g.nodes) {
           const gen = n.data.gen;
-          if (gen && isLive(gen.status)) track({ key: `gen:${gen.task_id}`, kind: "gen", remote: gen.task_id, nodeId: n.id, label: n.data.title || "生成" });
+          if (gen && isLive(gen.status)) track({ key: `${n.data.comic ? "comic":"gen"}:${gen.task_id}`, kind: n.data.comic ? "comic":"gen", remote: gen.task_id, nodeId: n.id, label: n.data.title || "生成" });
         }
         for (const s of board?.shots ?? []) {
           if ((scope.shotIds && !scope.shotIds.has(s.id)) || !directorPending(s)) continue;
@@ -1734,13 +1854,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       if (r.loadedBoard === st.board_id) setFlowRun(st);
     }
 
+    function inWorkspace(b: CanvasMeta) {
+      const c=readCtx();
+      return c.workspace==='free'?!b.novel_id&&!b.chapter_id&&!b.plan_id:
+        c.novel ? b.novel_id===c.novel&&(!c.chapter||b.chapter_id===c.chapter) : !!b.novel_id;
+    }
+
     async function reloadBoards() {
       const chap = chapterIdRef.current;
-      const [all, list] = await Promise.all([
+      const [all, list, comicBoardIds] = await Promise.all([
         cv.canvasAll({ limit: 500 }),
         chap ? cv.canvasList(chap, planIdRef.current || null) : Promise.resolve(null),
+        comicBoards().catch(():string[]=>[]),
       ]);
-      setBoards([...new Map([...(list?.canvases ?? []), ...all].map(b => [b.id, b])).values()]);
+      setBoards([...new Map([...(list?.canvases ?? []), ...all].map(b => [b.id, b])).values()].filter(b=>readCtx().medium==='comic'?b.id===boardIdRef.current:!comicBoardIds.includes(b.id)&&inWorkspace(b)));
     }
 
     async function reloadCanvas() {
@@ -1851,10 +1978,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       if (!await saveBeforeLeaving()) throw new Error("当前画布未保存成功，请先处理保存错误");
       const title = opts.title.trim() || "空白画布";
       const blank = opts.blank ?? !opts.doc;
-      const attachChap = opts.chapter === true && !!chapterIdRef.current;
+      const attachChap = readCtx().workspace!=='free' && !!novelIdRef.current;
       const b = await cv.canvasCreate({
         title, blank, purpose: opts.purpose ?? "general",
-        chapter_id: attachChap ? chapterIdRef.current : null,
+        chapter_id: attachChap ? chapterIdRef.current || null : null,
         novel_id: attachChap ? novelIdRef.current : null,
         plan_id: !blank && attachChap ? (planIdRef.current || null) : null,
         shot_ids: [],
@@ -1946,7 +2073,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       reloadLive, loadBoxDoc, track, tick, resetGraph, loadBoard, reloadCanvas, setNovel, setChapter, setPlan, setBoard,
       openBoard, openHome, createCanvas, duplicate, groupSelected, ungroup, nextTitle, execute, stopExecute, onKey,
       hiddenList, restoreHidden, pruneEmpty,
-      startRun, cancelRun, reloadBoards,
+      startRun, cancelRun, reloadBoards, saveBeforeLeaving, inWorkspace,
       nodeData: (id: string) => nodeById(id)?.data,
       openAddMenu: (anchor: { x: number; y: number }, from?: { nodeId: string; side: "left" | "right" } | null) =>
         setAddMenu({ anchor, from: from ?? null }),
@@ -2000,7 +2127,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [demoReady, novelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!demoReady || !chapterId) return;
+    if (!demoReady || !chapterId || readCtx().medium==="comic") return;
     remember("chapter", chapterId);
     let alive = true;
     cv.plans(chapterId).then(d => {
@@ -2024,9 +2151,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     Promise.all([
       cv.canvasAll({ limit: 500 }),
       chapterId && planId ? cv.canvasList(chapterId, planId) : Promise.resolve(null),
-    ]).then(async ([all, list]) => {
+      comicBoards().catch(():string[]=>[]),
+    ]).then(async ([all, list, comicBoardIds]) => {
       if (!alive) return;
-      const rows = [...new Map([...(list?.canvases ?? []), ...all].map(b => [b.id, b])).values()];
+      const rows = [...new Map([...(list?.canvases ?? []), ...all].map(b => [b.id, b])).values()].filter(b=>readCtx().medium==='comic'||(!comicBoardIds.includes(b.id)&&m.inWorkspace(b)));
       setBoards(rows);
       // Existing canvas IDs are authoritative, including a canvas from another chapter.
       let want = boardIdRef.current;
@@ -2037,6 +2165,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         }
       }
       if (!alive) return;
+      if (readCtx().medium==="comic") { setBoards(rows.filter(b=>b.id===boardIdRef.current));setLoading(false);return; }
       if (!want && !homeRef.current && list) want = defaultBoard(list.canvases)?.id ?? "";
       if (want) setBoardId(want);
       else setLoading(false);

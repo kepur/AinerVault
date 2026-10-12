@@ -7,7 +7,7 @@
  *   调用方要能降级（画布存本地、生成面板只给「出片到镜头」）。
  */
 import { api as studioApi } from "../api";
-import { box, type Project, type ProjectRow, type Template } from "../box/api";
+import { box, workspaceBoxes, createWorkspaceBox, type Project, type ProjectRow, type Template } from "../box/api";
 // box/director 只取类型：打包器把它和用到 three 的模块合进了同一个共享块，运行时引它会把 three.js 拖进画布首包
 import type { Job } from "../box/director";
 import type { Board, CastMember, ChapterPlans, DirectorRun } from "../types";
@@ -207,7 +207,7 @@ export const cv = {
     : call<FilmResult>("POST", `/api/v2/shot-plans/${planId}/render`, {}),
 
   /* ── 3D-BOX（现有 /scene3d/*；轻量 doc 走新接口，没有就退回全量） ── */
-  boxList: () => demo ? demo.boxList() : box.projects(),
+  boxList: () => demo ? demo.boxList() : workspaceBoxes(),
   boxInfo: async (id: string): Promise<BoxInfo> => {
     if (demo) return demo.boxInfo(id);
     try {
@@ -222,7 +222,7 @@ export const cv = {
       cameras: (p.doc?.cameras ?? []).map(c => ({ id: c.id, name: c.name })),
     };
   },
-  boxCreate: (title: string, template = "blank") => demo ? demo.boxCreate(title, template) : box.create(title, template),
+  boxCreate: (title: string, template = "blank") => demo ? demo.boxCreate(title, template) : createWorkspaceBox(title, template),
   boxGet: (id: string) => demo ? demo.boxGet(id) : box.get(id),
   boxWriteFile: (id: string, path: string, content: string) =>
     demo ? demo.boxWriteFile(id, path, content) : box.writeFile(id, path, content),

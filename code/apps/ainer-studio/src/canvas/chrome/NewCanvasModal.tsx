@@ -10,6 +10,7 @@ import { cv, media } from "../api";
 import { buildIdeaGraph, type IdeaInputs } from "../idea/buildIdeaGraph";
 import type { MediaRef } from "../model";
 import { useCanvas } from "../store";
+import {readCtx} from "../../ctx";
 import { errText, host, Icon, Spinner, useLatest } from "./Overlays";
 
 type Tab = "idea" | "blank";
@@ -74,7 +75,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
 
   /* ── 空白画布表单 ── */
   const [blankTitle, setBlankTitle] = useState("");
-  const [attachChapter, setAttachChapter] = useState(false);
+  const [attachChapter, setAttachChapter] = useState(readCtx().workspace!=='free');
 
   /* ── 想法 → DAG 表单 ── */
   const [idea, setIdea] = useState("");
@@ -506,6 +507,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
                 <input
                   type="checkbox"
                   checked={attachChapter}
+                  disabled={readCtx().workspace!=='free'}
                   onChange={e => setAttachChapter(e.target.checked)}
                 />
                 <span>关联到当前章节（可在该章节画布列表中随时切换）</span>

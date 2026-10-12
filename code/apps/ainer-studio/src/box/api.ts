@@ -1,5 +1,6 @@
 // 3D-BOX 预演的接口：/api/v2/scene3d/*
 import type { CamKey, Diagnostics, Overrides, SceneDoc } from "../scene/types";
+import {readCtx} from '../ctx';
 
 const BASE = "/api/v2/scene3d";
 
@@ -23,6 +24,8 @@ export interface ProjectRow {
   ok: boolean | null; objects: number | null; cameras: number; duration: number | null;
   /** 按分镜筛选时：这个白模属于哪一镜 */
   shot_id?: string | null; shot_order?: number | null;
+  novel_id?: string | null; shot_plan_id?: string | null;
+  studio_scope?:{medium:string;chapter_id?:string|null};
 }
 export interface Project extends ProjectRow {
   files: Record<string, string>;
@@ -32,6 +35,7 @@ export interface Project extends ProjectRow {
   seed: number;
   versions: { index: number; at: string; by: string; note: string }[];
   active_run: string | null;
+  settings?: {studio_medium?:string;studio_chapter?:string;[key:string]:unknown};
 }
 export interface Template { key: string; name: string; category: string; desc: string }
 export interface ChatRow { id: string; run_id: string | null; role: string; content: string; meta: Record<string, unknown>; at: string }
@@ -50,9 +54,9 @@ export interface Sketch { tool: string; color: string; points: [number, number][
 export const box = {
   /** planId：只列这份分镜的白模（每项带 shot_id / shot_order） */
   projects: (planId?: string | null) => call<ProjectRow[]>("GET", `/projects${planId ? `?plan_id=${encodeURIComponent(planId)}` : ""}`),
-  create: (title: string, template: string) => call<Project>("POST", "/projects", { title, template }),
+  create: (title: string, template: string, context?:{novel_id?:string|null;shot_plan_id?:string|null}) => call<Project>("POST", "/projects", { title, template, ...context }),
   get: (id: string) => call<Project>("GET", `/projects/${id}`),
-  patch: (id: string, body: { title?: string; seed?: number }) => call<Project>("PATCH", `/projects/${id}`, body),
+  patch: (id: string, body: { title?: string; seed?: number;settings?:Record<string,unknown> }) => call<Project>("PATCH", `/projects/${id}`, body),
   remove: (id: string) => call("DELETE", `/projects/${id}`),
   writeFile: (id: string, path: string, content: string) => call<Project>("PUT", `/projects/${id}/files/${path}`, { content }),
   overrides: (id: string, overrides: Overrides) => call<Project>("PUT", `/projects/${id}/overrides`, { overrides }),
@@ -77,5 +81,18 @@ export const box = {
   },
   exports: (id: string) => call<{ asset_id: string; url: string; kind: string; meta: Record<string, unknown>; at: string }[]>("GET", `/projects/${id}/exports`),
 };
+
+export async function workspaceBoxes():Promise<ProjectRow[]> {
+  const c=readCtx(),rows=await box.projects();
+  return rows.filter(p=>c.workspace==='free'?!p.novel_id&&!p.shot_plan_id:
+    !!c.novel&&p.novel_id===c.novel&&(p.studio_scope?.medium||'video')===(c.medium||'video')&&(!c.chapter||!p.studio_scope?.chapter_id||p.studio_scope.chapter_id===c.chapter));
+}
+
+export async function createWorkspaceBox(title:string,template:string):Promise<Project> {
+  const c=readCtx(),free=c.workspace==='free';
+  if(!free&&!c.novel)throw new Error('请先选择小说，再创建本版舞台');
+  const p=await box.create(title,template,{novel_id:free?null:c.novel,shot_plan_id:free?null:c.plan});
+  return box.patch(p.id,{settings:{studio_workspace:free?'free':'novel',studio_medium:c.medium||'video',studio_chapter:free?'':c.chapter||''}});
+}
 
 export type { CamKey };

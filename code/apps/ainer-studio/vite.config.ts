@@ -24,6 +24,9 @@ const trailingSlashRedirect: Plugin = {
 
 export default defineConfig({
   base: "/studio/",
+  // Users keep canvases open while local builds run. Their lazy imports still need
+  // the previous content-hashed modules; only index.html should move to this build.
+  build: { emptyOutDir: false },
   plugins: [react(), trailingSlashRedirect],
   server: {
     port: 5174,

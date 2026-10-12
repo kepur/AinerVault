@@ -1,0 +1,40 @@
+.studio-unified{height:100%;display:grid;grid-template-columns:196px minmax(0,1fr);background:var(--bg);color:var(--text);overflow:hidden}
+.studio-rail{display:flex;flex-direction:column;min-height:0;background:#16161a;border-right:1px solid var(--line);padding:20px 12px 12px;gap:18px}
+.studio-brand{display:flex;gap:10px;align-items:center;padding:0 6px;font-size:16px;letter-spacing:-.4px;white-space:nowrap}
+.studio-brand b{color:var(--accent-2)}.studio-brand small{display:block;font-size:10px;color:var(--muted);letter-spacing:2px;margin-top:4px}
+.studio-mark{width:32px;height:32px;display:grid;place-items:center;border-radius:10px;background:#7c6cff;color:white;font-weight:800;font-size:19px}
+.studio-scope{display:grid;gap:4px;padding:5px;background:#101013;border:1px solid var(--line);border-radius:10px}
+.studio-scope button{display:flex;gap:10px;align-items:center;border:0;background:none;text-align:left;padding:9px;font-weight:600;color:var(--muted);border-radius:6px}.studio-scope button.active{background:#2b263e;color:#e9e3ff}.studio-scope span{width:18px;text-align:center}
+.studio-rail-scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;display:flex;flex-direction:column;gap:14px}
+.studio-group>small{display:block;padding:0 10px 6px;color:#777782;font-size:10px;letter-spacing:1px}
+.studio-group button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px 10px;background:none;border:1px solid transparent;color:#b9b9c4;border-radius:7px;font-size:12px;min-height:34px}.studio-group button.active{background:#262331;color:#c7bbff;border-color:#393049}.studio-group button:hover{background:#24242b}.studio-nav-dot{width:4px;height:4px;border-radius:50%;background:#62626c;flex-shrink:0}.active .studio-nav-dot{background:var(--accent-2)}
+.studio-more{border-top:1px solid var(--line);padding-top:10px}.studio-more summary{cursor:pointer;color:var(--muted);font-size:11px;padding:7px 10px}.studio-more details{padding-left:8px}
+.studio-rail-foot{font-size:10px;color:#777782;padding:10px 6px 0;border-top:1px solid var(--line)}
+.studio-main{min-width:0;min-height:0;display:flex;flex-direction:column}.studio-header{display:flex;align-items:center;gap:16px;min-height:64px;padding:10px 20px;border-bottom:1px solid var(--line);background:#18181c;flex-shrink:0}
+.studio-menu{background:none;border:1px solid var(--line);width:30px;height:30px;color:var(--muted)}.studio-heading{flex:1;min-width:0}.studio-heading small{display:block;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:540px;margin-bottom:3px}.studio-heading b{font-size:15px;font-weight:600;letter-spacing:.2px}
+.studio-medium{display:flex;background:#101014;border:1px solid var(--line);border-radius:8px;padding:3px;flex-shrink:0}.studio-medium button{background:none;border:0;color:var(--muted);padding:6px 14px;border-radius:5px;font-size:12px}.studio-medium button.active{background:#302844;color:#d8cdff}.studio-canvas-button{background:var(--accent);border:1px solid var(--accent);color:#fff;padding:7px 12px;font-size:12px;white-space:nowrap}.studio-canvas-button span{margin-left:10px}
+.studio-context{display:flex;align-items:center;gap:14px;padding:8px 20px;background:#141418;border-bottom:1px solid var(--line);min-height:44px;flex-shrink:0}.studio-context label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:10px;min-width:0}.studio-context select{max-width:190px;min-width:80px;height:27px;font-size:11px;border:1px solid var(--line);padding:2px 24px 2px 7px;background:#202026}.studio-isolation{margin-left:auto;font-size:10px;color:#898294;white-space:nowrap}
+.studio-workspace{position:relative;flex:1;min-height:0;min-width:0;overflow:auto;background:#121214;isolation:isolate}.studio-module-frame{width:100%;height:100%;border:0;display:block;background:#121214}.studio-error{padding:8px 20px;font-size:12px;background:#36232b;color:#ffb1b6}
+.studio-unified.rail-closed{grid-template-columns:minmax(0,1fr)}.rail-closed>.studio-rail{display:none}
+/* 模块只保留自己的操作栏，作品与主导航由外壳负责。 */
+.studio-workspace>.cv-root{position:absolute;inset:0}.studio-workspace>.app{height:100%}.studio-workspace>.app>.topbar .brand,.studio-workspace>.app>.topbar .nav-wrap,.studio-workspace .wb-context,.studio-workspace>.app>.topbar>label{display:none}
+.studio-workspace .wb-page{height:100%;overflow:auto}.studio-workspace .cv-brand,.studio-workspace .cv-crumbs>.cv-crumb:nth-child(-n+5){display:none}.studio-workspace .cv-crumb-sep{display:none}
+.studio-workspace .cv-topbar-side>.cv-pill[title="带着当前作品和章节进入翻译工作台"],.studio-workspace .cv-topbar-side>.cv-pill[title="切换制作类型并打开各自的画布"]{display:none}
+.studio-workspace .cv-topbar{top:12px;left:12px;right:12px;gap:8px}.studio-workspace .cv-crumbs{max-width:320px}.studio-workspace .cv-topbar-side{gap:6px}.studio-workspace .cv-topbar.is-comic .cv-crumbs>.cv-crumb:last-child{display:flex}
+.studio-workspace .cv-comic-status{top:64px}.studio-workspace .box-editor{height:100%;min-height:0}.studio-workspace .box-home{height:100%;overflow:auto}
+@media(max-width:1100px){.studio-unified{grid-template-columns:174px minmax(0,1fr)}.studio-rail{padding-left:8px;padding-right:8px}.studio-header{padding:10px 12px;gap:10px}.studio-context{padding:8px 12px;gap:8px}.studio-isolation{display:none}.studio-context select{max-width:170px}.studio-workspace .cv-topbar{flex-wrap:wrap}.studio-workspace .cv-topbar.is-comic .cv-topbar-side{width:auto;max-width:100%}.studio-workspace .cv-comic-status{top:98px}}
+@media(max-width:760px){.studio-unified{grid-template-columns:minmax(0,1fr)}.studio-rail{position:absolute;left:0;top:0;bottom:0;width:196px;z-index:120;box-shadow:12px 0 40px #0009}.studio-header{padding-left:12px;min-height:60px}.studio-heading small{max-width:220px}.studio-medium button{padding:6px 9px}.studio-canvas-button{font-size:11px;padding:7px}.studio-context{gap:6px;flex-wrap:wrap;min-height:68px}.studio-context label{flex:1}.studio-context select{max-width:100%;width:100%;min-width:0}.studio-context label:last-of-type{flex:.7}.studio-heading b{font-size:13px}.studio-workspace .cv-comic-status{top:106px}.studio-workspace .cv-topbar-side>.cv-pill[title="当前制作项目的流程与状态"]{display:none}.studio-workspace .cv-crumbs{max-width:155px}}
+
+.studio-workspace .cv-flow{top:60px}
+.studio-workspace .cv-root:has(.cv-comic-status) .cv-flow{top:126px}
+@media(max-width:1100px){.studio-workspace .cv-root:has(.cv-comic-status) .cv-flow{top:158px}}
+@media(max-width:760px){.studio-workspace .cv-root:has(.cv-comic-status) .cv-flow{top:166px}}
+
+.studio-rail-backdrop,.studio-rail-close{display:none}
+@media(max-width:760px){.studio-rail-backdrop{display:block;position:fixed;inset:0;z-index:119;background:#0008;border:0;border-radius:0}.studio-rail-close{display:block;position:absolute;top:16px;right:6px;border:0;background:none;font-size:20px;color:#aaa}}
+
+.studio-workspace>.app>.topbar>select:nth-of-type(-n+2),.studio-workspace .wb-toolbar>label:has(select[aria-label="目标语言"]){display:none}
+.studio-workspace .wb-toolbar:has(select[aria-label="目标语言"]){display:none}
+
+.studio-context label{white-space:nowrap}
+@media(max-width:560px){.studio-workspace .cv-bb-left{bottom:76px;max-width:calc(100% - 24px)}.studio-workspace .cv-bb-main{bottom:12px}.studio-workspace .cv-root:has(.cv-comic-status) .cv-flow{top:208px}}

@@ -1,6 +1,6 @@
 /** 3D-BOX 项目列表：打开已有预演，或从模板／官方示例新建。 */
 import { useEffect, useState } from "react";
-import { box, type ProjectRow, type Template } from "./api";
+import { box, workspaceBoxes, createWorkspaceBox, type ProjectRow, type Template } from "./api";
 import { media } from "../api";
 import { navigate, readCtx } from "../ctx";
 
@@ -11,17 +11,23 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
   const [err, setErr] = useState("");
   const [title, setTitle] = useState("");
   // 带着分镜计划进来（从分镜画布 / 创作画布切过来）默认只看本章的白模，可以切到全部
-  const [plan] = useState(() => readCtx().plan);
-  const [onlyPlan, setOnlyPlan] = useState(!!plan);
+  const [ctx] = useState(readCtx);
+  const free=ctx.workspace==='free';
 
-  const load = () => box.projects(onlyPlan ? plan : null).then(setRows).catch(e => setErr(String(e)));
-  useEffect(() => { load(); }, [onlyPlan]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = async () => {
+    try{
+      const owned=await workspaceBoxes();
+      setRows(owned);setErr('');
+    }catch(e){setErr(String(e));}
+  };
+  useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { box.templates().then(setTpls).catch(e => setErr(String(e))); }, []);
 
   async function create(t: Template) {
     setBusy(t.key);
     try {
-      const p = await box.create(title.trim() || (t.key === "blank" ? "新场景" : t.name.replace("【官方示例】", "")), t.key);
+      if(!free&&!ctx.novel)throw new Error('请先选择小说，再创建本版舞台');
+      const p = await createWorkspaceBox(title.trim() || (t.key === "blank" ? "新场景" : t.name.replace("【官方示例】", "")), t.key);
       onOpen(p.id);
     } catch (e) {
       setErr(String((e as Error).message));
@@ -34,7 +40,7 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
     <div className="box-home">
       <section className="hero">
         <h2>3D-BOX 预演</h2>
-        <p>用一句话让智能体搭白模场景、编排人车动作、设计机位运镜和剪辑；在台上拖一拖、画一画再让它改。</p>
+        <p>{free?'自由创作的独立舞台':`${ctx.medium==='comic'?'动态漫画':'视频'}本版舞台`} · 搭景、站位与运镜，预演素材可以带回无限画布。</p>
         <div className="new-row">
           <input placeholder="新场景名字（可不填）" value={title} onChange={e => setTitle(e.target.value)} />
         </div>
@@ -50,13 +56,7 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
       </section>
       {err && <div className="err">{err}</div>}
       <h3>
-        {onlyPlan ? "本章白模" : "我的预演"} <small>{rows.length}</small>
-        {plan && (
-          <span className="seg" style={{ marginLeft: 12 }}>
-            <button className={onlyPlan ? "on" : ""} onClick={() => setOnlyPlan(true)} title="只列当前分镜计划里导演出片搭的白模">本章</button>
-            <button className={!onlyPlan ? "on" : ""} onClick={() => setOnlyPlan(false)}>全部</button>
-          </span>
-        )}
+        {free?'自由创作舞台':'当前小说 · 本版舞台'} <small>{rows.length}</small>
       </h3>
       <div className="proj-grid">
         {rows.map(r => (
@@ -81,7 +81,7 @@ export default function BoxHome({ onOpen }: { onOpen: (id: string) => void }) {
             }}>×</button>
           </div>
         ))}
-        {!rows.length && <div className="note">{onlyPlan ? "这一章还没有导演出片搭的白模；点「全部」看所有预演。" : "还没有预演。点上面的模板或官方示例开始。"}</div>}
+        {!rows.length && <div className="note">当前空间还没有舞台。选择上面的模板开始，项目会保存到当前分类。</div>}
       </div>
     </div>
   );

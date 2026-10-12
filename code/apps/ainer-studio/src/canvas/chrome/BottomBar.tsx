@@ -93,7 +93,7 @@ export function BottomBar() {
           <button type="button" className="cv-bb-btn" title="搜索节点（⌘K 或 /）" onClick={() => openSearch()}>
             <Icon name="search" size={17} />
           </button>
-          <button type="button" className="cv-bb-btn" title="整理：按场次泳道重新排（钉住的不动）" onClick={() => s.relayout()}>
+          <button type="button" className="cv-bb-btn" title="整理布局：按流程排列（钉住的与分组保留）" onClick={() => s.relayout()}>
             <Icon name="grid" size={17} />
           </button>
           {hidden.length > 0 && (

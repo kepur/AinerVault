@@ -57,7 +57,7 @@ LIVE_REF_KINDS = frozenset({"story", "scene", "shot", "entity_view", "box_projec
 #: 其余都是能现取的内容，存了就成了第二份数据源，后端一改画布就显示旧的
 DERIVED_DATA_KEYS = frozenset({"ref", "title", "role", "camera", "pinned", "live"})
 #: 运行时算出的状态，任何节点都不进库
-RUNTIME_DATA_KEYS = frozenset({"orphan"})
+RUNTIME_DATA_KEYS = frozenset({"orphan", "comicLive"})
 
 #: 同源媒体路径。/media/{name} 只认一层文件名（main.media_file），这里同样只放一层，
 #: 文件名不许以点开头（挡住 ..）
@@ -160,6 +160,13 @@ def validate_doc(doc: Any) -> dict[str, Any]:
             data = {k: v for k, v in data.items() if k in DERIVED_DATA_KEYS}
         else:
             data = {k: v for k, v in data.items() if k not in RUNTIME_DATA_KEYS}
+        if data.get("comic"):
+            binding = data["comic"]
+            if not isinstance(binding, dict) or not binding.get("production_id"):
+                raise CanvasDocError(f"节点 {nid} 缺少漫剧项目引用")
+            if doc.get("production", {}).get("id") != binding["production_id"]:
+                raise CanvasDocError(f"节点 {nid} 属于另一制作项目")
+            data = {k:v for k,v in data.items() if k not in ("text","media")}
         media = data.get("media")
         if media is not None:
             if not isinstance(media, dict):

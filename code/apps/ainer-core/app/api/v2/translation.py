@@ -63,12 +63,13 @@ def _active_transform(db: Session, novel_id: str, lang: str) -> WorldTransform:
 def extract_entities(
     chapter_id: str,
     min_importance: int = Query(2, ge=1, le=5),
+    include_visual_assets: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> dict:
     """从章节抽取实体。占位符防漂移与家族命名都以此为前置。"""
     c = _chapter(db, chapter_id)
     try:
-        return ent_pipe.extract_entities(db, c, min_importance=min_importance).as_dict()
+        return ent_pipe.extract_entities(db, c, min_importance=min_importance, include_visual_assets=include_visual_assets).as_dict()
     except PipelineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

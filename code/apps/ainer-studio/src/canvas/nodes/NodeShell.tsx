@@ -36,7 +36,7 @@ export function NodeShell({ id, kind, data, selected, width, children, badges, f
         onDoubleClick={onOpen ? (e) => { e.stopPropagation(); onOpen(); } : undefined}
       >
         {children}
-        {footer && <div className="cv-card__foot">{footer}</div>}
+        {(footer||data.comicLive)&&<div className="cv-card__foot">{footer}{data.comicLive&&<span className={`cv-comic-node-state${data.comicLive.stale||data.comic?.dirty?' is-stale':''}`}>{['queued','running'].includes(data.gen?.status||'')?'镜头制作中':data.comic?.dirty?'参数或引用已更改，待重新制作':data.comicLive.state}</span>}{data.comicLive?.asset?.route_reason&&!data.comic?.dirty&&!['queued','running'].includes(data.gen?.status||'')&&<span className="cv-comic-node-state" title={data.comicLive.asset.route_reason}>实际 {data.comicLive.asset.inference_fps} 帧/秒{data.comicLive.asset.width&&data.comicLive.asset.height?` · ${data.comicLive.asset.width}×${data.comicLive.asset.height}`:''} · {data.comicLive.asset.route_reason}</span>}</div>}
       </div>
       <BusyRing id={id} busy={!!busy} />
       {data.orphan && (

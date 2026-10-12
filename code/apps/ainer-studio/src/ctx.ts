@@ -12,19 +12,19 @@
  * 换上级时级联清空下级：换书清章/计划/画布/镜头，换章清计划/画布/镜头，换计划清画布/镜头。
  * 不然地址栏会残留上一章的 plan，风格广场「套用到当前分镜」就套错计划。
  */
-import type { View } from "./Nav";
+import { stageOfView, type View } from "./Nav";
 
-export type CtxKey = "view" | "stage" | "project" | "novel" | "chapter" | "plan" | "canvas" | "shot" | "box" | "char" | "from";
+export type CtxKey = "view" | "stage" | "project" | "novel" | "chapter" | "plan" | "canvas" | "shot" | "box" | "char" | "from" | "locale" | "medium" | "production" | "workspace" | "hub";
 export type Ctx = Record<CtxKey, string | null>;
 export type CtxPatch = Partial<Record<CtxKey, string | null>>;
 
-const KEYS: CtxKey[] = ["view", "stage", "project", "novel", "chapter", "plan", "canvas", "shot", "box", "char", "from"];
+const KEYS: CtxKey[] = ["view", "stage", "project", "novel", "chapter", "plan", "canvas", "shot", "box", "char", "from", "locale", "medium", "production", "workspace", "hub"];
 
 // 换上级清下级。注意 stage 不在表里：切阶段是带着同一上下文走，不是换上下文（planA.md §2）
 const CASCADE: Partial<Record<CtxKey, CtxKey[]>> = {
-  project: ["novel", "chapter", "plan", "canvas", "shot", "char"],
-  novel: ["chapter", "plan", "canvas", "shot", "char"],
-  chapter: ["plan", "canvas", "shot"],
+  project: ["novel", "chapter", "plan", "canvas", "shot", "char", "box", "production"],
+  novel: ["chapter", "plan", "canvas", "shot", "char", "box", "production"],
+  chapter: ["plan", "canvas", "shot", "char", "box", "production"],
   plan: ["canvas", "shot"],
 };
 
@@ -34,6 +34,19 @@ export function readCtx(): Ctx {
   const out = {} as Ctx;
   for (const k of KEYS) out[k] = q.get(k) || null;
   out.shot = out.shot ?? (q.get("focus") || null);
+  out.workspace = out.workspace === "free" ? "free" : "novel";
+  if (out.workspace === "free") {
+    for (const k of ["project", "novel", "chapter", "plan", "shot", "char", "production"] as CtxKey[]) out[k] = null;
+    out.medium = "video";
+    if(!['flow','box','styles','hub'].includes(out.view||''))out.view='flow';
+    if(out.view==='hub'&&!['tasks','settings','library','prompts'].includes(out.hub||''))out.view='flow';
+    return out;
+  }
+  if (out.medium === "comic" || out.view === "comic" || out.view === "comic-assets") {
+    out.medium = "comic";
+    for (const k of ["plan", "shot", "char"] as CtxKey[]) out[k] = null;
+    if(out.view!=="box")out.box=null;
+  }
   return out;
 }
 
@@ -55,13 +68,23 @@ export function writeCtx(patch: CtxPatch) {
   const u = new URL(location.href);
   const before = u.search;
   apply(u.searchParams, patch);
-  if (u.search !== before) history.replaceState(history.state, "", u);
+  if (u.search !== before) {
+    history.replaceState(history.state, "", u);
+    window.dispatchEvent(new Event("studio:context"));
+  }
 }
 
 /** 在当前上下文基础上合并 patch，生成去某个视图的地址 */
 export function hrefFor(view: View, patch: CtxPatch = {}): string {
   const u = new URL(location.href);
-  apply(u.searchParams, { ...patch, view });
+  const oldMedium = u.searchParams.get("medium") || (u.searchParams.get("view")?.startsWith("comic") ? "comic" : "video");
+  const nextMedium = "medium" in patch ? patch.medium || "video" : view === "comic" || view === "comic-assets" ? "comic" : ["translation", "flow", "canvas", "box", "hub"].includes(view) ? oldMedium : "video";
+  if (nextMedium !== oldMedium) {
+    for (const k of ["plan", "canvas", "shot", "char", "box", "production", "focus"]) u.searchParams.delete(k);
+  }
+  if (nextMedium === "comic") for (const k of ["plan", "shot", "char", "box", "focus"]) u.searchParams.delete(k);
+  u.searchParams.set("medium", nextMedium);
+  apply(u.searchParams, { ...patch, view, stage: stageOfView(view) });
   // 换视图时 3D-BOX 专用的参数不跟着走（除非明确给了）
   if (view !== "box") {
     if (!("box" in patch)) u.searchParams.delete("box");

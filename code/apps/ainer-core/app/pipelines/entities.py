@@ -363,7 +363,7 @@ def unmatched_speakers(
 
 
 def extract_entities(
-    db: Session, chapter: Chapter, *, min_importance: int = 2
+    db: Session, chapter: Chapter, *, min_importance: int = 2, include_visual_assets: bool = False
 ) -> ExtractResult:
     """抽取一章的实体并合并进 world_entities。
 
@@ -374,6 +374,11 @@ def extract_entities(
         raise PipelineError("章节没有正文，无法抽取实体")
 
     hint = f"\n\n【已识别的说话人】{', '.join(speakers)}" if speakers else ""
+    if include_visual_assets:
+        hint += "\n\n【制作素材补齐】除人物外，收录本章反复使用、被拿起或传递的特定道具和可复用场景。" \
+                "例如主角的书包、被抢的钱、班级钥匙、值日的扫帚、具体学校的走廊与教室。" \
+                "用所有者或剧情功能限定它的稳定称呼，保留原文证据；不要捏造正文没有的器物，不给道具取人名。" \
+                "人物包括只出现在动作里但未说话的角色。已有实体仅补缺项，不能另建同一角色。"
     known = list(db.execute(
         select(WorldEntity).where(WorldEntity.novel_id == chapter.novel_id)
         .order_by(WorldEntity.kind, WorldEntity.display_name)

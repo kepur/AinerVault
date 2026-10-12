@@ -14,6 +14,7 @@ import type { XYPosition } from "@xyflow/react";
 import type { CastMember, ShotCard } from "../types";
 import { directorPending } from "../shotStatus";
 import { errText } from "./chrome/Overlays";
+import { segsToPrompt } from "./chrome/PromptEditor";
 import { cv, media } from "./api";
 import type { CanvasStore } from "./contract";
 import {
@@ -349,15 +350,16 @@ export function shotMethods(s: CanvasStore, node: CNode, shot: ShotCard): Canvas
 /* ───────────────────────── 生成配方（纳逗式：节点带配方，服务端执行器按配方跑） ───────────────────────── */
 
 export const OP_LABEL: Record<RecipeOp, string> = {
-  image: "图片生成", video: "视频生成", sheet: "标准定妆照", concat: "视频拼接", last_frame: "取尾帧", one_take: "一次成片",
+  image: "图片生成", video: "视频生成", sheet: "标准定妆照", prop_sheet: "道具定妆照", concat: "视频拼接", last_frame: "取尾帧", one_take: "一次成片",
 };
 
-/** 标准定妆照的 16 格（键和后端 char_sheet.LABELS 对齐；执行器 NodeRun.extra[].label 用的是键） */
+/** 标准定妆照的 16 格与道具 4 角度（键和后端 char_sheet.ALL_LABELS 对齐；执行器 NodeRun.extra[].label 用的是键） */
 export const PANEL_LABEL: Record<string, string> = {
   body_front: "前视图", body_back: "后视图", body_side: "侧视图",
   face_front: "正面特写", face_left: "左侧特写", face_right: "右侧特写", face_back: "后脑特写",
   expr_joy: "喜", expr_anger: "怒", expr_sorrow: "哀", expr_happy: "乐", expr_surprise: "惊", expr_fear: "恐",
   expr_think: "思", expr_disgust: "厌", expr_doubt: "疑",
+  prop_front: "正立面主视图", prop_side: "侧方位透视", prop_iso: "45°立体全貌", prop_macro: "材质与细节特写",
 };
 /** 拼版的三个分区（和参考图一致：全景三视图 / 面部多视角 / 九宫格表情） */
 export const PANEL_GROUPS: { title: string; keys: string[] }[] = [
@@ -532,30 +534,52 @@ export function uniqueTitle(s: CanvasStore, base: string): string {
  * 「标准定妆照」：在右边新建一个 op=sheet 的节点（全身三视图 + 面部四角度 + 九宫格表情，拼成一张），
  * 以这张图为底图、连身份线，马上交给执行器。角色库的定妆照（派生）先复制成静态图再用。
  */
-export async function spawnSheet(s: CanvasStore, node: CNode, preset: "standard" | "quick" = "standard") {
+export async function spawnSheet(s: CanvasStore, node: CNode, preset: "standard" | "quick" | "prop" = "standard") {
   const r = s.resolve(node.data.ref, node.data);
-  const name = r.kind === "entity_view" ? r.member.name : null;
+  const name = r.kind === "entity_view" ? r.member.name : (node.data.title || null);
   const srcId = refableId(s, node, node.id);
   if (!srcId) return;
   const src = s.nodes.find(n => n.id === srcId) ?? node;
   const at = placeBeside(s.nodes, src, "right", { w: 300, h: 170 })[0];
+  const isProp = preset === "prop" || node.data.role === "prop";
+  const finalPreset = isProp ? "prop" : preset;
+  const title = uniqueTitle(s, isProp ? (name ? `道具定妆照 · ${name}` : "道具定妆照") : (name ? `定妆照 · ${name}` : "定妆照"));
   const id = s.addNode("image", {
-    ref: freeRef(), title: uniqueTitle(s, name ? `定妆照 · ${name}` : "定妆照"), role: "sheet",
-    recipe: { op: "sheet", prompt: [], refs: [{ node: srcId, role: "base" }], sheet: { preset, name, look: null } },
-  }, at, { source: srcId, kind: edgeKindOfRole("base", "sheet") });
+    ref: freeRef(), title, role: isProp ? "prop_sheet" : "sheet",
+    recipe: { op: "sheet", prompt: [], refs: [{ node: srcId, role: "base" }], sheet: { preset: finalPreset, name, look: null } },
+  }, at, { source: srcId, kind: edgeKindOfRole("base", isProp ? "prop_sheet" : "sheet") });
   await s.execute({ node_ids: [id] });
-  s.toast(preset === "standard"
-    ? "标准定妆照开始出：全身三视图 → 面部四角度 → 九宫格表情，再拼成一张（本机约 8 分钟）"
-    : "快速定妆照开始出：全身前 / 侧 / 后 + 正脸（本机约 2 分钟）", "ok");
+  s.toast(finalPreset === "prop"
+    ? "道具定妆照开始出：正立面主视图 → 侧方位透视 → 45°立体全貌 → 材质与工艺特写（约 1 分钟）"
+    : finalPreset === "standard"
+    ? "标准定妆照开始出：全身三视图 → 面部四角度 → 九宫格表情，再拼成一张（本机约 5 分钟）"
+    : "快速定妆照开始出：全身前 / 侧 / 后 + 正脸（本机约 1 分钟）", "ok");
 }
 
-function sheetAction(s: CanvasStore, node: CNode, url: string | undefined, why: string, label = "标准定妆照"): CanvasAction {
+function sheetAction(s: CanvasStore, node: CNode, url: string | undefined, why: string, label = "定妆照"): CanvasAction {
+  const isProp = node.data.role === "prop";
   return {
-    id: "sheet", label, icon: "▦", badge: "NEW",
-    title: "用这张人物照出一张标准定妆照：全身前 / 后 / 侧三视图 + 面部正 / 左 / 右 / 后脑 + 喜怒哀乐惊恐思厌疑九宫格表情，"
-      + "拼成一张（本机约 8 分钟）；出完可以当分镜、视频的身份参考",
+    id: "sheet", label: isProp ? "道具定妆照" : label, icon: isProp ? "🗡️" : "▦", badge: "NEW",
+    title: isProp ? "用这张道具照生成多角度展台定妆照（正立面、侧方位、45°全貌、材质微距）" : "生成角色/道具定妆照，供下游分镜与视频引用",
     disabled: !url ? why : s.demo ? "演示数据不能在服务端执行（要连上后端）" : false,
-    run: () => spawnSheet(s, node),
+    menu: [
+      {
+        id: "sheet_standard", label: "标准角色定妆照（16格）", icon: "👤",
+        title: "全身三视图 + 面部四角度 + 九宫格表情（约 5 分钟）",
+        run: () => spawnSheet(s, node, "standard"),
+      },
+      {
+        id: "sheet_quick", label: "快速角色定妆照（4格）", icon: "⚡",
+        title: "全身前/侧/后 + 正脸特写（约 1 分钟）",
+        run: () => spawnSheet(s, node, "quick"),
+      },
+      {
+        id: "sheet_prop", label: "多角度道具定妆照（4展台）", icon: "🗡️",
+        title: "正立面主视图 + 侧方位 + 45°立体全貌 + 材质微距特写（约 1 分钟）",
+        run: () => spawnSheet(s, node, "prop"),
+      },
+    ],
+    run: () => spawnSheet(s, node, isProp ? "prop" : "standard"),
   };
 }
 
@@ -682,17 +706,27 @@ export function parseDirectorShots(text: string): ParsedShot[] {
 export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
   const r = s.resolve(node.data.ref, node.data);
   let text = resolvedText(r).trim();
+  if (!text) {
+    const p = node.data.recipe?.prompt;
+    text = (p ? (typeof p === "string" ? p : segsToPrompt(p as PromptSeg[])) : node.data.gen?.prompt || node.data.text || "").trim();
+  }
+  if (!text) {
+    const upText = s.upstream(node.id).find(u => u.node.type === "text");
+    if (upText) text = (upText.node.data.text || "").trim();
+  }
   let shots = parseDirectorShots(text);
 
   if (!shots.length) {
     try {
       s.toast("正在调用导演大师模型规划分镜（SKILL_34）…", "info");
-      const plan = await cv.filmPlan({ idea: text, shots: 3, has_outfit: false, has_scene: false });
+      const plan = await cv.filmPlan({ idea: text || node.data.title || "多镜头分镜短片", shots: 3, has_outfit: false, has_scene: false });
       const shotDesc = plan.shots.map((sh, i) =>
         `【镜头 ${i + 1} · ${sh.size.toUpperCase()} · ${sh.camera_move || "固定"} · ${sh.seconds}s】\n首帧：${sh.first_frame}\n动作：${sh.motion}`
       ).join("\n\n");
       text = `🎬 场景：${plan.scene}\n角色：${plan.look}\n环境音：${plan.audio}\n\n${shotDesc}`;
-      s.updateNodeData(node.id, { text });
+      if (node.type === "text") {
+        s.updateNodeData(node.id, { text });
+      }
       shots = parseDirectorShots(text);
     } catch (e) {
       s.toast(`导演分镜规划失败：${errText(e)}`, "err");
@@ -705,13 +739,20 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
     return;
   }
 
-  // 1. 发现画布上的角色设定图 / 定妆照
-  const sheetNode = s.nodes.find(n => n.type === "image" &&
+  // 1. 发现角色设定图 / 定妆照：优先取上游连着的，否则在全画布查找
+  const upSheets = s.upstream(node.id).map(u => u.node).filter(n => n.type === "image" &&
+    (n.data.role === "sheet" || n.data.title.includes("定妆照") || n.data.recipe?.op === "sheet"));
+  const sheetNode = upSheets[0] || s.nodes.find(n => n.type === "image" &&
     (n.data.role === "sheet" || n.data.title.includes("定妆照") || n.data.recipe?.op === "sheet"))
     || s.nodes.find(n => n.type === "image" && n.data.media?.url);
 
-  // 2. 发现画布上的 3D 白模
-  const boxNodes = s.nodes.filter(n => n.type === "box3d" || n.data.ref?.kind === "box_project");
+  // 2. 发现 3D 白模 与 场景图片：优先取上游连着的，否则取全画布
+  const upBoxes = s.upstream(node.id).map(u => u.node).filter(n => n.type === "box3d" || n.data.ref?.kind === "box_project");
+  const boxNodes = upBoxes.length ? upBoxes : s.nodes.filter(n => n.type === "box3d" || n.data.ref?.kind === "box_project");
+  const upScenes = s.upstream(node.id).map(u => u.node).filter(n => n.type === "image" &&
+    n !== sheetNode && (n.data.role === "scene" || n.data.role === "upload" || (!n.data.title.includes("定妆照") && n.data.recipe?.op !== "sheet")));
+  const sceneNode = upScenes[0] || s.nodes.find(n => n.type === "image" && n !== sheetNode &&
+    (n.data.role === "scene" || n.data.role === "upload" || (!n.data.title.includes("定妆照") && n.data.recipe?.op !== "sheet")));
 
   // 3. 布局位置计算
   const baseX = node.position.x;
@@ -721,6 +762,15 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
   const col3X = baseX + 1060; // 成片合成
 
   const shotVideoIds: string[] = [];
+  let prevKfId: string | null = null;
+
+  const sceneMatch = text.match(/场景[：:]\s*([^\n]+)/);
+  const lookMatch = text.match(/角色[：:]\s*([^\n]+)/);
+  const audioMatch = text.match(/环境音[：:]\s*([^\n]+)/);
+  const globalScene = sceneMatch ? sceneMatch[1].trim() : "";
+  const globalLook = lookMatch ? lookMatch[1].trim() : "";
+  const globalAudio = audioMatch ? audioMatch[1].trim() : "";
+  const styleAnchor = "Live-action photorealistic cinematic footage, 24fps, natural skin texture, dramatic cinematic lighting.";
 
   for (let i = 0; i < shots.length; i++) {
     const sh = shots[i];
@@ -734,8 +784,14 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
     const kfRefs: RecipeRef[] = [];
     if (sheetNode) kfRefs.push({ node: sheetNode.id, role: "character" });
     if (boxForShot) kfRefs.push({ node: boxForShot.id, role: "scene" });
+    else if (sceneNode) kfRefs.push({ node: sceneNode.id, role: "scene" });
+    else if (prevKfId) kfRefs.push({ node: prevKfId, role: "scene" });
 
-    const kfPrompt: PromptSeg[] = [{ t: "text", text: `[Shot ${sh.shotNo} · ${sh.size}] ${sh.firstFrame}` }];
+    const sceneAnchor = globalScene ? `Setting (the same location and lighting for this scene): ${globalScene}.\n` : "";
+    const charAnchor = globalLook ? `Character in this scene: ${globalLook}.\n` : "";
+    const kfPrompt: PromptSeg[] = [
+      { t: "text", text: `${styleAnchor}\n${sceneAnchor}${charAnchor}[Shot ${sh.shotNo} · ${sh.size} · ${sh.cameraMove}] ${sh.firstFrame}` }
+    ];
     const kfId = s.addNode("image", {
       ref: freeRef(),
       title: kfTitle,
@@ -750,13 +806,17 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
     // 连线到分镜图
     if (sheetNode) s.connect(sheetNode.id, kfId, "identity");
     if (boxForShot) s.connect(boxForShot.id, kfId, "ref");
+    else if (sceneNode) s.connect(sceneNode.id, kfId, "ref");
+    else if (prevKfId) s.connect(prevKfId, kfId, "ref");
 
     // ② 创建单镜视频节点
     const vidTitle = uniqueTitle(s, `视频 · 镜 ${sh.shotNo} (${sh.durationSec}s)`);
     const vidRefs: RecipeRef[] = [{ node: kfId, role: "first_frame" }];
     if (boxForShot) vidRefs.push({ node: boxForShot.id, role: "control_video" });
 
-    const vidPrompt: PromptSeg[] = [{ t: "text", text: `[Camera: ${sh.cameraMove}] ${sh.motion}` }];
+    const vidPrompt: PromptSeg[] = [
+      { t: "text", text: `${styleAnchor}\n${sceneAnchor}${charAnchor}[Camera: ${sh.cameraMove}] ${sh.motion}` }
+    ];
     const vidId = s.addNode("video", {
       ref: freeRef(),
       title: vidTitle,
@@ -766,6 +826,7 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
         duration_ms: Math.round(sh.durationSec * 1000),
         prompt: vidPrompt,
         refs: vidRefs,
+        audio: globalAudio || undefined,
       },
     }, { x: col2X, y: rowY });
 
@@ -774,6 +835,7 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
     if (boxForShot) s.connect(boxForShot.id, vidId, "control");
 
     shotVideoIds.push(vidId);
+    prevKfId = kfId;
   }
 
   // ③ 创建最终成片合成节点 (Concat)
@@ -790,11 +852,13 @@ export async function orchestrateDirectorShots(s: CanvasStore, node: CNode) {
     },
   }, { x: col3X, y: concatY });
 
-  for (const vid of shotVideoIds) {
-    s.connect(vid, concatId, "ref");
+  s.toast(`🎬 导演排镜完成：已拆出 ${shots.length} 组分镜头网络，正在启动后端流水线…`, "ok");
+  try {
+    await s.flushSave();
+    await cv.execute(s.boardId, { node_ids: [concatId] });
+  } catch (e) {
+    s.toast(`排镜已落盘，可点击成片节点运行：${errText(e)}`, "info");
   }
-
-  s.toast(`🎬 导演排镜完成：已拆出 ${shots.length} 组分镜图、单镜视频与成片合成节点网络！`, "ok");
 }
 
 function textActions(s: CanvasStore, node: CNode, r: Resolved): CanvasAction[] {
@@ -926,7 +990,7 @@ function imageActions(s: CanvasStore, node: CNode, r: Resolved): CanvasAction[] 
       ...tail,
     ];
   }
-  const isSheet = node.data.recipe?.op === "sheet";
+  const isSheet = node.data.recipe?.op === "sheet" || node.data.role === "sheet" || node.data.role === "prop_sheet";
   return [genAction(s, node), ...(isSheet ? [] : [sheetAction(s, node, url, why)]), ...tail];
 }
 
@@ -968,11 +1032,25 @@ function videoActions(s: CanvasStore, node: CNode, r: Resolved): CanvasAction[] 
   const m = r.kind === "media" ? r.media : null;
   const url = pending ? undefined : media(m?.url);
   const isImage = !!m?.mime?.startsWith("image/");
-  return mediaTail(s, node.data.title, url, !isImage, pending ? "还在生成" : "还没有内容");
+  const tail = mediaTail(s, node.data.title, url, !isImage, pending ? "还在生成" : "还没有内容");
+  const up = s.upstream(node.id);
+  const hasBox = up.some(u => u.node.type === "box3d" || u.node.data.ref?.kind === "box_project");
+  const hasSheet = up.some(u => u.node.data.role === "sheet" || u.node.data.title.includes("定妆照"));
+  const directorAction: CanvasAction = {
+    id: "orchestrate_shots", label: "🎬 导演多镜成片 (ABCD规范)", icon: "🎞", badge: "NEW",
+    title: "按照 ABCD 规范：拆解 2~3 个分镜头，分别利用白模机位运镜与定妆照身份，首尾帧过渡批次生成并拼接成片",
+    run: () => orchestrateDirectorShots(s, node),
+  };
+  return hasBox || hasSheet ? [directorAction, ...tail] : tail;
 }
 
 /** 选中节点的工具条动作 */
 export function actionsFor(node: CNode, s: CanvasStore): CanvasAction[] {
+  if(node.data.comic) return [
+    {id:'comic-edit',label:'制作与修改',run:()=>s.select(node.id)},
+    ...(node.data.media?.url ? [{id:'comic-open',label:'查看产物',run:()=>s.openOverlay({kind:'media' as const,url:node.data.media!.url,video:node.type==='video'})}]:[]),
+    {id:'comic-delete',label:'移除节点',run:()=>s.removeNodes([node.id])},
+  ];
   const r = s.resolve(node.data.ref, node.data);
   let list: CanvasAction[];
   if (node.type === "box3d") list = box3dActions(node, s);
@@ -1017,6 +1095,7 @@ export function actionsFor(node: CNode, s: CanvasStore): CanvasAction[] {
 
 /** 是不是「点了生成却什么都没发」的空节点（误加的就是它们）：自由节点、没图没字、没有在跑或成功的生成 */
 export function isEmptyGen(n: CNode, s: Pick<CanvasStore, "tasks">): boolean {
+  if(n.data.comic)return false;
   const d = n.data;
   if (d.ref.kind !== "free" || d.media || (d.text ?? "").trim()) return false;
   if (d.gen && (d.gen.status === "queued" || d.gen.status === "running" || d.gen.status === "succeeded")) return false;

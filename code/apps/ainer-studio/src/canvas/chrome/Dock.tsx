@@ -1,3 +1,5 @@
+import { ComicDock } from "./ComicPanel";
+import {ConcatPanel} from './ConcatPanel';
 /**
  * 生成面板（Dock）：恰好选中一个「能生成」的节点时浮在底部中间。三种模式：
  *   box   白模节点：跟 3D-BOX 智能体对话改景（askBox）
@@ -11,13 +13,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { useReactFlow } from "@xyflow/react";
 import { cv, HttpError, media, missing } from "../api";
 import {
-  freeRef, GLYPH, inferEdgeKind, placeBeside, productSize, refMediaOf, shotBusy, shotMethods, taskOpen, thumbOf,
+  freeRef, GLYPH, inferEdgeKind, orchestrateDirectorShots, placeBeside, productSize, refMediaOf, shotBusy, shotMethods, taskOpen, thumbOf,
   type RefMedia,
 } from "../actions";
 import { isProductionRef } from "../model";
 import type { CanvasStore } from "../contract";
 import {
-  nodeIdOf, type CNode, type EdgeKind, type GenerateBody, type GenerateResult, type GenState, type ModelOption,
+  isDerived, nodeIdOf, type CNode, type EdgeKind, type GenerateBody, type GenerateResult, type GenState, type ModelOption,
   type NodeKind, type NodeRef, type PromptSeg, type RefRole,
 } from "../model";
 import { useCanvas, useNodeResolved } from "../store";
@@ -39,8 +41,16 @@ const COUNTS = [1, 2, 4];
 const RES_SHORT: Record<string, number> = { "480p": 480, "720p": 720, "1080p": 1080 };
 
 const ROLE_LABEL: Record<RefRole, string> = {
-  character: "身份", first_frame: "首帧", last_frame: "尾帧", style: "风格", scene: "场景",
-  reference_sheet: "设定图", control_video: "控制", base: "底图", reference: "参考",
+  character: "👤 角色身份",
+  prop: "🗡️ 道具参考",
+  first_frame: "🎬 镜头首帧",
+  last_frame: "🏁 镜头尾帧",
+  style: "👗 服饰/风格",
+  scene: "🏞️ 场景环境",
+  reference_sheet: "📋 综合定妆照",
+  control_video: "🎥 运镜控制",
+  base: "🖼️ 构图底图",
+  reference: "📎 一般参考",
 };
 const EDGE_LABEL: Record<EdgeKind, string> = { identity: "身份", control: "控制", style: "风格", flow: "剧本", ref: "参考" };
 const REF_MODES: { id: RefMode; label: string; hint: string }[] = [
@@ -70,9 +80,11 @@ interface GenOpts {
   durationS: number;
   count: number;
   refMode: RefMode;
+  fps:number;
+  controlType:string|null;
 }
 const OPTS_KEY = "ainer.canvas.dock.v2";
-const DEFAULT_OPTS: GenOpts = { media: "video", model: {}, aspect: "16:9", resolution: "480p", durationS: 5, count: 1, refMode: "multi" };
+const DEFAULT_OPTS: GenOpts = { media: "video", model: {}, aspect: "16:9", resolution: "480p", durationS: 5, count: 1, refMode: "multi",fps:24,controlType:null };
 
 function loadOpts(): GenOpts {
   try {
@@ -173,10 +185,13 @@ interface RefItem {
 
 function roleOptions(kind: Media, out: Media): RefRole[] {
   if (kind === "video") return ["control_video", "reference"];
-  return out === "video" ? ["character", "first_frame", "style", "reference"] : ["character", "base", "style", "reference"];
+  return out === "video"
+    ? ["first_frame", "character", "prop", "reference_sheet", "style", "scene", "reference", "last_frame"]
+    : ["base", "character", "prop", "style", "scene", "reference"];
 }
 
 function defaultRole(kind: Media, edge: EdgeKind | null, mode: RefMode, out: Media, firstImage: boolean, self: CNode | null): RefRole {
+  if (self?.data.role === "prop") return "prop";
   if (kind === "video") {
     if (self) return self.data.role === "previs" || self.data.role === "control" ? "control_video" : "reference";
     return edge === "control" || mode === "control" ? "control_video" : "reference";
@@ -357,7 +372,7 @@ function EditorTools({ demo, ed, onPreset }: {
 
 /* ───────────────────────── 自由生成 ───────────────────────── */
 
-function GenPanel({ node, opts, setOpts, drafts }: {
+function GenPanel({ node, opts:defaults, setOpts:onOptions, drafts }: {
   node: CNode;
   opts: GenOpts;
   setOpts: (p: Partial<GenOpts>) => void;
@@ -367,8 +382,10 @@ function GenPanel({ node, opts, setOpts, drafts }: {
   const latest = useLatest(s);
   const ed = useRef<PromptEditorHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [roles, setRoles] = useState<Record<string, RefRole>>({});
-  const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
+  const [opts,setLocalOpts]=useState<GenOpts>(()=>({...defaults,...node.data.manualDraft?.settings as Partial<GenOpts>}));
+  const setOpts=(patch:Partial<GenOpts>)=>{setLocalOpts(p=>({...p,...patch}));onOptions(patch);};
+  const [roles, setRoles] = useState<Record<string, RefRole>>(()=>node.data.manualDraft?.roles||{});
+  const [excluded, setExcluded] = useState<Set<string>>(() => new Set(node.data.manualDraft?.excluded||[]));
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [confirm, setConfirm] = useState<number | null>(null);
@@ -388,7 +405,11 @@ function GenPanel({ node, opts, setOpts, drafts }: {
 
   const isText = node.type === "text";
   const [segs, setSegs] = useState<PromptSeg[]>(() =>
-    drafts.get(node.id) ?? (isText ? segsFromText(node.data.text ?? "", mentions) : []));
+    drafts.get(node.id) ?? node.data.manualDraft?.prompt ?? (isText ? segsFromText(node.data.text ?? "", mentions) : []));
+  useEffect(()=>{
+    if(isDerived(node.data.ref))return;
+    latest.current.updateNodeData(node.id,{manualDraft:{prompt:segs,settings:{...opts},roles,excluded:[...excluded]}});
+  },[segs,opts,roles,excluded]);
 
   // note/prompt 节点：提示词就是它的正文，防抖写回 data.text；卸载时把没写的补上
   const pendingText = useRef<string | null>(null);
@@ -420,6 +441,9 @@ function GenPanel({ node, opts, setOpts, drafts }: {
     return chosen ?? models.find(m => m.ready && m.local) ?? models.find(m => m.ready) ?? null;
   }, [models, opts.model, out]);
   const limits = model?.limits ?? {};
+  const fpsChoices=limits.fps?.length?limits.fps:[24];
+  const controlChoices=Array.isArray(model?.supports?.control_types)?model.supports.control_types as string[]:[];
+  const controlType=opts.controlType||(controlChoices.includes('layout')?'layout':controlChoices[0]||'');
 
   /* 参考 */
   const self = selfRefMedia(node, s);
@@ -450,6 +474,7 @@ function GenPanel({ node, opts, setOpts, drafts }: {
     return { key, node: e.node, self: e.self, edge: e.edge, thumb, m: e.m, role, include, why };
   });
   const sending = refs.filter(r => r.include);
+  const wantsControl=sending.some(r=>r.role==='control_video');
   /** 能发、只是用户点掉了（空心圈）；别的不发都是 ⚠ */
   const userOff = (r: RefItem) => "url" in r.m && excluded.has(r.key);
 
@@ -470,6 +495,9 @@ function GenPanel({ node, opts, setOpts, drafts }: {
   const stageControl = up.some(u => u.node.data.ref.kind === "stage" || u.node.data.ref.kind === "coverage");
   const off: string | false =
     stageControl ? "当前生成器尚未支持共享舞台控制，请先导出镜头预演控制"
+      :out==='video'&&!model?'先选择已接入的视频模型'
+      :out==='video'&&!fpsChoices.includes(opts.fps)?`所选模型不支持 ${opts.fps} 帧／秒，请选择支持的帧率`
+      :out==='video'&&wantsControl&&!controlChoices.includes(controlType)?'所选模型不支持当前白模控制方式，请更换模型或控制方式'
       : model && !model.ready ? "这个模型还没接入"
       : !promptText && !sending.length ? "先写提示词，或连一张参考"
         : false;
@@ -477,18 +505,22 @@ function GenPanel({ node, opts, setOpts, drafts }: {
   /* 发送 */
   const send = async (confirmCost = false) => {
     const st = latest.current;
+
+    if(off){st.toast(off,'info');return;}
+
     const body: GenerateBody = {
       media: out,
       endpoint_id: model?.endpoint_id ?? null,
       model: model?.model ?? null,
       prompt: promptText,
       refs: sending.flatMap(r => ("url" in r.m && r.role ? [{
-        node_id: r.node.id, url: r.m.url, asset_id: r.m.asset_id ?? null, kind: r.m.kind, role: r.role, tag: r.node.data.title,
+        node_id: r.node.id, url: r.m.url, asset_id: r.m.asset_id ?? null, kind: r.m.kind, role: r.role, tag: r.role==='control_video'?controlType:r.node.data.title,
         ...(isProductionRef(r.node.data.ref) ? { production_ref: r.node.data.ref } : {}),
       }] : [])),
       aspect_ratio: opts.aspect,
       resolution: opts.resolution,
       duration_ms: durationS != null ? durationS * 1000 : null,
+      ...(out==='video'?{video_fps:opts.fps}:{}),
       count,
       seed: null,
       target: { board_id: st.boardId, plan_id: st.planId || null, node_id: node.id },
@@ -685,6 +717,8 @@ function GenPanel({ node, opts, setOpts, drafts }: {
                 onPick: () => setOpts({ durationS: d }),
               }))} />
           )}
+          {out==='video'&&<CapSeg label={`${opts.fps} 帧／秒`} title="模型原生生成帧率" items={fpsChoices.map(f=>({id:String(f),label:`${f} 帧／秒`,active:opts.fps===f,onPick:()=>setOpts({fps:f})}))}/>}
+          {out==='video'&&wantsControl&&<CapSeg label={`白模 · ${controlType||'不支持'}`} title="控制视频按所选方式驱动机位与动作" off={!controlChoices.length?'所选模型没有声明可用的控制视频方式':false} items={controlChoices.map(t=>({id:t,label:t==='layout'?'Layout · 白模运镜与走位':t,active:controlType===t,onPick:()=>setOpts({controlType:t})}))}/>}
           <CapSeg label={`${count}${out === "video" ? "条" : "张"}`} title="一次出几个（逐个排队，每个换一个种子）"
             items={COUNTS.map(c => ({
               id: String(c), label: `${c} ${out === "video" ? "条" : "张"}`, active: c === count,
@@ -694,6 +728,17 @@ function GenPanel({ node, opts, setOpts, drafts }: {
         </div>
         <span className="cv-dock-spacer" />
         <span className="cv-estimate">{estimateText(model, count)}</span>
+        {out === "video" && (isText || up.some(u => u.node.type === "box3d" || u.node.data.ref?.kind === "box_project" || u.node.data.role === "sheet" || u.node.data.title.includes("定妆照") || u.node.type === "text")) && (
+          <button
+            type="button"
+            className="cv-dock-btn is-accent"
+            style={{ marginRight: 8, fontWeight: 600, padding: "0 12px", background: "linear-gradient(135deg, #4f46e5, #7c3aed)", color: "#fff", borderRadius: 8, height: 32, border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+            title="遵循 ABCD 规范：拆解 2~3 个分镜头，分别利用白模机位与定妆照身份，首尾帧过渡批次生成并拼接成片"
+            onClick={() => void orchestrateDirectorShots(latest.current, node)}
+          >
+            🎬 导演多镜成片 (ABCD规范)
+          </button>
+        )}
         <SendButton busy={busy} off={off} onClick={() => void send(confirm != null)} />
       </div>
     </>
@@ -939,7 +984,7 @@ function useKeepSelectedVisible(selectedId: string | null, collapsed: boolean) {
   }, [selectedId, collapsed, rf]);
 }
 
-export function Dock() {
+export function Dock({manualRequest}:{manualRequest?:{id:string;revision:number;manual?:boolean}|null}) {
   const s = useCanvas();
   const node = s.selected;
   const mode = node ? modeOf(node) : null;
@@ -948,6 +993,7 @@ export function Dock() {
   const [tabs, setTabs] = useState<Record<string, "shot" | "free">>({});
   // 每个目标节点的提示词草稿（note/prompt 节点直接写回 data.text，不进这里）
   const drafts = useRef(new Map<string, PromptSeg[]>()).current;
+  useEffect(()=>{if(manualRequest){setCollapsed(false);saveCollapsed(false);setTabs(t=>({...t,[manualRequest.id]:manualRequest.manual?'free':'shot'}));}},[manualRequest]);
 
   const setOpts = (p: Partial<GenOpts>) => setOptsState(prev => {
     const next = { ...prev, ...p };
@@ -957,6 +1003,8 @@ export function Dock() {
   const toggle = () => setCollapsed(c => { saveCollapsed(!c); return !c; });
   useKeepSelectedVisible(s.selectedId, collapsed);
 
+  if(node?.data.comic) return <ComicDock key={node.id} node={node}/>;
+  if(node?.data.recipe?.op==='concat')return <ConcatPanel key={node.id} node={node}/>;
   if (!node || !mode || !s.selectedId) return null;
   const tab = mode === "shot" ? tabs[node.id] ?? "shot" : null;
   const title = mode === "box" ? "对白模说话" : mode === "shot" ? null : "自由生成";

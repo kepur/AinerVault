@@ -195,7 +195,8 @@ class _Fake:
         monkeypatch.setattr(cs, "_store_sheet", self.store)
 
     def key_of(self, payload: dict) -> str:
-        return next(k for k in cs.PANEL_KEYS_STANDARD if cs.panel_prompt(k, "look") == payload["prompt"]
+        all_keys = cs.PANEL_KEYS_STANDARD + list(cs.PROP_KEYS)
+        return next(k for k in all_keys if cs.panel_prompt(k, "look") == payload["prompt"]
                     or cs.panel_prompt(k, "") == payload["prompt"])
 
     def submit(self, db, route, payload, *, ref_kind, ref_id, force):
@@ -373,3 +374,31 @@ def test_tiered_panel_resolutions_and_ref_megapixels():
         p = cs._edit_payload("prompt", f"{BASE}/media/a.png", [], 1, size=cs.panel_size_of(k))
         assert (p["width"], p["height"]) == (256, 256)
         assert p["params"]["ref_megapixels"] == 0.25
+
+
+def test_prop_preset_and_generation(monkeypatch):
+    assert cs.panel_keys("prop") == list(cs.PROP_KEYS)
+    for k in cs.PROP_KEYS:
+        assert cs.panel_size_of(k) == (384, 448)
+        p = cs.panel_prompt(k)
+        assert "prop" in p.lower()
+        assert "product photography" in p.lower()
+    
+    # Test plan layers
+    layers = cs.plan_layers(cs.panel_keys("prop"))
+    assert layers[0] == ["prop_front"]
+    assert set(layers[1]) == {"prop_side", "prop_iso", "prop_macro"}
+
+    # Test compose sheet
+    panels = {k: _figure(384, 448) for k in cs.PROP_KEYS}
+    sheet = cs.compose_sheet(panels, name="屠龙宝刀", preset="prop")
+    assert sheet.width > 1000 and sheet.height > 500
+
+    # Test full generation pipeline with Fake
+    _Fake(monkeypatch)
+    out = cs.generate_sheet(None, person_url=f"{BASE}/media/sword.png", name="屠龙宝刀", preset="prop")
+    assert len(out["panels"]) == 4
+    assert out["preset"] == "prop"
+    assert [p["key"] for p in out["panels"]] == list(cs.PROP_KEYS)
+    assert cs.identity_panels(out["panels"], "prop")
+

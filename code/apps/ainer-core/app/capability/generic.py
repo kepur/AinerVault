@@ -71,7 +71,7 @@ KNOWN_ROLES = frozenset({
 #: 只认 base 的话图生图在画布上永远走不到
 BASE_ROLES = ("base", "first_frame")
 IDENTITY_ROLES = ("reference_sheet", "character")
-CONTROL_TAGS = ("depth", "pose", "canny")
+CONTROL_TAGS = ("v2v", "union", "depth", "pose", "canny", "layout")
 #: 前端角色 → 契约 RefRole（schemas.RefRole 只有这四个）
 _CORE_ROLE = {
     "character": "character", "reference_sheet": "character",
@@ -121,6 +121,9 @@ class GenerateIn(BaseModel):
     duration_ms: int | None = None
     count: int = 1
     seed: int | None = None
+    ltx_stage2_steps: Literal[2, 3] | None = None
+    video_fps: Literal[4, 8, 12, 24, 25] = 24
+    video_motion: Literal["auto", "animate", "hold", "kenburns"] = "auto"
     target: TargetIn | None = None
     confirm_cost: bool = False
 
@@ -164,6 +167,7 @@ class ModelInfo:
     supports: dict[str, Any] = field(default_factory=dict)
     #: 能跑哪些控制视频（v2v/depth/pose/canny/union）。没声明 = 不支持
     control_types: list[str] = field(default_factory=list)
+    fps: list[int] = field(default_factory=list)
 
 
 _SIZE = re.compile(r"^\s*(\d+)\s*[x×*X]\s*(\d+)\s*$")
@@ -241,6 +245,7 @@ def catalog_models(ep: Any, caps: Sequence[str]) -> list[ModelInfo]:
                 max_prompt_chars=_int_or_none(limits.get("max_prompt_chars")),
                 supports=supports,
                 control_types=[str(t) for t in m.get("control_types") or []],
+                fps=[f for v in limits.get("fps") or [] if (f := _int_or_none(v)) is not None and f > 0],
             ))
     return out
 
@@ -343,6 +348,7 @@ def to_option(info: ModelInfo, media: str, *, billing: str, blocked: str | None,
             "max_duration_ms": info.max_duration_ms,
             "max_ref_images": info.max_ref_images,
             "max_count": MAX_COUNT,
+                **({"fps": info.fps} if media == "video" else {}),
         },
         "supports": {
             **info.supports,
@@ -460,6 +466,18 @@ def clamp_size(aspect: str, resolution: str, sizes: Any = None,
         else:
             warnings.append(f"该模型没有 {tw}×{th}，按 {w}×{h} 出")
     return w, h, warnings
+
+
+def canvas_size(body: GenerateIn, info: ModelInfo | None):
+    # Older gateway catalogs omitted this supported 64-aligned fast size.
+    # Match the chapter renderer's fast profile instead of rounding 480p to 832.
+    if info and info.model == "ltx-2.5-22b-distilled" and body.resolution.lower() == "480p":
+        aw, ah = _parse_aspect(body.aspect_ratio, [])
+        if (aw, ah) in ((16, 9), (9, 16)):
+            dims = (768, 448) if aw > ah else (448, 768)
+            return *dims, [f"LTX 快速档使用 {dims[0]}×{dims[1]}，与章节制作一致"]
+    return clamp_size(body.aspect_ratio, body.resolution,
+                      info.sizes if info else None, info.size_multiple if info else None)
 
 
 def clamp_duration(ms: int | None, max_ms: int | None) -> tuple[int, list[str]]:
@@ -633,7 +651,11 @@ def build_payload(capability: str, body: GenerateIn, w: int, h: int,
             payload["reference_images"] = images
         return payload
 
-    payload["fps"] = FPS
+    payload["fps"] = body.video_fps
+    if body.model == "ltxv-2b-distilled":
+        payload["motion"] = body.video_motion
+    if body.model == "ltx-2.5-22b-distilled" and body.ltx_stage2_steps is not None:
+        payload["params"]["stage2_steps"] = body.ltx_stage2_steps
     if duration_ms is not None:
         payload["duration_ms"] = duration_ms
     rest: list[dict[str, Any]] = []
@@ -651,6 +673,22 @@ def build_payload(capability: str, body: GenerateIn, w: int, h: int,
     if rest:
         payload["reference_images"] = rest
     return payload
+
+
+def validate_video_controls(body: GenerateIn, info: ModelInfo | None) -> None:
+    """Reject incompatible explicit controls rather than lose the manual user's choices."""
+    if info is None:
+        return
+    if info.fps and body.video_fps not in info.fps:
+        raise GenerateError(422, "UNSUPPORTED_VIDEO_FPS",
+                            f"「{info.label}」不支持 {body.video_fps} 帧／秒；可用：{info.fps}")
+    for ref in body.refs:
+        if ref.kind != "video" or ref.role != "control_video":
+            continue
+        want = ref.tag if ref.tag in CONTROL_TAGS else "v2v"
+        if want not in info.control_types:
+            raise GenerateError(422, "UNSUPPORTED_VIDEO_CONTROL",
+                                f"「{info.label}」不支持 {want} 控制视频，请更换模型或控制方式")
 
 
 def canvas_ref_id(node_id: str | None) -> str | None:
@@ -886,6 +924,8 @@ def submit(db: Session, body: GenerateIn) -> dict[str, Any]:
         raise GenerateError(422, "MODEL_NOT_READY",
                             f"「{info.label}」在能力网关上还没就绪（缺权重或没装），换一个模型")
 
+    if cap == I2V:
+        validate_video_controls(body.model_copy(update={"refs": refs}), info)
     refs, w = fit_refs(cap, refs, info)
     warnings += w
     if cap == I2I and not any(r.role == "base" for r in refs):
@@ -897,8 +937,7 @@ def submit(db: Session, body: GenerateIn) -> dict[str, Any]:
             f"「{info.label}」必须有首帧：把一张图的参考角色设为「首帧」，"
             f"或换一个支持文生视频的模型（如 LTX-2.5）")
 
-    width, height, w = clamp_size(body.aspect_ratio, body.resolution,
-                                  info.sizes if info else None, info.size_multiple if info else None)
+    width, height, w = canvas_size(body, info)
     warnings += w
     duration_ms: int | None = None
     if cap == I2V:
@@ -1057,10 +1096,17 @@ def task_state(db: Session, task_id: str) -> dict[str, Any] | None:
             status = "failed"
             error = ("任务成功了，但产物还没取回本库（网关临时地址不能给画布用），稍后重出一次"
                      if foreign else "任务成功了，但没有可用的产物")
+    progress: float | None = 1.0 if status == "succeeded" else None
+    if progress is None and isinstance(t.result_json, dict) and "progress" in t.result_json:
+        try:
+            progress = float(t.result_json["progress"])
+        except (ValueError, TypeError):
+            progress = None
+
     return {
         "id": t.id,
         "status": status,
-        "progress": 1.0 if status == "succeeded" else None,
+        "progress": progress,
         "error": error if status in ("failed", "cancelled") else None,
         "assets": local,
     }

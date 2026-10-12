@@ -68,6 +68,17 @@ def test_a_plain_doc_passes():
     assert out["hidden"] == ["scene:x"] and len(out["edges"]) == 1
 
 
+def test_comic_board_stores_bindings_and_recipe_but_discards_runtime_source_cache():
+    node=_node('comic:p:dialogue:b','free',typ='text',comic={'production_id':'p','step':'dialogue','source_id':'b','params':{'dialogue_overrides':{'b':'Edited line'}}},
+        comicLive={'state':'ready'},text='Cached shared canon',media={'url':'/media/cache.png'})
+    out=api.validate_doc(_doc([node],production={'id':'p','medium':'comic','script_doc_id':'script'}))
+    data=out['nodes'][0]['data']
+    assert data['comic']['params']['dialogue_overrides']['b']=='Edited line'
+    assert not any(k in data for k in ('comicLive','text','media'))
+    with pytest.raises(api.CanvasDocError):
+        api.validate_doc(_doc([node],production={'id':'another','medium':'comic'}))
+
+
 def test_wrong_schema_is_rejected():
     with pytest.raises(api.CanvasDocError):
         api.validate_doc({**_doc(), "schema": "xyflow"})

@@ -1,8 +1,9 @@
+import { ComicBootstrap } from "./chrome/ComicPanel";
 /**
  * 创作画布（?view=flow）：纳逗式节点画布，把剧本场次、镜头、定妆照和 3D 白模摆在一张图上。
  * Root 里 lazy 加载：分镜画布、3D-BOX 等别的视图不带它。
  */
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, useState, type ErrorInfo, type ReactNode } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 // xyflow 自己的样式在 main.tsx 全局引过了
 import "./tokens.css";
@@ -46,7 +47,8 @@ class CanvasBoundary extends Component<{ children: ReactNode }, { error: Error |
   }
 }
 
-export default function CreativeCanvas({ nav }: { nav?: ReactNode }) {
+export default function CreativeCanvas({ nav, initialManager=false, initialAssemble=false }: { nav?: ReactNode; initialManager?:boolean;initialAssemble?:boolean }) {
+  const [manualRequest,setManualRequest]=useState<{id:string;revision:number;manual?:boolean}|null>(null);
   return (
     <div className="cv-root">
       <CanvasBoundary>
@@ -56,8 +58,9 @@ export default function CreativeCanvas({ nav }: { nav?: ReactNode }) {
               <NodeActions />
               <BottomBar />
             </Flow>
-            <TopBar nav={nav} />
-            <Dock />
+            <TopBar nav={nav} initialManager={initialManager} initialAssemble={initialAssemble} onManual={(id,manual)=>setManualRequest({id,manual,revision:Date.now()})} />
+            <ComicBootstrap />
+            <Dock manualRequest={manualRequest}/>
             <AddMenu />
             <SearchPalette />
             <AssetsDrawer />

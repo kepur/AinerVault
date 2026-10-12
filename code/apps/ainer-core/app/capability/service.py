@@ -408,6 +408,10 @@ def apply_task_result(db: Session, task: GenTask, result: Task) -> GenTask:
         warnings = result.warnings
         if warnings:
             task.warnings_json = warnings
+    elif not result.is_terminal and result.progress is not None:
+        cur = dict(task.result_json or {})
+        cur["progress"] = result.progress
+        task.result_json = cur
     if result.error:
         task.error_json = result.error.model_dump(mode="json")
 

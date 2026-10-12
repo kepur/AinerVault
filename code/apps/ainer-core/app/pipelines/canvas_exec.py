@@ -51,7 +51,7 @@ from app.models import (
 
 log = logging.getLogger(__name__)
 
-OPS = ("image", "video", "sheet", "concat", "last_frame", "one_take")
+OPS = ("image", "video", "sheet", "prop_sheet", "concat", "last_frame", "one_take")
 #: 还没结束的 run（库里）；waiting 只是给人看的「等上游」，库里存的是 queued
 ACTIVE_RUN = ("queued", "waiting", "running")
 #: 执行器（一张画布）还在跑
@@ -84,10 +84,10 @@ PURPOSE = "canvas"
 REF_KIND = "canvas_node"
 #: 对图片来说「首帧」就是「从这张图出发」（同 generic.BASE_ROLES）
 BASE_ROLES = ("base", "first_frame")
-IDENTITY_ROLES = ("character", "reference_sheet")
+IDENTITY_ROLES = ("character", "reference_sheet", "prop")
 #: 前端 RefRole → 契约 RefRole（同 generic._CORE_ROLE；那个是私有的，这里抄一份）
-CORE_ROLE = {"character": "character", "reference_sheet": "character", "style": "style", "scene": "scene",
-             "reference": "scene", "control_video": "composition"}
+CORE_ROLE = {"character": "character", "reference_sheet": "character", "prop": "character", "style": "style", "scene": "scene",
+             "reference": "scene", "control_video": "composition", "control": "composition"}
 #: 现取内容的派生节点（剧本、镜头、角色视角）：本轮执行器不支持直接当参考
 LIVE_REF_KINDS = frozenset({"story", "scene", "shot", "entity_view"})
 _VIDEO_EXT = (".mp4", ".webm", ".mov", ".m4v")
@@ -728,6 +728,8 @@ def execute(db: Session, board_id: str, opts: Mapping[str, Any] | Any | None = N
         board = db.get(StudioBoard, board_id)
         if board is None:
             raise BoardNotFound(board_id)
+        if (board.doc_json or {}).get("production", {}).get("medium") == "comic":
+            raise ValueError("漫剧节点请使用漫剧制作面板执行，避免混用视频版模型与素材")
         nodes = doc_nodes(board.doc_json)
         from app.production.canvas_controls import stage_inputs, MESSAGE
         candidates = node_ids if node_ids is not None else [n for n in nodes if recipe_of(nodes[n])]
@@ -1067,7 +1069,7 @@ def _dispatch(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
         return _op_image(ctx, recipe)
     if op == "video":
         return _op_video(ctx, recipe)
-    if op == "sheet":
+    if op in ("sheet", "prop_sheet"):
         return _op_sheet(ctx, recipe)
     if op == "last_frame":
         return _op_last_frame(ctx, recipe)
@@ -1228,15 +1230,19 @@ def _seeds(recipe: Mapping[str, Any]) -> list[int]:
 
 
 def _image_size(recipe: Mapping[str, Any], info: Any, default: tuple[int, int]) -> tuple[int, int]:
-    from app.capability.generic import clamp_size
+    from app.capability.generic import GenerateIn, canvas_size, clamp_size
 
     sizes = list(getattr(info, "sizes", None) or [])
     w, h = _int(recipe.get("width")), _int(recipe.get("height"))
     if w and h:
         return fit_size(w, h, sizes)
     if recipe.get("aspect_ratio") or recipe.get("resolution"):
-        cw, ch, _warn = clamp_size(str(recipe.get("aspect_ratio") or "16:9"), str(recipe.get("resolution") or "480p"),
-                                   sizes or None, getattr(info, "size_multiple", None))
+        aspect = str(recipe.get("aspect_ratio") or "16:9")
+        resolution = str(recipe.get("resolution") or "480p")
+        if getattr(info, "model", "") == "ltx-2.5-22b-distilled":
+            cw, ch, _warn = canvas_size(GenerateIn(media="video", aspect_ratio=aspect, resolution=resolution), info)
+        else:
+            cw, ch, _warn = clamp_size(aspect, resolution, sizes or None, getattr(info, "size_multiple", None))
         return cw, ch
     return fit_size(default[0], default[1], sizes)
 
@@ -1258,6 +1264,13 @@ def _op_image(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     base = next((m for m in images if m.role in BASE_ROLES), None)
     if base is None:
         base = next((m for m in images if m.role in ("scene", "composition", "control")), None)
+    if base is None and images:
+        # 有非定妆照的图片参考时优先作为底图；全为定妆照面板时取全身图/首张作为底图，启用编辑模型保身份特征
+        non_sheet = next((m for m in images if m.role not in IDENTITY_ROLES and "定妆照" not in (m.label or "")), None)
+        if non_sheet:
+            base = non_sheet
+        elif len(images) > 1:
+            base = images[0]
     model = str(recipe.get("model") or "")
     endpoint_id = recipe.get("endpoint_id") or None
     if not model:
@@ -1295,8 +1308,46 @@ def _op_image(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     text = prompt_text(recipe.get("prompt"), index, ctx.texts())
     if not text:
         raise ExecError("提示词是空的：在生成面板写一句要画什么")
+
+    # ── ABCD 规范：自动注入画风、场景头与角色锚点，彻底防止提示词先验冲突漂移 ──
+    anchors: list[str] = []
+    if not any(k in text for k in ("Live-action", "photoreal", "Photorealistic", "Cinematic")):
+        anchors.append("Live-action film footage, photorealistic, natural skin texture, dramatic cinematic lighting.")
+    char_node = next((ctx.nodes[r["node"]] for r in (recipe.get("refs") or [])
+                      if isinstance(r, dict) and r.get("node") in ctx.nodes
+                      and (ctx.nodes[r["node"]].get("data", {}).get("role") in IDENTITY_ROLES
+                           or "定妆照" in str(ctx.nodes[r["node"]].get("data", {}).get("title") or ""))), None)
+    if char_node and "Character in this" not in text and "Characters:" not in text:
+        ch_title = title_of(char_node)
+        ch_data = (recipe_of(char_node) or {}).get("sheet") or {}
+        ch_look = ch_data.get("look") or ""
+        if not ch_look:
+            for t_val in ctx.texts().values():
+                m_look = re.search(r"角色[：:]\s*([^\n]+)", t_val)
+                if m_look:
+                    ch_look = m_look.group(1).strip()
+                    break
+        ch_desc = f"{ch_title} ({ch_look})" if ch_look else ch_title
+        anchors.append(f"Character in this scene: matching reference sheet {ch_desc}.")
+    scene_node = next((ctx.nodes[r["node"]] for r in (recipe.get("refs") or [])
+                       if isinstance(r, dict) and r.get("node") in ctx.nodes
+                       and (ctx.nodes[r["node"]].get("type") == "box3d"
+                            or ctx.nodes[r["node"]].get("data", {}).get("role") in ("scene", "base")
+                            or "白模" in str(ctx.nodes[r["node"]].get("data", {}).get("title") or ""))), None)
+    if scene_node and "Setting" not in text:
+        sc_title = title_of(scene_node)
+        sc_look = ""
+        for t_val in ctx.texts().values():
+            m_sc = re.search(r"场景[：:]\s*([^\n]+)", t_val)
+            if m_sc:
+                sc_look = m_sc.group(1).strip()
+                break
+        sc_desc = f"{sc_title} ({sc_look})" if sc_look else sc_title
+        anchors.append(f"Setting (consistent location and lighting): {sc_desc}.")
+
+    full_text = "\n".join(anchors + [text]) if anchors else text
     w, h = _image_size(recipe, info, IMAGE_SIZE)
-    prompt = f"{text}\n\nOne single image, no text, no captions, no watermark."
+    prompt = f"{full_text}\n\nOne single image, no text, no captions, no watermark."
     payloads = []
     for seed in _seeds(recipe):
         p: dict[str, Any] = {"prompt": prompt, "width": w, "height": h, "style": "photoreal", "params": {"seed": seed}}
@@ -1334,7 +1385,7 @@ def _op_video(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     model = str(recipe.get("model") or VIDEO_MODEL)
     cap, route, info = _need_model(ctx.db, [I2V], model, recipe.get("endpoint_id") or None)
     if first is None and not (info.supports or {}).get("text_to_video"):
-        raise ExecError(f"「{info.label}」必须有首帧：把一张图连进来，角色设为「首帧」")
+        raise ExecError("ABCD规范：出视频必须连接分镜首帧图（first_frame），以锁定角色长相与场景。请先生成首帧图，或点击「🎬 导演多镜成片」自动排镜。")
     w, h = _int(recipe.get("width")), _int(recipe.get("height"))
     if not (w and h):
         if recipe.get("aspect_ratio") or recipe.get("resolution"):
@@ -1345,9 +1396,27 @@ def _op_video(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     text = prompt_text(recipe.get("prompt"), {}, ctx.texts())
     if not text and first is None:
         raise ExecError("提示词是空的：写一句画面里发生什么")
+
+    # ── ABCD 规范：从画板提取场景头与角色锚点，锁定 LTX-2.5 时空运动一致性 ──
+    v_anchors: list[str] = []
+    if not any(k in text for k in ("Live-action", "photoreal", "Photorealistic", "Cinematic")):
+        v_anchors.append("Live-action film footage, photorealistic, natural skin texture, cinematic lighting. Not animation, not cartoon, not 3D render.")
+    if "Setting" not in text:
+        for t_val in ctx.texts().values():
+            m_sc = re.search(r"场景[：:]\s*([^\n]+)", t_val)
+            if m_sc:
+                v_anchors.append(f"Setting (the same location and lighting for every shot of this scene): {m_sc.group(1).strip()}.")
+                break
+    if "Character" not in text:
+        for t_val in ctx.texts().values():
+            m_ch = re.search(r"角色[：:]\s*([^\n]+)", t_val)
+            if m_ch:
+                v_anchors.append(f"Characters in this shot: {m_ch.group(1).strip()}.")
+                break
+    full_v_text = "\n".join(v_anchors + [text]) if v_anchors else text
     payloads = []
     for seed in _seeds(recipe):
-        p: dict[str, Any] = {"prompt": video_prompt(text, recipe.get("audio")), "width": w, "height": h,
+        p: dict[str, Any] = {"prompt": video_prompt(full_v_text, recipe.get("audio")), "width": w, "height": h,
                              "fps": FPS, "quality": "final", "duration_ms": duration,
                              "audio": {"mode": "generate"}, "params": {"seed": seed}}
         if first is not None:
@@ -1356,7 +1425,7 @@ def _op_video(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
             p["last_frame"] = _src(gateway_url(last.url))
         if ctl_video is not None:
             p["control"] = {"type": "union", "video": _src(gateway_url(ctl_video.url))}
-        elif sheet is not None:
+        if sheet is not None:
             p["reference_sheet"] = _src(gateway_url(sheet.url))
         payloads.append(p)
     ctx.progress(None, "交给本机出视频" if info.local else f"交给 {info.label} 出视频")
@@ -1370,11 +1439,14 @@ def _op_sheet(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
 
     images = [m for m in ctx.refs(recipe) if m.kind == "image"]
     person = next((m for m in images if m.role in BASE_ROLES), None) or (images[0] if images else None)
-    if person is None:
-        raise ExecError("定妆照要一张人物照片：把人物照片连进来（角色选「底图」）")
     sheet = recipe.get("sheet") if isinstance(recipe.get("sheet"), dict) else {}
-    preset = sheet.get("preset") if sheet.get("preset") in ("standard", "quick") else "standard"
-    ctx.progress(0, "定妆照：准备")
+    preset = sheet.get("preset") if sheet.get("preset") in ("standard", "quick", "prop") else (
+        "prop" if recipe.get("op") == "prop_sheet" or (person and person.role == "prop") else "standard"
+    )
+    is_prop = preset == "prop"
+    if person is None:
+        raise ExecError("道具定妆照要一张道具照片：把道具照片连进来" if is_prop else "定妆照要一张人物照片：把人物照片连进来（角色选「底图」）")
+    ctx.progress(0, "道具定妆照：准备" if is_prop else "定妆照：准备")
     try:
         res = char_sheet.generate_sheet(ctx.db, person_url=gateway_url(person.url), name=str(sheet.get("name") or ""),
                                         look=str(sheet.get("look") or ""), preset=preset,
@@ -1382,11 +1454,11 @@ def _op_sheet(ctx: _Ctx, recipe: Mapping[str, Any]) -> tuple[dict[str, Any], lis
                                         cancelled=ctx.stopping, force=True)
     except char_sheet.SheetError as exc:
         if ctx.stopping():
-            raise Cancelled("已停止（定妆照没出完）") from exc
+            raise Cancelled("已停止（道具定妆照没出完）" if is_prop else "已停止（定妆照没出完）") from exc
         raise ExecError(str(exc)) from exc
     main = res.get("sheet") or {}
     if not main.get("url"):
-        raise ExecError("定妆照拼版没出来")
+        raise ExecError("道具定妆照拼版没出来" if is_prop else "定妆照拼版没出来")
     media = {"url": same_origin(main["url"]), "asset_id": main.get("asset_id"), "mime": "image/png"}
     extra = [{"label": str(p.get("key")), "media": {"url": same_origin(p["url"]), "asset_id": p.get("asset_id"),
                                                     "mime": "image/png"}}

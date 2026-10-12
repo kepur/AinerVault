@@ -20,15 +20,25 @@ const RATIO: Record<Layout, { min: number; max: number; def: number }> = {
   free: { min: 0.25, max: 4 / 3, def: 0.75 },
 };
 
+const ROLE_BADGE_META: Record<string, { label: string; next: ImageRole; title: string }> = {
+  character: { label: "👤 角色", next: "prop", title: "当前标记：角色肖像（点击切换为道具）" },
+  prop: { label: "🗡️ 道具", next: "scene", title: "当前标记：道具/武器（点击切换为场景）" },
+  scene: { label: "🏞️ 场景", next: "style", title: "当前标记：场景概念（点击切换为服饰）" },
+  style: { label: "👗 服饰", next: "character", title: "当前标记：服饰发型（点击切换为角色）" },
+  sheet: { label: "📋 定妆照", next: "sheet", title: "标准角色定妆照拼版" },
+  prop_sheet: { label: "🗡️ 展台照", next: "prop_sheet", title: "道具多角度定妆展台" },
+};
+
 function roleOf(data: CNodeData): ImageRole {
-  const r = data.role;
-  if (r === "character" || r === "sheet" || r === "view" || r === "upload" || r === "generated" || r === "frame" || r === "control") return r;
+  if(data.comic?.step==='material')return data.comic.kind==='character'?'sheet':data.comic.kind==='prop'?'prop_sheet':'scene';
+  const r = data.role as ImageRole | undefined;
+  if (r && ["character", "prop", "sheet", "prop_sheet", "view", "upload", "generated", "frame", "control", "scene", "style"].includes(r)) return r;
   if (data.ref.kind === "entity_view") return data.ref.view === "sheet" ? "sheet" : "character";
   return data.ref.kind === "asset" ? "upload" : "generated";
 }
 
 function layoutOf(role: ImageRole): Layout {
-  return role === "character" ? "portrait" : role === "sheet" ? "sheet" : "free";
+  return role === "character" ? "portrait" : (role === "sheet" || role === "prop_sheet") ? "sheet" : "free";
 }
 
 /**
@@ -65,6 +75,20 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
   // 音色只挂在主定妆照上（设定图那张不重复挂）：出片时台词按它配音、再驱动口型
   const voice = r.kind === "entity_view" && data.ref.kind === "entity_view" && data.ref.view !== "sheet" ? r.voice : null;
 
+  const canCycle = !data.comic && (data.ref.kind === "free" || data.ref.kind === "asset") && role !== "sheet" && role !== "prop_sheet";
+  const currentTag = ROLE_BADGE_META[role] || (canCycle ? { label: "🏷️ 标记", next: "character" as ImageRole, title: "点击标记类型（角色/道具/场景/服饰）" } : null);
+
+  const onCycleRole = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!canCycle || !currentTag) return;
+    const nextRole = currentTag.next;
+    const store = getStore();
+    if (store) {
+      store.updateNodeData(id, { role: nextRole });
+      store.toast(`已将此图片标记为：${ROLE_BADGE_META[nextRole]?.label || nextRole}`, "info");
+    }
+  };
+
   return (
     <NodeShell
       id={id}
@@ -72,8 +96,18 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
       data={data}
       selected={selected}
       width={WIDTH[layout]}
-      badges={epoch || voice ? (
+      badges={(
         <>
+          {currentTag && (
+            <span
+              className={`cv-badge is-role is-${role} nodrag nopan`}
+              title={canCycle ? `${currentTag.title}（点击切换）` : currentTag.title}
+              style={{ cursor: canCycle ? "pointer" : "default" }}
+              onClick={canCycle ? onCycleRole : undefined}
+            >
+              {currentTag.label}
+            </span>
+          )}
           {voice && (
             <span className="cv-badge is-ok is-icon" title={`音色：${voice.describe}${voice.has_ref ? "（有参考音频）" : ""}\n出片时这个人的台词按它配音，再用配音驱动口型`}>
               ♪
@@ -81,7 +115,7 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
           )}
           {epoch && <span className="cv-badge" title="角色时期（本章用的是这一期的造型）">{epoch}</span>}
         </>
-      ) : undefined}
+      )}
       onOpen={src && !pending ? () => getStore()?.openOverlay({ kind: "media", url: src, video: false }) : undefined}
     >
       {pending ? (

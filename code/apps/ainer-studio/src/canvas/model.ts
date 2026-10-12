@@ -9,6 +9,7 @@
  *
  * 画布文档 schema = "ainer.board/v1"，后端 core.studio_boards.doc_json 原样存。
  */
+import type { ComicBinding, ComicLive } from "./comic";
 import type { ResourceRef, ResourceItem, Resource } from "../production/api";
 import type { Edge, Node } from "@xyflow/react";
 import type { Board, CastMember, DirectorRun, ShotCard } from "../types";
@@ -46,7 +47,7 @@ export function isProductionRef(ref: NodeRef): ref is ResourceRef {
 }
 
 /** 图片节点的角色：决定标题、工具条和连线默认语义 */
-export type ImageRole = "character" | "sheet" | "view" | "upload" | "generated" | "frame" | "control";
+export type ImageRole = "character" | "prop" | "sheet" | "prop_sheet" | "view" | "upload" | "generated" | "frame" | "control" | "scene" | "style";
 /** 视频节点的角色 */
 export type VideoRole = "shot" | "generated" | "previs" | "control";
 /** 文字节点的角色 */
@@ -75,6 +76,8 @@ export interface MediaRef {
 
 /** xyflow 要求 data 是 Record<string, unknown> */
 export interface CNodeData extends Record<string, unknown> {
+  comic?: ComicBinding;
+  comicLive?: ComicLive;
   ref: NodeRef;
   /** 节点上方的小标题（纳逗式：「定妆照」「多角度定妆照」「镜头 3」） */
   title: string;
@@ -85,6 +88,8 @@ export interface CNodeData extends Record<string, unknown> {
   media?: MediaRef | null;
   /** 自由生成产物的任务状态 */
   gen?: GenState | null;
+  /** Editable manual panel draft, distinct from the submitted task snapshot. */
+  manualDraft?:{prompt:PromptSeg[];settings:Record<string,unknown>;roles:Record<string,RefRole>;excluded:string[]};
   /** 3D 白模节点：当前看哪台机位（null = 按剪辑表） */
   camera?: string | null;
   /** 用户钉住：自动整理不挪它 */
@@ -153,6 +158,7 @@ export interface CreateCanvasOptions {
 }
 
 export interface CanvasDoc {
+  production?: {id:string;medium:"comic";script_doc_id:string};
   schema: typeof DOC_SCHEMA;
   viewport: { x: number; y: number; zoom: number };
   nodes: DocNode[];
@@ -346,7 +352,7 @@ export type Resolved =
  *   box_agent 智能体搭景/改景               GET /scene3d/projects/{pid}（active_run 清空即完成）
  *   run       一键出片工作流（一组镜头）     GET /studio/runs/{run}
  */
-export type TaskKind = "director" | "ltx25" | "gen" | "blender" | "box_agent" | "run" | "quick";
+export type TaskKind = "director" | "ltx25" | "gen" | "blender" | "box_agent" | "run" | "quick" | "comic";
 
 /** 快速成片（纳逗式一条龙）的进度：/api/v2/studio/quick-films/{id} */
 export interface QuickFilmJob {
@@ -395,7 +401,7 @@ export type PromptSeg = { t: "text"; text: string } | { t: "ref"; node: string; 
 
 /** 参考在生成里扮演的角色（发给 /studio/generate 的 refs[].role） */
 export type RefRole =
-  | "character" | "first_frame" | "last_frame" | "style" | "scene"
+  | "character" | "prop" | "first_frame" | "last_frame" | "style" | "scene"
   | "reference_sheet" | "control_video" | "base" | "reference";
 
 export interface ModelOption {
@@ -409,6 +415,7 @@ export interface ModelOption {
   cost: number;
   estimated_ms: number | null;
   limits: {
+    fps?:number[];
     sizes?: [number, number][];
     max_duration_ms?: number | null;
     max_ref_images?: number | null;
@@ -427,6 +434,7 @@ export interface GenerateBody {
   aspect_ratio: string; // "16:9" | "9:16" | "1:1" | "4:3" | "3:4"
   resolution: string; // "480p" | "720p" | "1080p"
   duration_ms?: number | null;
+  video_fps?:number;
   count: number;
   seed?: number | null;
   target?: { board_id?: string; plan_id: string | null; node_id: string } | null;
@@ -475,7 +483,7 @@ export interface CanvasAction {
  *   last_frame 取上游视频的最后一帧当图（下一镜首帧接上一镜结尾，首尾呼应）
  *   one_take   几张分镜图按 segments 钉在一次 LTX 生成里各自的起点（一次成片）
  */
-export type RecipeOp = "image" | "video" | "sheet" | "concat" | "last_frame" | "one_take";
+export type RecipeOp = "image" | "video" | "sheet" | "prop_sheet" | "concat" | "last_frame" | "one_take";
 
 export interface RecipeRef {
   /** 画布节点 id：执行时取它当前的 media（sheet 节点展开成关键面板；分组展开成组里的图） */
@@ -504,8 +512,8 @@ export interface Recipe {
   count?: number | null;
   /** 视频：环境声/音效描述（LTX 2.5 自带同步音轨） */
   audio?: string | null;
-  /** op=sheet：standard = 16 格标准设定图；quick = 三视图 + 正脸 */
-  sheet?: { preset: "standard" | "quick"; name?: string | null; look?: string | null } | null;
+  /** op=sheet：standard = 16 格标准设定图；quick = 三视图 + 正脸；prop = 道具展台 */
+  sheet?: { preset: "standard" | "quick" | "prop"; name?: string | null; look?: string | null } | null;
   /** op=one_take：各分镜钉在第几毫秒，和这一段的动作描述 */
   segments?: { node: string; at_ms: number; motion: string }[] | null;
 }

@@ -273,9 +273,10 @@ function SheetBlock({ entityId }: { entityId: string }) {
   useEffect(() => {
     let alive = true;
     setLoading(true); setError(""); setEpoch("");
-    Promise.all([prod.epochs(entityId), cv.canvasAll({ limit: 500 })]).then(([r, canvases]) => {
+    Promise.all([prod.epochs(entityId), cv.canvasAll({ limit: 500 }), import('../canvas/comic').then(m=>m.comicBoards())]).then(([r, canvases,comicIds]) => {
       if (!alive) return;
-      setEpochs(r.data.items); setBoards(canvases);
+      const c=readCtx();
+      setEpochs(r.data.items); setBoards(canvases.filter(b=>!comicIds.includes(b.id)&&(c.workspace==='free'?!b.novel_id:b.novel_id===c.novel&&(!c.chapter||b.chapter_id===c.chapter))));
       if (r.data.items.length === 1) setEpoch(r.data.items[0].id);
     }).catch(e => { if (alive) setError(String(e)); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
