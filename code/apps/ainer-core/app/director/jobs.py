@@ -100,7 +100,7 @@ def submit_final(db: Session, parent: DirectorJob, body: dict[str, Any]) -> Dire
     config.require(renderer.flag, f"渲染器 {name} ")
     cfg = renderer.cfg()
     ctype = body.get("control_type") or cfg.get("default_mode") or "v2v"
-    source = (body.get("v2v_source") or (cfg.get("v2v") or {}).get("source") or "preview") if ctype == "v2v" else ctype
+    source = (body.get("v2v_source") or (cfg.get("v2v") or {}).get("source") or "preview") if ctype == "v2v" else ("clay" if ctype == "layout" else ctype)
     videos: dict[str, str] = {}
     if ctype == "union":
         # union：深度／骨架／边缘几路同时喂（LTX 2.x 的 Union Control），有哪路给哪路

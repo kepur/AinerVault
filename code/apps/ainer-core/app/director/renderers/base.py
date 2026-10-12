@@ -19,7 +19,7 @@ from app.models import GenTask, TaskStatus
 
 TERMINAL = {TaskStatus.succeeded, TaskStatus.failed, TaskStatus.cancelled}
 
-ControlType = Literal["v2v", "depth", "pose", "canny", "union"]
+ControlType = Literal["v2v", "depth", "pose", "canny", "union", "layout"]
 
 
 class RenderRequest(BaseModel):

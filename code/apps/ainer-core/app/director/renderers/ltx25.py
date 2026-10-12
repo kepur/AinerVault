@@ -45,6 +45,9 @@ class LTX25Adapter(BaseRendererAdapter):
                 raise RendererError(f"union control 不支持：{', '.join(sorted(bad))}")
         elif not req.control_video:
             raise RendererError("缺控制视频")
+        if req.control_type == "layout" and not (req.first_frame and req.first_frame_styled):
+            # Layout-To-Render：白模视频定机位/走位，首帧定画风与人物 —— 没有成片风格首帧就只会出灰模
+            raise RendererError("layout 控制需要已画成成片风格的首帧（first_frame_styled）")
         if req.duration_sec > 20:
             raise RendererError("LTX 2.5 单段最长 20 秒")
         return req
@@ -87,7 +90,7 @@ class LTX25Adapter(BaseRendererAdapter):
         }
         # **Blender 的首帧是灰的，默认不当锚点。** 2B 上实测过：钉灰首帧整段发灰。
         # 只有已经画成成片风格的首帧、且明确要钉（锁角色身份）时才给
-        if req.first_frame and req.pin_first and req.first_frame_styled:
+        if req.first_frame and req.first_frame_styled and (req.pin_first or req.control_type == "layout"):
             payload["first_frame"] = {"url": req.first_frame}
         return {k: v for k, v in payload.items() if v is not None}
 

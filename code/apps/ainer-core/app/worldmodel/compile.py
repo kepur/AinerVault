@@ -162,6 +162,20 @@ def compile_take_job(snap: dict, perf: dict, take: dict, *, out_dir: str, resolu
     dur = take["end_ms"] - take["start_ms"]
     frames = ltx_frames(dur, fps)
     region = next(r for r in snap["regions"] if r["key"] == perf["region_key"])
+    from app.worldmodel import motion, staging
+
+    cam0 = {k: take["camera"][k] for k in ("pos", "target", "lens_mm") if k in take["camera"]}
+    move = take["camera"].get("move") or {"type": "hold"}
+    cams, acts = [], {a: [] for a in perf["tracks"]}
+    for f in range(frames):
+        u = f / max(1, frames - 1)
+        t = take["start_ms"] + min(dur, f * 1000.0 / fps)
+        cams.append(staging.move_camera(cam0, move, u * u * (3 - 2 * u)))
+        for a, tr in perf["tracks"].items():
+            pos, yaw = geo.lerp_track(tr["keys"], t)
+            bones, dz = motion.pose_at(tr.get("clips") or [], t)
+            acts[a].append({"t_ms": round(t), "pos": [round(x, 4) for x in pos], "yaw_deg": round(yaw, 2),
+                            "bones": bones, "hips_dz": dz})
     return {
         "job_type": "world_multicam",
         "out_dir": out_dir,
@@ -175,9 +189,10 @@ def compile_take_job(snap: dict, perf: dict, take: dict, *, out_dir: str, resolu
                   "chunks": [c for c in snap["chunks"] if c["region"] == region["key"]],
                   "instances": [i for i in snap["instances"] if i["region"] == region["key"]],
                   "landmarks": [l for l in snap["landmarks"] if l["region"] == region["key"]]},
-        "performance": {"id": perf.get("id"), "rev": perf.get("rev", 1), "tracks": perf["tracks"],
-                        "duration_ms": perf["duration_ms"]},
-        "actors": actors_meta or {},
+        "performance": {"id": perf.get("id"), "rev": perf.get("rev", 1), "duration_ms": perf["duration_ms"]},
+        "actors": {a: {**(actors_meta or {}).get(a, {}), "frames": acts[a]} for a in acts},
         "camera": take["camera"],
+        "camera_frames": cams,
+        "focus": take.get("focus") or [],
         "take": {"id": take.get("id"), "shot_key": take["shot_key"]},
     }

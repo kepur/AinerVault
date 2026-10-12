@@ -342,6 +342,35 @@ def dialogue_track(db: Session, shot: Shot) -> tuple[str, int] | None:
     return drive_track(shot, voiced, assets)
 
 
+def stage_scene_key(plan: ShotPlan, shot: Shot) -> str:
+    """共享舞台键：同一分镜计划 × 同一剧本场次。没有场次的镜头退回自己（不和别人共用）。"""
+    return f"{plan.id}:{shot.scene_id or ('shot:' + shot.id)}"
+
+
+def staged_scene(db: Session, plan: ShotPlan, shot: Shot, plan_once) -> tuple[Any, list, bool]:
+    """取这场戏已经搭好的导演场景；没有才调用 plan_once() 搭一次。返回 (场景, 修补记录, 是否复用)。
+
+    World DB 里该场次已有整场表演（world_performances.scene_key）时，在场景 notes 里记下 performance id，
+    Blender 侧按表演 + 本镜时间窗出控制素材（docs/studio/world_greybox_pipeline.md）。
+    """
+    from app.models import DirectorScene
+    from app.worldmodel import service as world
+
+    key = stage_scene_key(plan, shot)
+    found = db.scalars(select(DirectorScene).where(DirectorScene.notes_json["stage_scene_key"].astext == key)
+                       .order_by(DirectorScene.created_at)).first()
+    reused = found is not None
+    if found is None:
+        found, repairs = plan_once()
+    else:
+        repairs = []
+    perf = world.performance_for_scene(db, shot.scene_id) if shot.scene_id else None
+    if perf is not None and (found.notes_json or {}).get("world_performance_id") != perf.id:
+        found.notes_json = {**(found.notes_json or {}), "world_performance_id": perf.id,
+                            "world_version": perf.world_version}
+    return found, repairs, reused
+
+
 def render_shot(db: Session, shot_id: str, *, seed: int | None = None, control_type: str = "union",
                 scene_id: str | None = None, frames_only: bool = False,
                 profile: str | None = None, audio: str = "generate") -> dict[str, Any]:
@@ -370,12 +399,20 @@ def render_shot(db: Session, shot_id: str, *, seed: int | None = None, control_t
             scene = store.export_box(db, scene.box_project_id)     # 带上 3D-BOX 里的改动
         repairs, framing = [], {"camera": "user"}
     else:
-        protocol, repairs = planner.generate_protocol(db, b["brief"], duration=b["duration"])
-        protocol.setdefault("meta", {})["title"] = f"镜 {shot.order_no}：{(shot.description or '').strip()[:24]}"
-        bind_cast(db, protocol, b["cast"])
-        scene = store.create_from_protocol(db, protocol, source="shot", prompt=b["brief"],
-                                           notes={"shot_id": shot.id, "plan_id": plan.id, "repairs": repairs})
+        # 一场戏只演一次：同一分镜计划、同一剧本场次已经搭过的导演场景直接复用，不再让 LLM 每镜重新搭景
+        # （以前每镜各一套站位/朝向，镜头之间对不上）。本镜只换机位（auto_frame 按景别/焦点试机位）。
+        def _plan_once() -> tuple[Any, list]:
+            protocol, rep = planner.generate_protocol(db, b["brief"], duration=b["duration"])
+            protocol.setdefault("meta", {})["title"] = f"场 {shot.scene_id or shot.id}：{(shot.description or '').strip()[:24]}"
+            bind_cast(db, protocol, b["cast"])
+            sc = store.create_from_protocol(db, protocol, source="shot", prompt=b["brief"],
+                                            notes={"shot_id": shot.id, "plan_id": plan.id, "repairs": rep,
+                                                   "stage_scene_key": stage_scene_key(plan, shot)})
+            return sc, rep
+
+        scene, repairs, reused = staged_scene(db, plan, shot, _plan_once)
         framing = auto_frame(db, scene, b["duration"], shot_size=b["shot_size"], focus_entity=b["focus"])
+        framing["shared_scene"] = reused
     # 演员和人物的对应：协议里 character_ref=e:<实体 id> 是唯一依据（3D-BOX 里改的也认）；
     # 没绑的（用户新加的演员、旧场景）才退回按 p1、p2… 或协议顺序
     bound = dict(_bound(scene.protocol_json or {}))
