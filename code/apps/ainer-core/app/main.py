@@ -74,6 +74,7 @@ from app.api.v2 import (  # noqa: E402
     asset_pack, audio, blocking, canvas, canvas_gen, canvas_run, console, quick_film, culture, gen_tasks, handoff, library,
     characters, char_sheet, director, presets, production, prose, scene3d, script, settings_api, shared_stages, shots, stage, studio, translation, worldview,
     world,
+    world_pipeline,
 )
 
 app.include_router(console.router)
@@ -91,6 +92,7 @@ app.include_router(characters.router)
 app.include_router(production.router)
 app.include_router(shared_stages.router)
 app.include_router(world.router)
+app.include_router(world_pipeline.router)
 app.include_router(char_sheet.router)
 app.include_router(library.router)
 app.include_router(script.router)

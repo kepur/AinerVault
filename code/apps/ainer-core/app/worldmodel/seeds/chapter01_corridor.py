@@ -381,3 +381,51 @@ def build(db, *, max_rounds: int = 3, cameras: dict[int, dict] | None = None) ->
     db.flush()
     return {"world_id": w.id, "performance_id": perf.id, "street_performance_id": street.id,
             "version": w.current_version}
+
+
+# ------------------------------------------------------------------ 通用流水线配置（app/worldmodel/pipeline.py 不含任何章节硬编码）
+CODEX_RUN_DIR = "AiComicStudio/var/chapter-01/preview-twenty-v3"
+ACTOR_DESC = {"thomas": "the thin black-haired Thomas in a navy sweater vest", "brad": "the stocky green-haired Brad",
+              "tyler": "the tall red-haired Tyler in black", "kyle": "the blond Kyle in a navy track jacket"}
+ACTION_EN = {
+    1: "In a 1990s school corridor, three delinquent boys corner the thin black-haired Thomas against the lockers. "
+       "The bullies lean in and shift their weight menacingly; Thomas shrinks back.",
+    3: "Thomas lowers his head, presses his back against the lockers and covers his trouser pockets with both hands. "
+       "The bullies loom over him.",
+    5: "The tall red-haired Tyler suddenly raises his hand and slaps Thomas across the face once; Thomas's head snaps "
+       "aside and he recoils. Non-graphic.",
+    7: "Close-up of Thomas: a thin trickle of blood at the corner of his mouth, tears welling in his eyes, he bites "
+       "his lip to keep from crying. His mouth stays closed.",
+}
+
+
+def pipeline_config(db, workflow_root: str) -> dict:
+    """第一章 → 通用 world-greybox 运行配置。workflow_root = /Users/.../AinerWorkFlow。"""
+    from app.worldmodel import service as ws
+    r = build(db)
+    run_dir = f"{workflow_root}/{CODEX_RUN_DIR}"
+    shots = []
+    for s in SHOTS:
+        shots.append({"n": s["n"], "kind": s["kind"], "dur": s["dur"], "fps": s["fps"], "focus": s["focus"],
+                      "move": s["move"], "mood": s["mood"], "text": s["text"],
+                      "layout": s["kind"] == "action" and s["n"] != 7,
+                      **({"action_en": ACTION_EN[s["n"]]} if s["n"] in ACTION_EN else {}),
+                      "ambience": ("quiet evening street ambience, slow footsteps, distant traffic" if s["n"] in STREET_SHOTS
+                                   else "school corridor room tone, distant hallway chatter, shoe scuffs, clothing rustle; "
+                                        "no speech, no music")})
+    return {
+        "world_id": r["world_id"], "performances": [r["performance_id"], r["street_performance_id"]],
+        "build": {"type": "seed", "module": "app.worldmodel.seeds.chapter01_corridor"},
+        "frames": {"type": "comic_run", "path": f"{run_dir}/run.json"},
+        "voices": {"dir": run_dir, "pattern": "voice-{n:02d}.wav"},
+        "frame_w": FRAME_W, "frame_h": FRAME_H,
+        "actors": {k: {**v, "desc": ACTOR_DESC.get(k, k)} for k, v in ACTORS.items()},
+        "shots": shots,
+        "music": [{"name": "tension", "from_shot": 1, "bpm": 92, "key": "D minor",
+                   "prompt": "tense dark cinematic underscore, low strings pulse, muted percussion, menacing, school "
+                             "bullying scene, instrumental"},
+                  {"name": "despair", "from_shot": 17, "bpm": 66, "key": "A minor",
+                   "prompt": "slow sad piano and soft strings, lonely, despair, quiet evening, instrumental"}],
+        "key_prefix": "world-greybox-ch01-v3", "output_name": "chapter01_world_greybox.mp4",
+        "version": ws.get_world(db, r["world_id"]).current_version,
+    }
