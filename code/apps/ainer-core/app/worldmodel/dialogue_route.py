@@ -153,3 +153,29 @@ def mouth_pass(body: Path, voice: Path, fs: FaceSafeShot, work: Path, mouth_fps:
     ff("-i", str(native), "-vf", vf, "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", "-t", f"{duration:.3f}", str(out))
     (work / "mouth_track.json").write_text(json.dumps({"eye_match": track, "min": min(track) if track else None}))
     return out
+
+
+# ------------------------------------------------------------------ 两道：白模预跑抽锚帧 → a2v（配音驱动，嘴由模型生成）
+def anchor_a2v_input(*, prompt: str, first_frame: dict, voice_b64: str, pose_b64: str, body_ms: int, seed: int,
+                     anchor_every: int = 8, head: float = 1.0, mid: float = 0.6, pose_strength: float = 1.0,
+                     width: int = 384, height: int = 256, fps: int = 8) -> dict:
+    """网关 video.image_to_video（LTX-2.5）的“白模控制 + 配音驱动”两道请求体。
+
+    control + audio.mode=drive 时网关先用 IC-LoRA（pose）快档预跑白模，每 anchor_every 帧抽一个锚帧，
+    正片走 a2v：首帧锚=原管线人脸卡首帧（调用方给的 first_frame 在同帧号上优先），中间锚只保站位/机位（mid），
+    嘴由 a2v 生成。8fps 下 anchor_every=8 ≈ 1 秒（网关下限 8）。人脸卡尺寸/帧率/时长沿用原管线。"""
+    return {"prompt": prompt, "first_frame": first_frame, "width": width, "height": height, "fps": fps,
+            "duration_ms": int(body_ms), "motion": "animate",
+            "audio": {"mode": "drive", "track": {"b64": voice_b64}},
+            "control": {"type": "pose", "video": {"b64": pose_b64}, "strength": float(pose_strength),
+                        "anchor_every": max(8, int(anchor_every)),
+                        "anchor_strength_head": float(head), "anchor_strength_mid": float(mid)},
+            "params": {"seed": int(seed), "stage2_steps": 2}}
+
+
+def finish_a2v(raw: Path, voice: Path, out: Path, duration_s: float, fps_out: int = 24) -> Path:
+    """a2v 正片 → 成片：只换帧率（重复帧，不改时间轴，不慢放），音轨换回原配音，按原镜时长截断。"""
+    ff("-i", str(raw), "-i", str(voice), "-map", "0:v:0", "-map", "1:a:0", "-vf", f"fps={fps_out},scale=640:384:flags=lanczos",
+       "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-af", "apad",
+       "-t", f"{duration_s:.3f}", str(out))
+    return out

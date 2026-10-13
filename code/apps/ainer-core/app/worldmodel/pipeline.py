@@ -630,6 +630,75 @@ def dialogue_greybox(ctx: Ctx, s: dict, attempt: int) -> dict:
             "ref_face": str(MEDIA / Path(fs.ref_face_url).name), "route": "greybox:dialogue_i2v+pose+cel_mouth"}
 
 
+def _dialogue_pose(ctx: Ctx, n: int, attempt: int, body_ms: int, sd: Path) -> tuple[Path, Path]:
+    """白模骨架（8fps、人脸卡尺寸、按配音+0.6s 补齐）；同一镜已有白模就复用（可续跑）。返回 (pose_8fps, greybox_dir)。"""
+    gdir = ctx.out / f"shot{n:02d}" / f"greybox_a{100 + attempt}"
+    if not (gdir / "pose.mp4").exists():
+        gdir = greybox(ctx, n, 100 + attempt)["dir"]
+    pose = sd / "pose_8fps.mp4"
+    if not pose.exists():
+        ff("-i", str(gdir / "pose.mp4"), "-vf", "fps=8,scale=384:256,tpad=stop_mode=clone:stop_duration=3",
+           "-t", f"{body_ms / 1000:.3f}", "-an", str(pose))
+    return pose, gdir
+
+
+def dialogue_two_pass(ctx: Ctx, s: dict, attempt: int, mid: float) -> dict:
+    """两道路由（cfg.dialogue_route="two_pass_anchors"）：白模快档预跑 → 锚帧 → a2v 配音驱动（嘴由模型生成）。
+
+    人脸卡首帧/384×256/8fps/配音（含调速）/时长全部沿用原管线面部安全版；白模只管站位和机位。
+    出两个成片候选：native（a2v 自己的嘴）与 cel（再叠原管线 Rhubarb 嘴型层，和面部安全版同一套嘴）。"""
+    from app.worldmodel.dialogue_route import anchor_a2v_input, dur as adur, finish_a2v, mouth_pass
+    n = s["n"]
+    fs = _face_safe_shot(ctx, n)
+    tag = f"m{round(mid * 100):02d}"
+    sd = ctx.out / f"shot{n:02d}" / f"dialogue_2p_{tag}_a{attempt}"
+    sd.mkdir(parents=True, exist_ok=True)
+    voice_s = adur(fs.voice)
+    body_ms = int(voice_s * 1000) + 600
+    pose, gdir = _dialogue_pose(ctx, n, attempt, body_ms, sd)
+    who = (fs.dialogue[0].get("speaker") if fs.dialogue else "The speaker") or "The speaker"
+    line = " ".join(f'{(b.get("speaker") or who)} says in English: "{b["text"]}" with matching mouth movement; the others stay silent.'
+                    for b in fs.dialogue)
+    base = (fs.body.get("prompt") or ctx.cfg.get("style_prompt") or "").strip()
+    prompt = (f"{base} Close-up. {who} faces the camera; standing position and camera framing follow the staging. "
+              f"{line} Everyone else holds still.").strip()
+    ff_path = fs.path(fs.frame["url"])
+    first = {"b64": b64(ff_path)} if ff_path.exists() else {"url": ctx.core + fs.frame["url"]}
+    inp = anchor_a2v_input(prompt=prompt, first_frame=first, voice_b64=b64(fs.voice), pose_b64=b64(pose), body_ms=body_ms,
+                           seed=int(ctx.cfg.get("seed_base", 31000)) + n * 10 + 700 + attempt,
+                           anchor_every=int(ctx.cfg.get("dialogue_anchor_every", 8)),
+                           head=float(ctx.cfg.get("dialogue_anchor_head", 1.0)), mid=mid,
+                           pose_strength=float(ctx.cfg.get("dialogue_pose_strength", 1.0)))
+    key = f"{ctx.cfg.get('key_prefix', 'wg')}:s{n:02d}:dlg2p:{tag}:{attempt}"
+    ctx.log(f"shot {n} dialogue two-pass {tag} attempt {attempt}: greybox pre-pass -> anchors -> a2v 384x256@8 {body_ms}ms")
+    raw = sd / "body.mp4"
+    tid = None
+    if not raw.exists():
+        raw, tid = _render(ctx, s, inp, key, sd / "task.json", raw)
+    meta = {}
+    try:
+        task = json.loads((sd / "task.json").read_text())
+        with httpx.Client(timeout=30) as c:
+            full = c.get(f"{ctx.gateway_url}/cap/v1/tasks/{task['task_id']}").json()
+        vmeta = ((full.get("output") or {}).get("video") or {}).get("meta") or {}
+        meta = {"control": vmeta.get("control"), "pipeline": vmeta.get("pipeline"),   # via=anchors 才说明白模真进了正片
+                "warnings": (full.get("output") or {}).get("warnings")}
+        tid = tid or task["task_id"]
+    except Exception:  # noqa: BLE001
+        pass
+    target = float(ctx.face_safe().get(n, {}).get("duration_s") or voice_s)
+    native = sd / "native.mp4"
+    if not native.exists():
+        finish_a2v(raw, fs.voice, native, target)
+    cel = sd / "mouth" / "aligned.mp4"
+    if not cel.exists():
+        cel = mouth_pass(raw, fs.voice, fs, sd / "mouth")
+    return {"videos": {f"2p_{tag}_native": str(native), f"2p_{tag}_cel": str(cel)}, "body": str(raw), "task_id": tid,
+            "greybox_dir": str(gdir), "clay": str(gdir / "clay.mp4"), "voice": str(fs.voice),
+            "ref_face": str(MEDIA / Path(fs.ref_face_url).name), "mid": mid, "gateway_meta": meta,
+            "route": "greybox:dialogue_two_pass(pre-pass anchors -> a2v drive)"}
+
+
 def ab_decide(m: dict) -> dict:
     c, g = m["codex"], m["greybox"]
     checks = {
@@ -640,11 +709,67 @@ def ab_decide(m: dict) -> dict:
         "motion": g["motion"] >= AB_TH["motion_ratio"] * c["motion"],
         "face_found": g["face_found"] >= AB_TH["face_found"],
     }
+    if "layout_sim" in g and "layout_sim" in c:   # 两道路由：白模必须在站位/机位上赢，否则没有采用的理由
+        checks["blocking_camera"] = g["layout_sim"] > c["layout_sim"] and g["camera_err"] <= c["camera_err"]
     return {"adopt": all(checks.values()), "checks": checks}
+
+
+def _ab_metrics(ctx: Ctx, spec: dict, spec_path: Path) -> dict:
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec))
+    py = ctx.cfg.get("ab_python") or "python3"
+    r = subprocess.run([py, str(Path(__file__).with_name("ab_metrics.py")), str(spec_path)], capture_output=True, text=True, timeout=1800)
+    if r.returncode:
+        raise PipelineError("A/B 指标失败：" + r.stderr[-600:])
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def dialogue_ab_two_pass(ctx: Ctx, s: dict) -> dict:
+    """两道路由 A/B：每个中间锚强度一条，native / cel 两种嘴各算一遍；只有全部检查过（含站位/机位赢）才采用，取最好的一条。"""
+    n = s["n"]
+    rec = ctx.rec(n)
+    ab = rec.get("dialogue_ab_2p") or {"variants": {}}
+    for mid in ctx.cfg.get("dialogue_anchor_mids") or [0.6]:
+        k = f"m{round(mid * 100):02d}"
+        if k in ab["variants"] and ab["variants"][k].get("metrics"):
+            continue
+        try:
+            t = dialogue_two_pass(ctx, s, 0, float(mid))
+        except Exception as e:  # noqa: BLE001
+            ab["variants"][k] = {"error": str(e)}
+            ctx.log(f"shot {n} two-pass {k} ERROR {e}")
+            rec["dialogue_ab_2p"] = ab
+            ctx.save()
+            continue
+        sheet = ctx.out / "ab_2p" / f"shot{n:02d}_{k}_codex_vs_2p.png"
+        spec = {"ref_face": t["ref_face"], "voice": t["voice"], "label": f"shot {n} {k}", "sheet": str(sheet),
+                "greybox_ref": t["clay"], "sbs": str(ctx.out / "ab_2p" / f"shot{n:02d}_{k}_sbs.mp4"),
+                "takes": {"codex": ctx.original_clip(n), **t["videos"]}}
+        m = _ab_metrics(ctx, spec, ctx.out / "ab_2p" / f"shot{n:02d}_{k}.json")
+        dec = {name: ab_decide({"codex": m["codex"], "greybox": m[name], "voice_s": m["voice_s"]}) for name in t["videos"]}
+        ab["variants"][k] = {"take": t, "metrics": m, "decisions": dec, "sheet": str(sheet), "sbs": spec["sbs"]}
+        rec["dialogue_ab_2p"] = ab
+        ctx.save()
+        ctx.log(f"shot {n} two-pass {k}: " + json.dumps({nm: d["adopt"] for nm, d in dec.items()}))
+    best = None
+    for k, v in ab["variants"].items():
+        for name, d in (v.get("decisions") or {}).items():
+            if d["adopt"]:
+                g = v["metrics"][name]
+                score = (g["layout_sim"], g["lipsync_corr"], g["face_sharpness"])
+                if best is None or score > best[0]:
+                    best = (score, k, name, v["take"]["videos"][name])
+    ab["adopt"] = best is not None
+    ab["chosen"] = {"variant": best[1], "take": best[2], "video": best[3]} if best else None
+    rec["dialogue_ab_2p"] = ab
+    ctx.save()
+    return {"adopt": ab["adopt"], "take": {"video": best[3]} if best else None, "chosen": ab["chosen"]}
 
 
 def dialogue_ab(ctx: Ctx, s: dict) -> dict:
     n = s["n"]
+    if ctx.cfg.get("dialogue_route") == "two_pass_anchors":
+        return dialogue_ab_two_pass(ctx, s)
     rec = ctx.rec(n)
     ab = rec.get("dialogue_ab") or {}
     if not ab.get("take"):

@@ -7,6 +7,10 @@ python ab_metrics.py spec.json → 打印 JSON。spec: {"ref_face": png, "voice"
   lipsync_corr    嘴部区域（人脸框下 1/3 中间一半）逐帧张开度（暗像素比例）与配音 RMS 包络的相关；lag=最佳偏移(帧, 8fps)
   motion          灰度 160×96 逐帧平均绝对差
   duration_s / voice_s
+  （spec 带 greybox_ref=白模 clay.mp4 时，另算）
+  layout_sim      站位/构图：逐帧 48×32 梯度幅值图与白模同一时刻帧的相关系数，取均值（越高越像白模的站位/景别）
+  camera_err      机位运动：LK 光流估相似变换，累计平移(占画宽)/缩放轨迹与白模轨迹的平均绝对差（越低越像）
+  spec 带 sbs=mp4 时输出并排对比视频（各条 + 白模，配音）。
 """
 import json
 import subprocess
@@ -24,14 +28,22 @@ _clip = None
 def detect(img):
     global _net
     if _net is None:
-        _net = cv2.dnn.readNetFromONNX(DET)
+        try:
+            _net = cv2.dnn.readNetFromONNX(DET)
+        except cv2.error:            # 部分 OpenCV 版本解析不了这个 onnx（Concat 形状），退回 onnxruntime
+            import onnxruntime as ort
+            _net = ort.InferenceSession(DET, providers=["CPUExecutionProvider"])
     h, w = img.shape[:2]
     s = 640 / max(h, w)
     r = cv2.resize(img, (round(w * s), round(h * s)))
     pad = np.full((640, 640, 3), 114, np.uint8)
     pad[:r.shape[0], :r.shape[1]] = r
-    _net.setInput(cv2.dnn.blobFromImage(pad, 1 / 255, (640, 640), swapRB=True))
-    o = _net.forward()[0]
+    blob = cv2.dnn.blobFromImage(pad, 1 / 255, (640, 640), swapRB=True)
+    if isinstance(_net, cv2.dnn.Net):
+        _net.setInput(blob)
+        o = _net.forward()[0]
+    else:
+        o = _net.run(None, {_net.get_inputs()[0].name: blob})[0][0]
     o = o.T if o.shape[0] < o.shape[1] else o
     b = o[o[:, 4].argmax()]
     if b[4] < 0.3:
@@ -115,6 +127,62 @@ def measure(path, voice, ref_emb):
             "motion": round(motion, 2), "duration_s": round(dur(path), 3)}, fr, boxes
 
 
+def _grad(f):
+    g = cv2.cvtColor(cv2.resize(f, (48, 32), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    m = np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)).ravel()
+    return (m - m.mean()) / (m.std() + 1e-6)
+
+
+def cam_track(fr):
+    """累计 [dx/W, dy/H, log scale]（相似变换，LK 光流）。"""
+    out, acc = [np.zeros(3)], np.zeros(3)
+    prev = cv2.cvtColor(cv2.resize(fr[0], (320, 192)), cv2.COLOR_BGR2GRAY)
+    for f in fr[1:]:
+        cur = cv2.cvtColor(cv2.resize(f, (320, 192)), cv2.COLOR_BGR2GRAY)
+        p0 = cv2.goodFeaturesToTrack(prev, 200, 0.01, 6)
+        d = np.zeros(3)
+        if p0 is not None and len(p0) >= 6:
+            p1, st, _ = cv2.calcOpticalFlowPyrLK(prev, cur, p0, None)
+            ok = st.ravel() == 1
+            if ok.sum() >= 6:
+                M, _ = cv2.estimateAffinePartial2D(p0[ok], p1[ok])
+                if M is not None:
+                    d = np.array([M[0, 2] / 320, M[1, 2] / 192, np.log(max(1e-3, np.hypot(M[0, 0], M[1, 0])))])
+        acc = acc + d
+        out.append(acc.copy())
+        prev = cur
+    return np.array(out)
+
+
+def resample(seq, n):
+    idx = np.round(np.linspace(0, len(seq) - 1, n)).astype(int)
+    return [seq[i] for i in idx]
+
+
+def vs_greybox(fr, ref):
+    k = len(fr)
+    rf = resample(ref, k)
+    lay = float(np.mean([np.mean(_grad(a) * _grad(b)) for a, b in zip(fr, rf)]))
+    ta, tb = cam_track(fr), cam_track(rf)
+    err = float(np.mean(np.abs(ta - tb)))
+    return {"layout_sim": round(lay, 4), "camera_err": round(err, 4)}
+
+
+def sbs(spec, paths):
+    names = list(paths) + ["greybox"]
+    files = list(paths.values()) + [spec["greybox_ref"]]
+    args, fl = [], []
+    for i, (nm, f) in enumerate(zip(names, files)):
+        args += ["-i", f]
+        fl.append(f"[{i}:v]fps=24,scale=384:256,setsar=1,drawtext=fontfile=/System/Library/Fonts/Helvetica.ttc:text='{nm}':"
+                  f"x=6:y=6:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6[v{i}]")
+    args += ["-i", spec["voice"]]
+    fl.append("".join(f"[v{i}]" for i in range(len(files))) + f"hstack=inputs={len(files)}[v]")
+    t = dur(list(paths.values())[0])
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *args, "-filter_complex", ";".join(fl), "-map", "[v]", "-map", f"{len(files)}:a:0",
+                    "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-t", f"{t:.3f}", spec["sbs"]], check=True)
+
+
 def sheet(label, takes, out):
     rows = []
     for name, (fr, _) in takes.items():
@@ -138,6 +206,13 @@ def main():
         m, fr, bx = measure(path, spec["voice"], ref_emb)
         res[name] = m
         keep[name] = (fr, bx)
+    if spec.get("greybox_ref"):
+        ref = frames(spec["greybox_ref"])
+        for name in spec["takes"]:
+            res[name].update(vs_greybox(keep[name][0], ref))
+        keep["greybox"] = (resample(ref, len(keep["codex"][0])) if "codex" in keep else ref, None)
+        if spec.get("sbs"):
+            sbs(spec, spec["takes"])
     if spec.get("sheet"):
         sheet(spec.get("label", ""), keep, spec["sheet"])
     print(json.dumps(res))

@@ -141,3 +141,43 @@ def test_llm_delta_proposes_only(monkeypatch):
                                                    {"op": "add_fact", "subject_key": "a", "evidence_span": "x"}]}
     llm_build.propose_chapter_delta(None, "ws", chapter_id="ch", text="t", chat=fake)
     assert [o["op"] for o in seen["ops"]] == ["add_region", "add_fact"]  # 无出处的事实被丢弃
+
+
+def test_two_pass_anchor_payload():
+    """对白两道路由：control(pose)+audio.mode=drive 一起发，网关据此走 白模预跑→锚帧→a2v；人脸卡尺寸/帧率不变。"""
+    from app.worldmodel.dialogue_route import anchor_a2v_input
+    inp = anchor_a2v_input(prompt="p", first_frame={"b64": "F"}, voice_b64="V", pose_b64="P", body_ms=4300, seed=7,
+                           anchor_every=4, mid=0.4)
+    assert inp["audio"] == {"mode": "drive", "track": {"b64": "V"}}
+    c = inp["control"]
+    assert c["type"] == "pose" and c["video"] == {"b64": "P"}
+    assert c["anchor_every"] == 8 and c["anchor_strength_head"] == 1.0 and c["anchor_strength_mid"] == 0.4
+    assert (inp["width"], inp["height"], inp["fps"]) == (384, 256, 8) and inp["first_frame"] == {"b64": "F"}
+
+
+def test_dialogue_ab_routes_two_pass_only_when_opted_in(tmp_path, monkeypatch):
+    from app.worldmodel import pipeline
+    hit = []
+    monkeypatch.setattr(pipeline, "dialogue_ab_two_pass", lambda ctx, s: hit.append("2p") or {"adopt": False})
+    monkeypatch.setattr(pipeline, "dialogue_greybox", lambda ctx, s, a: (_ for _ in ()).throw(_Stop()))
+    for cfg, want in (({}, []), ({"dialogue_route": "two_pass_anchors"}, ["2p"])):
+        hit.clear()
+        run = SimpleNamespace(id="wpr_t", config={"shots": [{"n": 2}], **cfg}, state={"shots": {}},
+                              out_dir=str(tmp_path / "o"), title=None)
+        ctx = pipeline.Ctx(SimpleNamespace(commit=lambda: None), run)
+        try:
+            pipeline.dialogue_ab(ctx, {"n": 2, "kind": "speech"})
+        except _Stop:
+            pass
+        assert hit == want
+    assert "dialogue_route" not in pipeline.DEFAULTS and "dialogue_greybox" not in pipeline.DEFAULTS
+
+
+def test_ab_decide_two_pass_must_win_blocking():
+    from app.worldmodel import pipeline
+    base = {"face_sharpness": 100, "identity": 0.9, "lipsync_corr": 0.4, "lipsync_lag_frames": 0, "duration_s": 3.7,
+            "motion": 5, "face_found": 1.0, "layout_sim": 0.1, "camera_err": 0.05}
+    win = {**base, "layout_sim": 0.3, "camera_err": 0.04}
+    assert pipeline.ab_decide({"codex": base, "greybox": win, "voice_s": 3.7})["adopt"]
+    assert not pipeline.ab_decide({"codex": base, "greybox": dict(base), "voice_s": 3.7})["adopt"]       # 平手不采用
+    assert not pipeline.ab_decide({"codex": base, "greybox": {**win, "identity": 0.6}, "voice_s": 3.7})["adopt"]
