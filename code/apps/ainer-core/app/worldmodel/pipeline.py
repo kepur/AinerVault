@@ -585,12 +585,111 @@ def _score(q: dict) -> tuple:
     return (q["pass"], -len(q["failed"]))
 
 
+# ================================================================== 对白：白模 + 原管线人脸卡/调速/嘴型（可选，A/B 后逐镜采用）
+AB_TH = {"sharp_ratio": 0.9, "identity_drop": 0.03, "lipsync_drop": 0.10, "lag_frames": 1, "duration_s": 0.10,
+         "motion_ratio": 0.8, "face_found": 0.9}
+
+
+def _face_safe_shot(ctx: Ctx, n: int):
+    from app.worldmodel.dialogue_route import FaceSafeShot
+    src = ctx.cfg.get("face_safe_source") or {}
+    if not src.get("preview_dir") or not (Path(src["preview_dir"]) / "mouth-cover" / str(n) / "result.json").exists():
+        return None
+    return FaceSafeShot(src["preview_dir"], src["store_db"], n, MEDIA)
+
+
+def dialogue_greybox(ctx: Ctx, s: dict, attempt: int) -> dict:
+    """人脸卡首帧 + 调速配音 A2V（白模骨架控制）→ 本地嘴型合成。"""
+    from app.worldmodel.dialogue_route import dur as adur, mouth_pass
+    n = s["n"]
+    fs = _face_safe_shot(ctx, n)
+    sd = ctx.out / f"shot{n:02d}" / f"dialogue_a{attempt}"
+    sd.mkdir(parents=True, exist_ok=True)
+    gb = greybox(ctx, n, 100 + attempt)
+    body_ms = int(adur(fs.voice) * 1000) + 600                       # 与原管线一致：配音 + 0.6s
+    pose = sd / "pose_8fps.mp4"
+    ff("-i", str(gb["dir"] / "pose.mp4"), "-vf", f"fps=8,scale=384:256,tpad=stop_mode=clone:stop_duration=3", "-t", f"{body_ms / 1000:.3f}",
+       "-an", str(pose))
+    who = (fs.dialogue[0].get("speaker") if fs.dialogue else "The speaker") or "The speaker"
+    line = " ".join(f'{(b.get("speaker") or who)} says in English: "{b["text"]}" with matching mouth movement; the others stay silent.'
+                    for b in fs.dialogue)
+    prompt = (f"{ctx.cfg.get('style_prompt', '')} Close-up. {who} faces the camera, head and shoulders follow the pose driver; "
+              f"body language matches the scene. {line} Everyone else holds still.").strip()
+    inp = {"prompt": prompt, "first_frame": {"url": ctx.core + fs.frame["url"]}, "width": 384, "height": 256, "fps": 8,
+           "duration_ms": body_ms, "motion": "animate", "audio": {"mode": "drive", "track": {"b64": b64(fs.voice)}},
+           "control": {"type": "union", "videos": {"pose": {"b64": b64(pose)}}, "strengths": {"pose": ctx.cfg.get("dialogue_pose_strength", 0.5)}},
+           "params": {"seed": int(ctx.cfg.get("seed_base", 31000)) + n * 10 + 500 + attempt, "stage2_steps": 2}}
+    key = f"{ctx.cfg.get('key_prefix', 'wg')}:s{n:02d}:dlg{attempt}"
+    ctx.log(f"shot {n} dialogue-greybox attempt {attempt}: a2v+pose 384x256@8 {body_ms}ms")
+    raw, tid = _render(ctx, s, inp, key, sd / "task.json", sd / "body.mp4")
+    out = mouth_pass(raw, fs.voice, fs, sd / "mouth")
+    return {"video": str(out), "body": str(raw), "task_id": tid, "greybox_dir": str(gb["dir"]), "voice": str(fs.voice),
+            "ref_face": str(MEDIA / Path(fs.ref_face_url).name), "route": "greybox:dialogue_a2v+pose+cel_mouth"}
+
+
+def ab_decide(m: dict) -> dict:
+    c, g = m["codex"], m["greybox"]
+    checks = {
+        "face_sharpness": g["face_sharpness"] >= AB_TH["sharp_ratio"] * c["face_sharpness"],
+        "identity": g["identity"] >= c["identity"] - AB_TH["identity_drop"],
+        "lipsync": g["lipsync_corr"] >= c["lipsync_corr"] - AB_TH["lipsync_drop"] and abs(g["lipsync_lag_frames"]) <= AB_TH["lag_frames"],
+        "duration": abs(g["duration_s"] - m["voice_s"]) <= AB_TH["duration_s"] + 0.2,
+        "motion": g["motion"] >= AB_TH["motion_ratio"] * c["motion"],
+        "face_found": g["face_found"] >= AB_TH["face_found"],
+    }
+    return {"adopt": all(checks.values()), "checks": checks}
+
+
+def dialogue_ab(ctx: Ctx, s: dict) -> dict:
+    n = s["n"]
+    rec = ctx.rec(n)
+    ab = rec.get("dialogue_ab") or {}
+    if not ab.get("take"):
+        ab["take"] = dialogue_greybox(ctx, s, 0)
+        rec["dialogue_ab"] = ab
+        ctx.save()
+    t = ab["take"]
+    if not ab.get("metrics"):
+        sheet = ctx.out / "ab" / f"shot{n:02d}_codex_vs_greybox.png"
+        sheet.parent.mkdir(exist_ok=True)
+        spec = ctx.out / "ab" / f"shot{n:02d}.json"
+        spec.write_text(json.dumps({"ref_face": t["ref_face"], "voice": t["voice"], "label": f"shot {n}", "sheet": str(sheet),
+                                    "takes": {"codex": ctx.original_clip(n), "greybox": t["video"]}}))
+        py = ctx.cfg.get("ab_python") or "python3"
+        r = subprocess.run([py, str(Path(__file__).with_name("ab_metrics.py")), str(spec)], capture_output=True, text=True, timeout=900)
+        if r.returncode:
+            raise PipelineError("A/B 指标失败：" + r.stderr[-600:])
+        ab["metrics"] = json.loads(r.stdout.strip().splitlines()[-1])
+        ab["sheet"] = str(sheet)
+    ab.update(ab_decide(ab["metrics"]))
+    rec["dialogue_ab"] = ab
+    ctx.save()
+    ctx.log(f"shot {n} dialogue A/B: adopt={ab['adopt']} {ab['checks']}")
+    return ab
+
+
 def run_shot(ctx: Ctx, s: dict, *, force: bool = False):
     n = s["n"]
     rec = ctx.rec(n)
     if rec.get("final") and not force:
         return
     rec.setdefault("attempts", [])
+    if s["kind"] == "speech" and ctx.cfg.get("dialogue_greybox") and n in (ctx.cfg.get("dialogue_ab_shots") or [n]) \
+            and _face_safe_shot(ctx, n) and ctx.original_clip(n):
+        try:
+            ab = dialogue_ab(ctx, s)
+        except Exception as e:  # noqa: BLE001
+            ab = {"adopt": False, "error": str(e)}
+            rec["dialogue_ab"] = {**(rec.get("dialogue_ab") or {}), "error": str(e)}
+            ctx.log(f"shot {n} dialogue A/B ERROR {e}")
+        if ab.get("adopt"):
+            rec["final"] = {"source": "greybox", "video": ab["take"]["video"], "pass": True, "failed": [],
+                            "why": "dialogue greybox adopted: A/B at least as good as face-safe take on all checks"}
+        else:
+            rec["final"] = {"source": "original", "video": ctx.original_clip(n), "pass": None, "failed": [],
+                            "why": "dialogue greybox not adopted (A/B worse or failed); face-safe original take"}
+        ctx.save()
+        return
     if s["kind"] not in ctx.cfg["greybox_kinds"] and ctx.original_clip(n) and not (rec.get("override") or {}).get("source") == "greybox":
         rec["final"] = {"source": "original", "video": ctx.original_clip(n), "pass": None, "failed": [],
                         "why": f"{s['kind']} shot: face-safe original route (sharp face, lip-sync); greybox only for {ctx.cfg['greybox_kinds']}"}

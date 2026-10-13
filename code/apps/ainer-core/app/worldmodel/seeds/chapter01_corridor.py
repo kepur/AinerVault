@@ -422,7 +422,11 @@ def pipeline_config(db, workflow_root: str) -> dict:
         "frame_w": FRAME_W, "frame_h": FRAME_H,
         "face_safe_source": {   # 原管线面部安全版（对白 native8 + 嘴型、动作 native8/12）；没有这个文件时回退旧的 comic_run 成片
             "video": "/Users/mac/AinerWorkFlow/AiComicStudio/var/chapter-01/preview-twenty-v3/twenty-shots-dialogue8.mp4",
-            "order": "/Users/mac/AinerWorkFlow/AiComicStudio/var/chapter-01/preview-twenty-v3/shot-order.json"},
+            "order": "/Users/mac/AinerWorkFlow/AiComicStudio/var/chapter-01/preview-twenty-v3/shot-order.json",
+            "preview_dir": "/Users/mac/AinerWorkFlow/AiComicStudio/var/chapter-01/preview-twenty-v3",
+            "store_db": "/Users/mac/AinerWorkFlow/AiComicStudio/var/productions.sqlite3"},   # 只读
+        "dialogue_greybox": True, "dialogue_ab_shots": [2, 8, 13, 15],
+        "ab_python": "/Users/mac/AinerWorkFlow/AiComicStudio/vendor/av-venv/bin/python",
         "greybox_kinds": ["action"],
         "actors": {k: {**v, "desc": ACTOR_DESC.get(k, k), **({"hue": ACTOR_HUE[k]} if k in ACTOR_HUE else {})}
                    for k, v in ACTORS.items()},
