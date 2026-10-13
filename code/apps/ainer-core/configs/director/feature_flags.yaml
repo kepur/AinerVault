@@ -8,3 +8,7 @@ blender_enabled: true
 ue_enabled: false
 ltx097_enabled: true
 ltx25_enabled: true
+
+# world-greybox 闭环（World DB → 整场表演 → Blender 白模 → LTX layout → QA）：**可选**路径，默认关。
+# 打开后还要在项目/章节/镜头上单独打开开关（world_greybox_switches）才会生效；原动态漫剧管线始终是默认路径。
+world_greybox_enabled: false

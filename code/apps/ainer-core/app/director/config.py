@@ -15,7 +15,7 @@ import yaml
 #: ainer-core 根目录（相对路径都相对它，与 media_dir 的 var/media 同一个基准）
 CORE_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = CORE_ROOT / "configs" / "director"
-FLAGS = ("blender_enabled", "ue_enabled", "ltx097_enabled", "ltx25_enabled")
+FLAGS = ("blender_enabled", "ue_enabled", "ltx097_enabled", "ltx25_enabled", "world_greybox_enabled")
 
 
 class FeatureDisabled(RuntimeError):

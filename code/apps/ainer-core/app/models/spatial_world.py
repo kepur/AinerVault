@@ -200,3 +200,37 @@ class WorldTake(Base, StdMixin):
     frozen_deps: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(16), default="planned", nullable=False)
     outputs: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class WorldGreyboxSwitch(Base, StdMixin):
+    """world-greybox 闭环的**可选**开关（默认关；原动态漫剧/导演管线是默认路径）。
+
+    scope_kind：novel / chapter / production / plan / shot；越具体越优先（shot > plan > chapter/production > novel）。
+    fallback_to_original：greybox 闸门不过时这一镜回退原管线的成片。总开关在 feature_flags.yaml 的 world_greybox_enabled。
+    """
+
+    __tablename__ = "world_greybox_switches"
+    __table_args__ = (UniqueConstraint("scope_kind", "scope_id", name="uq_world_greybox_scope"),)
+
+    scope_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    fallback_to_original: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class WorldPipelineRun(Base, StdMixin):
+    """一次 world-greybox 闭环运行（可续跑）：config 描述输入，state 存逐镜尝试/QA/选择。"""
+
+    __tablename__ = "world_pipeline_runs"
+
+    world_id: Mapped[str] = mapped_column(ForeignKey("world_spaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    scope_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending/running/done/failed/cancelled
+    progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    state: Mapped[dict | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    out_dir: Mapped[str] = mapped_column(Text, nullable=False)

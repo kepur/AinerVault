@@ -52,7 +52,8 @@ from app.models.translation import (
 )
 from app.models.spatial_world import (
     OPEN_VERSION, SpatialWorld, WorldAsset, WorldChunk, WorldDelta, WorldFact, WorldInstance,
-    WorldLandmark, WorldPerformance, WorldPortal, WorldRegion, WorldTake, WorldVersion,
+    WorldGreyboxSwitch, WorldLandmark, WorldPerformance, WorldPipelineRun, WorldPortal, WorldRegion, WorldTake,
+    WorldVersion,
 )
 from app.models.world import (
     EntityWorldName, EntityWorldVisual, LexiconCategory, LexiconSource, NamingPolicy,
@@ -64,6 +65,7 @@ from app.models.world import (
 __all__ = [
     "OPEN_VERSION", "SpatialWorld", "WorldAsset", "WorldChunk", "WorldDelta", "WorldFact", "WorldInstance",
     "WorldLandmark", "WorldPerformance", "WorldPortal", "WorldRegion", "WorldTake", "WorldVersion",
+    "WorldGreyboxSwitch", "WorldPipelineRun",
     "Base", "StdMixin", "TimestampMixin", "utcnow",
     "DirectorJob", "DirectorOutput", "DirectorScene",
     "Preset", "PresetMark", "SceneMessage", "SceneProject", "StudioBoard", "StudioNodeRun", "StudioRun",

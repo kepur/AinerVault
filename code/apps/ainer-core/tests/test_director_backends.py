@@ -24,7 +24,8 @@ def test_flags_blender_ltx097_ltx25_on_ue_off(monkeypatch):
     """2026-09-28 起 LTX 2.5 打开（Union Control 挂 2.5 实测跟得住 Blender 预演）；UE 仍关。"""
     for k in config.FLAGS:
         monkeypatch.delenv(f"DIRECTOR_{k.upper()}", raising=False)
-    assert config.features() == {"blender_enabled": True, "ue_enabled": False, "ltx097_enabled": True, "ltx25_enabled": True}
+    assert config.features() == {"blender_enabled": True, "ue_enabled": False, "ltx097_enabled": True, "ltx25_enabled": True,
+                                 "world_greybox_enabled": False}  # 可选路径，默认关
 
 
 def test_env_overrides_a_flag(monkeypatch):

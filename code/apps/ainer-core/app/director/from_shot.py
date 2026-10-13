@@ -342,6 +342,12 @@ def dialogue_track(db: Session, shot: Shot) -> tuple[str, int] | None:
     return drive_track(shot, voiced, assets)
 
 
+def _chapter_of(db: Session, plan: ShotPlan) -> str | None:
+    from app.models import ScriptDoc
+    doc = db.get(ScriptDoc, plan.script_doc_id) if getattr(plan, "script_doc_id", None) else None
+    return getattr(doc, "chapter_id", None)
+
+
 def stage_scene_key(plan: ShotPlan, shot: Shot) -> str:
     """共享舞台键：同一分镜计划 × 同一剧本场次。没有场次的镜头退回自己（不和别人共用）。"""
     return f"{plan.id}:{shot.scene_id or ('shot:' + shot.id)}"
@@ -399,20 +405,31 @@ def render_shot(db: Session, shot_id: str, *, seed: int | None = None, control_t
             scene = store.export_box(db, scene.box_project_id)     # 带上 3D-BOX 里的改动
         repairs, framing = [], {"camera": "user"}
     else:
-        # 一场戏只演一次：同一分镜计划、同一剧本场次已经搭过的导演场景直接复用，不再让 LLM 每镜重新搭景
-        # （以前每镜各一套站位/朝向，镜头之间对不上）。本镜只换机位（auto_frame 按景别/焦点试机位）。
-        def _plan_once() -> tuple[Any, list]:
-            protocol, rep = planner.generate_protocol(db, b["brief"], duration=b["duration"])
-            protocol.setdefault("meta", {})["title"] = f"场 {shot.scene_id or shot.id}：{(shot.description or '').strip()[:24]}"
-            bind_cast(db, protocol, b["cast"])
-            sc = store.create_from_protocol(db, protocol, source="shot", prompt=b["brief"],
-                                            notes={"shot_id": shot.id, "plan_id": plan.id, "repairs": rep,
-                                                   "stage_scene_key": stage_scene_key(plan, shot)})
-            return sc, rep
+        from app.worldmodel import switches as greybox_switches
+        gb = greybox_switches.resolve(db, shot=shot.id, plan=plan.id, chapter=_chapter_of(db, plan))
+        if gb.enabled:
+            # world-greybox 开关打开时（可选路径）：一场戏只演一次，同场次已搭的导演场景直接复用，本镜只换机位
+            def _plan_once() -> tuple[Any, list]:
+                protocol, rep = planner.generate_protocol(db, b["brief"], duration=b["duration"])
+                protocol.setdefault("meta", {})["title"] = f"场 {shot.scene_id or shot.id}：{(shot.description or '').strip()[:24]}"
+                bind_cast(db, protocol, b["cast"])
+                sc = store.create_from_protocol(db, protocol, source="shot", prompt=b["brief"],
+                                                notes={"shot_id": shot.id, "plan_id": plan.id, "repairs": rep,
+                                                       "stage_scene_key": stage_scene_key(plan, shot)})
+                return sc, rep
 
-        scene, repairs, reused = staged_scene(db, plan, shot, _plan_once)
-        framing = auto_frame(db, scene, b["duration"], shot_size=b["shot_size"], focus_entity=b["focus"])
-        framing["shared_scene"] = reused
+            scene, repairs, reused = staged_scene(db, plan, shot, _plan_once)
+            framing = auto_frame(db, scene, b["duration"], shot_size=b["shot_size"], focus_entity=b["focus"])
+            framing["shared_scene"] = reused
+            framing["world_greybox"] = gb.scope
+        else:
+            # 默认路径（与改造前完全一致）：每镜由 LLM 搭一次场景
+            protocol, repairs = planner.generate_protocol(db, b["brief"], duration=b["duration"])
+            protocol.setdefault("meta", {})["title"] = f"镜 {shot.order_no}：{(shot.description or '').strip()[:24]}"
+            bind_cast(db, protocol, b["cast"])
+            scene = store.create_from_protocol(db, protocol, source="shot", prompt=b["brief"],
+                                               notes={"shot_id": shot.id, "plan_id": plan.id, "repairs": repairs})
+            framing = auto_frame(db, scene, b["duration"], shot_size=b["shot_size"], focus_entity=b["focus"])
     # 演员和人物的对应：协议里 character_ref=e:<实体 id> 是唯一依据（3D-BOX 里改的也认）；
     # 没绑的（用户新加的演员、旧场景）才退回按 p1、p2… 或协议顺序
     bound = dict(_bound(scene.protocol_json or {}))
