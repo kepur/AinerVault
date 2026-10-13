@@ -37,9 +37,9 @@
 | 步骤 | 内容 | 状态 |
 |---|---|---|
 | R1 | TASK_STATUS 与闭环设计文档 | 完成 |
-| R2 | 空间 World DB（区域/chunk/地标/通路/资产实例/带出处事实/章节 delta/版本）+ API + 测试 | 进行中 |
-| R3 | render_shot 复用整场单次表演；Blender 加载 world chunk + 共享表演逐机位渲染；标准人形骨架；碰撞/可达检查回灌 | 待做 |
-| R4 | 第一章 20 镜走新闭环重跑 + 逐镜 QA 闸门 + 合成成片 | 待做 |
+| R2 | 空间 World DB（区域/chunk/地标/通路/资产实例/带出处事实/章节 delta/版本）+ API + 测试 | 完成（世界库+delta API+测试；LLM 章节 delta 只出提案需人工确认） |
+| R3 | render_shot 复用整场单次表演；Blender 加载 world chunk + 共享表演逐机位渲染；标准人形骨架；碰撞/可达检查回灌 | 完成（仅在开关打开时生效：feature flag world_greybox_enabled 默认关 + 小说/章节/制作/计划/镜头级开关；默认 render_shot 行为不变，有测试） |
+| R4 | 第一章 20 镜走新闭环重跑 + 逐镜 QA 闸门 + 合成成片 | 完成（通用可续跑作业 /api/v2/world-greybox + Studio World/Greybox 面板；QA 不过的镜头自动回退原管线镜头；见 docs/studio/world_greybox_pipeline.md） |
 
 ## 5. 未做 / 后续
 - NarrativeIR 事件层；WorldDelta 由 LLM 按章节自动提议（当前为结构 + 手工/脚本提议）。

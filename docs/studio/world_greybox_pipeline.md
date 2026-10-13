@@ -88,3 +88,29 @@ API（`app/api/v2/world.py`，前缀 `/api/v2/worlds`）：建世界、查世界
 - 单 GPU：一次一个 LTX 任务、一个 Blender 任务；长任务 nohup 后台并写日志。
 - 不下载新模型；网关不支持的组合（control + drive）不硬凑。
 - 结果如实：未通过的镜头在报告中标红，不把“生成成功”当“验收通过”。
+
+
+## 产品化（feat/world-greybox-pipeline）
+
+### 可选开关（默认关）
+- `configs/director/feature_flags.yaml: world_greybox_enabled: false`（可用环境变量 `DIRECTOR_WORLD_GREYBOX_ENABLED` 覆盖）。
+- `world_greybox_switches`：按 novel / chapter / production / plan / shot 设开关，最细粒度优先；`fallback_to_original` 默认开。
+- 旗标关闭或无开关时 `switches.resolve` 直接返回 off（不查库），`render_shot` 走原有动态漫画路径，行为逐字节不变（`tests/test_world_greybox_optional.py`）。
+
+### 流水线作业（app/worldmodel/pipeline.py + runs.py）
+世界库 delta → 整场表演 → 机位拟合（设计机位误差≤0.012 保留，否则在设计方位 ±70° 内找无遮挡位）→ Blender 白模 → LTX 路由 → 逐镜 QA → 有限重渲 → 拟音/房间底噪/配乐 → 拼接 → 报告（qa_report.json/md）。状态存 `world_pipeline_runs.state`，可续跑；已有尝试会按当前闸门重新判定，不重复渲染。
+- 身份阶梯：layout → union(depth+pose) → segments（关键帧接力，两段 8k+1 帧共享接力帧，强制 fps 并裁到白模长度）。
+- 选片：人工 override > 通过的白模镜头 > 原管线镜头回退 > 最好的失败镜头。
+- 没台词又没环境声的镜头加合成房间底噪（标记 `synthetic_room_tone`），解决第 7 镜静音。
+- 与原画面冲突的入画人物才隐藏，并显式记录 `world_conflict_hidden`；出画人物保留在世界里（`world_actors_off_frame`）。
+
+### API（/api/v2/world-greybox）
+`GET /flag`，`GET|PUT /switches`，`GET /switches:resolve`，`POST|GET /runs`（开关关闭返回 409 greybox_disabled），`GET /runs/{id}`，`POST /runs/{id}:start`，`GET /runs/{id}/shots`，`POST /runs/{id}/shots/{n}:rerender`，`POST /runs/{id}/shots/{n}:select`，`GET /runs/{id}/file`，`GET /runs/{id}/world`。
+
+### Studio
+World/Greybox 面板：开关（默认关）+ 回退开关、作业列表与进度、世界地图（区域/chunk/实例/地标/轨迹/机位）、逐镜 原片 / 白模 / 白模渲染 对比、QA 徽章、重渲/选用/批准。
+
+### QA 发现与限制
+- 第 3 镜机位：旧闸门因运算符优先级错误在缩放打到搜索边界（1.45）时仍判通过；现在边界缩放直接拒绝，方向与白模参考比较。
+- 身份闸门是颜色代理：门槛按白模中该人物可见面积缩放（走远/出画不算身份丢失）；人物转身背对镜头时标志色（红发）会掉，可能误判——union 尝试画面可用但被拒，交由面板人工选用。
+- LLM：`propose_chapter_delta` 只出带证据的提案；`draft_performance` 尚未接入自动执行。
