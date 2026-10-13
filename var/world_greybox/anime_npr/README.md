@@ -62,3 +62,23 @@ NPR techniques (own implementation):
     caffeinate -i $B -b --factory-startup --python code/apps/ainer-core/scripts/anime_npr_poc.py -- <job.json> <out> \
        --style classic_cel|modern_anime [--cam closeup] [--range 25:97] [--still N --passes]
     # QA only: ... toon_vrm_poc.py -- <job.json> <out> --qa-only [--legacy-yaw-bug]
+
+## Results (M2 Max, 1920×1152, 32 TAA, Blender 5.2.2)
+| render | build | s/frame | total |
+|---|---|---|---|
+| shot18 classic_cel (97 f) | 34 s | 1.76 | 171 s |
+| shot18 modern_anime (97 f) | 54 s | 3.34* | 325 s |
+| close-up classic_cel (73 f) | 36 s | 1.98 | 144 s |
+| close-up modern_anime (73 f) | 44 s | 2.77* | 202 s |
+\* partly overlapped with an `ltx25_infer` job that started mid-render (contended GPU).
+1 min @24 fps (1440 f): classic ≈ 42 min, modern ≈ 60–80 min (+<1 min build/encode).
+
+Outputs: `shot18_{classic_cel,modern_anime}.mp4` (with shot18 audio), `shot18_side_by_side.mp4` (previous VRM | classic | modern),
+`closeup_{classic_cel,modern_anime}.mp4`, `closeup_side_by_side.mp4`, `stills/` (f1/49/97, face crops, side_by_side_f49),
+passes: `test_modern/passes/` (f49), `passes_classic_cel_f{1,97}/passes/`, `passes_modern_anime_f1/passes/`.
+
+## Remaining issues
+- Take keeps Thomas standing (story: curled up, trembling) — the take/performance has no crouch.
+- Brad & Kyle share one base model; no spring bones, blinks or lip-sync; 8 fps take → slight foot sliding.
+- Inner lines (Sobel) add some squiggles on hoodie folds in classic_cel; face proxy normals are a single ellipsoid (no SDF face map yet).
+- Env shell casts no key shadow (deliberate); environment still greybox.
