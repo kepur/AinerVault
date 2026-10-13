@@ -33,6 +33,8 @@ FPS, W, H, SAMPLES = tp.FPS, tp.W, tp.H, tp.SAMPLES
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 VRM_DIR = opt("--vrm-dir", os.path.join(REPO, "var", "assets", "vrm"))
 STILL = opt("--still", None)
+LEGACY_YAW_BUG = "--legacy-yaw-bug" in argv     # reproduce the first PoC's bug (QA must FAIL on it)
+QA_ONLY = "--qa-only" in argv
 
 # actor -> (vrm file, hair, tops or None, bottoms or None)
 CAST = {
@@ -53,18 +55,44 @@ def hexrgb(h):
     h = h.lstrip("#"); return np.array([int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)], dtype=np.float32)
 
 
+def _rgb2hsv(c):
+    mx, mn = c.max(1), c.min(1); d = mx - mn
+    h = np.zeros_like(mx); nz = d > 1e-6
+    r, g, b = c[:, 0], c[:, 1], c[:, 2]
+    i = nz & (mx == r); h[i] = ((g - b)[i] / d[i]) % 6
+    i = nz & (mx == g) & (mx != r); h[i] = (b - r)[i] / d[i] + 2
+    i = nz & (mx == b) & (mx != r) & (mx != g); h[i] = (r - g)[i] / d[i] + 4
+    return h / 6.0, np.where(mx > 1e-6, d / np.maximum(mx, 1e-6), 0), mx
+
+
+def _hsv2rgb(h, s, v):
+    i = np.floor(h * 6).astype(int) % 6; f = h * 6 - np.floor(h * 6)
+    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    out = np.stack([np.choose(i, [v, q, p, p, t, v]), np.choose(i, [t, v, v, q, p, p]),
+                    np.choose(i, [p, p, t, v, v, q])], 1)
+    return out
+
+
 def recolor_image(img, target, name):
-    """Copy img, remap luminance onto target colour (sRGB stored values). Returns the new image."""
+    """Copy img and hue-shift it onto target (sRGB stored values), PRESERVING the texture detail:
+    hue := target hue, saturation/value re-scaled relative to the texture's own reference (80th pct), so
+    strand highlights, fold shading, seams and line art painted in the texture survive. (The first PoC
+    remapped luminance to a flat colour, which flattened hair strands and clothing detail.)"""
     new = img.copy(); new.name = name
     px = np.empty(len(new.pixels), dtype=np.float32); new.pixels.foreach_get(px)
     px = px.reshape(-1, 4)
-    lum = px[:, :3] @ np.array([0.3, 0.59, 0.11], dtype=np.float32)
     m = px[:, 3] > 0.1
-    ref = float(np.percentile(lum[m], 80)) if m.any() else 1.0
-    t = np.clip(lum / max(ref, 1e-3), 0, 1.6)[:, None]
-    base = target[None, :] * np.minimum(t, 1.0) ** 0.8
-    hi = np.clip(t - 1.0, 0, 0.6) / 0.6
-    px[:, :3] = base * (1 - hi * 0.6) + hi * 0.6
+    h, s, v = _rgb2hsv(px[:, :3])
+    th, ts, tv = (x[0] for x in _rgb2hsv(target[None, :]))
+    vref = float(np.percentile(v[m], 80)) if m.any() else 1.0
+    sref = float(np.percentile(s[m], 60)) if m.any() else 1.0
+    rel_v = v / max(vref, 1e-3)                        # detail: relative brightness (strands, folds)
+    rel_s = np.clip(s / max(sref, 0.05), 0, 1.5) if sref > 0.08 else np.ones_like(s)
+    nv = np.clip(tv * rel_v ** 0.9 + np.clip(rel_v - 1.0, 0, 1) * 0.35 * max(tv, 0.25), 0, 1)   # keep highlights
+    ns = np.clip(ts * (0.55 + 0.45 * rel_s) * (1 - np.clip(rel_v - 1.05, 0, 1) * 0.5), 0, 1)
+    if ts < 0.15:                                       # near-neutral target (black/white): mostly desaturate
+        ns = np.clip(s * 0.15 + ts, 0, 1)
+    px[:, :3] = _hsv2rgb(np.full_like(h, th), ns, nv)
     new.pixels.foreach_set(px.ravel()); new.pack()
     return new
 
@@ -106,8 +134,10 @@ def style_material(mat, is_face):
     mx.parametric_rim_lift_factor = 0.05
     mx.rim_lighting_mix_factor = 0.6
     if mt.alpha_mode == "OPAQUE" or "CLOTH" in mat.name or "SKIN" in mat.name or "HAIR" in mat.name:
-        mx.outline_width_mode = "worldCoordinates"
-        mx.outline_width_factor = 0.0012 if is_face else 0.0028
+        # screen-space outline width (MToon 1.0: fraction of screen height) -> constant ~2-3 px lines at any
+        # distance (world-space 2.8 mm lines vanished on far actors and were blobby on near ones)
+        mx.outline_width_mode = "screenCoordinates"
+        mx.outline_width_factor = 0.0012 if is_face else 0.0024
         mx.outline_color_factor = (0.10, 0.07, 0.10)
         mx.outline_lighting_mix_factor = 0.0
 
@@ -134,6 +164,10 @@ def load_vrm(path, actor):
     new = [o for o in bpy.data.objects if o not in before]
     arm = next(o for o in new if o.type == "ARMATURE")
     arm.name = f"vrm_{actor}"
+    # ROOT-CAUSE FIX (shot18 "walking into the wall"): the VRM add-on creates the armature with
+    # rotation_mode='QUATERNION', so the take yaw keyed into rotation_euler was silently ignored and every
+    # actor kept its rest facing (-Y = towards the window wall) while translating along +X (sideways slide).
+    arm.rotation_mode = "XYZ" if not LEGACY_YAW_BUG else "QUATERNION"
     meshes = [o for o in new if o.type == "MESH"]
     zs = [(o.matrix_world @ Vector(c)).z for o in meshes for c in o.bound_box]
     return arm, meshes, max(zs) - min(zs)
@@ -182,7 +216,15 @@ def setup_actor(actor, a):
             rest[f"{s_}Hand"]["C"] = rest[f"{s_}ForeArm"]["C"]
     for pb in arm.pose.bones:
         pb.rotation_mode = "QUATERNION"
-    return {"arm": arm, "meshes": meshes, "rest": rest, "J": J}
+    # head-local forward: eye midpoint minus head (rest), in head bone-local frame
+    hf = Vector((0, -1, 0))
+    if "Head" in rest:
+        hb_ = arm.data.bones[rest["Head"]["bone"]]
+        eyes = [arm.data.bones[hm[k]].head_local for k in ("leftEye", "rightEye") if hm.get(k) in arm.data.bones]
+        w = (sum(eyes, Vector()) / len(eyes) - hb_.head_local) if eyes else Vector((0, -1, 0))
+        w.z = 0
+        hf = hb_.matrix_local.to_3x3().inverted() @ (w.normalized() if w.length > 1e-4 else Vector((0, -1, 0)))
+    return {"arm": arm, "meshes": meshes, "rest": rest, "J": J, "hm": hm, "head_fwd_local": hf}
 
 
 def pose_actor(rig, bones):
@@ -233,7 +275,109 @@ def env_tweaks():
         m.name += "_x"   # same material may be on several objects: patch once
 
 
+def unwrap(yaws):
+    out = [float(yaws[0])]
+    for y in yaws[1:]:
+        d = (float(y) - out[-1] + 180.0) % 360.0 - 180.0
+        out.append(out[-1] + d)
+    return out
+
+
+def corridor_axis(job):
+    """Unit XY vector of the region's long horizontal extent (the corridor axis)."""
+    reg = job["world"]["region"]["bounds_aabb"]
+    dx, dy = reg["max"][0] - reg["min"][0], reg["max"][1] - reg["min"][1]
+    return Vector((1, 0, 0)) if dx >= dy else Vector((0, 1, 0))
+
+
+def colliders(job):
+    return [(i["key"], i["aabb"]) for i in job["world"].get("instances", []) if i.get("collision")]
+
+
+def _hit(p, r, boxes, z0=0.05, z1=1.6):
+    for k, bb in boxes:
+        if (bb["min"][0] - r <= p.x <= bb["max"][0] + r and bb["min"][1] - r <= p.y <= bb["max"][1] + r
+                and bb["max"][2] > z0 and bb["min"][2] < z1):
+            return k
+    return None
+
+
+def qa_motion(job, scene, rigs, nf, fps, out_path=None, radius=0.16, probe=0.45):
+    """Automatic facing/path QA on the EVALUATED scene (what is rendered):
+      forward  = head-bone-derived facing of the posed VRM (falls back to armature -Y)
+      velocity = root XY displacement per frame
+    Per actor while moving (speed > 0.35 m/s): cos(forward, velocity) must be >= 0.7 (no sideways / backwards
+    walking) and the path must run along the corridor axis (|cos(velocity, axis)| >= 0.7 for >= 70% of
+    moving frames). For every frame: body circle (r=radius) must not intersect a collider AABB, and while
+    moving the point `probe` m ahead along forward must not be inside a collider ("walking into a wall")."""
+    axis = corridor_axis(job); boxes = colliders(job)
+    rep = {"corridor_axis": list(axis), "actors": {}, "pass": True, "fail_reasons": []}
+    track = {}
+    for fr in range(1, nf + 1):
+        scene.frame_set(fr)
+        for name, rig in rigs.items():
+            arm = rig["arm"]; mw = arm.matrix_world
+            hb = rig["rest"].get("Head")
+            if hb:
+                pb = arm.pose.bones[hb["bone"]]
+                fwd = (mw.to_3x3() @ (pb.matrix.to_3x3() @ (rig["head_fwd_local"])))
+            else:
+                fwd = mw.to_3x3() @ Vector((0, -1, 0))
+            fwd.z = 0; fwd = fwd.normalized() if fwd.length > 1e-6 else Vector((0, -1, 0))
+            track.setdefault(name, []).append((mw.translation.copy(), fwd))
+    for name, tr in track.items():
+        moving, ok_face, ok_axis, worst, wall_hits, probe_hits = 0, 0, 0, 1.0, [], []
+        for i, (p, fwd) in enumerate(tr):
+            a, b = tr[max(0, i - 1)][0], tr[min(len(tr) - 1, i + 1)][0]
+            v = (b - a); v.z = 0
+            dt = (min(len(tr) - 1, i + 1) - max(0, i - 1)) / fps
+            sp = v.length / dt if dt else 0
+            k = _hit(Vector((p.x, p.y, 0)), radius, boxes)
+            if k:
+                wall_hits.append((i + 1, k))
+            if sp > 0.35:
+                moving += 1
+                vd = v.normalized()
+                c = fwd.dot(vd); worst = min(worst, c)
+                ok_face += c >= 0.7
+                ok_axis += abs(vd.dot(axis)) >= 0.7
+                k2 = _hit(Vector((p.x, p.y, 0)) + fwd * probe, 0.0, boxes)
+                if k2:
+                    probe_hits.append((i + 1, k2))
+        ar = {"moving_frames": moving, "facing_ok_frac": round(ok_face / moving, 3) if moving else None,
+              "worst_cos_forward_vs_velocity": round(worst, 3) if moving else None,
+              "along_axis_frac": round(ok_axis / moving, 3) if moving else None,
+              "wall_overlap_frames": wall_hits[:5], "walks_into_wall_frames": probe_hits[:5],
+              "end_forward": [round(x, 3) for x in tr[-1][1][:2]], "end_pos": [round(x, 3) for x in tr[-1][0][:2]]}
+        bad = []
+        if moving and ok_face / moving < 0.9:
+            bad.append(f"{name}: forward vs path direction mismatch (ok {ok_face}/{moving}, worst cos {worst:.2f})")
+        if moving and ok_axis / moving < 0.7:
+            bad.append(f"{name}: path not along corridor axis ({ok_axis}/{moving})")
+        if wall_hits:
+            bad.append(f"{name}: body intersects collider {wall_hits[0]}")
+        if probe_hits:
+            bad.append(f"{name}: walking into wall {probe_hits[0]}")
+        ar["pass"] = not bad; rep["actors"][name] = ar; rep["fail_reasons"] += bad
+    rep["pass"] = not rep["fail_reasons"]
+    if out_path:
+        json.dump(rep, open(out_path, "w"), indent=1)
+    print("QA_MOTION", "PASS" if rep["pass"] else "FAIL", json.dumps(rep["fail_reasons"]), flush=True)
+    return rep
+
+
 def main():
+    ctx = build_scene()
+    scene, NF = ctx["scene"], ctx["NF"]
+    qa = qa_motion(ctx["job"], scene, ctx["rigs"], NF, FPS, os.path.join(OUT, "qa_motion.json"))
+    if QA_ONLY:
+        return
+    if not qa["pass"] and "--allow-qa-fail" not in argv:
+        raise SystemExit("QA_MOTION failed: " + "; ".join(qa["fail_reasons"]))
+    render_frames(ctx)
+
+
+def build_scene():
     job = json.load(open(JOB, encoding="utf-8"))
     os.makedirs(os.path.join(OUT, "frames"), exist_ok=True)
     N8, fps8 = int(job["frames"]), int(job["fps"])
@@ -258,12 +402,13 @@ def main():
     cd = bpy.data.cameras.new("take_cam"); cd.sensor_fit, cd.sensor_width = "HORIZONTAL", 36.0
     cd.clip_start, cd.clip_end = 0.05, 100
     cam = bpy.data.objects.new("take_cam", cd); scene.collection.objects.link(cam); scene.camera = cam
+    yaws = {n: unwrap([st["yaw_deg"] for st in a["frames"]]) for n, a in job["actors"].items()}
     for f in range(N8):
         fr = 1 + f * step
         for name, rig in rigs.items():
             st = job["actors"][name]["frames"][f]; ob = rig["arm"]
             ob.location = Vector(st["pos"]) + Vector((0, 0, st.get("hips_dz", 0.0)))
-            ob.rotation_euler = (0, 0, math.radians(st["yaw_deg"]))
+            ob.rotation_euler = (0, 0, math.radians(yaws[name][f]))   # unwrapped: no 318deg Bezier spins
             ob.keyframe_insert("location", frame=fr); ob.keyframe_insert("rotation_euler", frame=fr)
             pose_actor(rig, st["bones"])
             for r_ in rig["rest"].values():
@@ -322,15 +467,21 @@ def main():
             setattr(ee, a_, v)
     scene.view_settings.view_transform = "Standard"; scene.view_settings.look = "None"
     scene.render.image_settings.file_format = "PNG"
+    return {"scene": scene, "rigs": rigs, "cam": cam, "job": job, "NF": NF, "t0": t0, "boxes": boxes,
+            "env_objs": env_objs, "sun": so}
+
+
+def render_frames(ctx, frames=None, tag="VRM"):
+    scene, NF, t0 = ctx["scene"], ctx["NF"], ctx["t0"]
     build_s = time.time() - t0
-    rng = [int(STILL)] if STILL else range(1, NF + 1)
+    rng = frames or ([int(STILL)] if STILL else range(1, NF + 1))
     times = []
     for fr in rng:
         t = time.time(); scene.frame_set(fr)
         scene.render.filepath = os.path.join(OUT, "frames", f"{fr:04d}.png")
         bpy.ops.render.render(write_still=True)
         times.append(time.time() - t)
-        print(f"VRM_FRAME {fr}/{NF} {times[-1]:.2f}s", flush=True)
+        print(f"{tag}_FRAME {fr}/{NF} {times[-1]:.2f}s", flush=True)
     info = {"job": JOB, "frames": len(times), "fps": FPS, "res": [W, H], "samples": SAMPLES,
             "cast": {k: v[0] for k, v in CAST.items()}, "build_s": round(build_s, 2),
             "render_total_s": round(sum(times), 2), "per_frame_avg_s": round(sum(times) / len(times), 3),
@@ -339,7 +490,8 @@ def main():
             "per_frame_s": [round(x, 3) for x in times], "blender": bpy.app.version_string}
     if not STILL:
         json.dump(info, open(os.path.join(OUT, "timing.json"), "w"), indent=1)
-    print("VRM_DONE", json.dumps({k: v for k, v in info.items() if k != "per_frame_s"}), flush=True)
+    print(f"{tag}_DONE", json.dumps({k: v for k, v in info.items() if k != "per_frame_s"}), flush=True)
+    return info
 
 
 if __name__ == "__main__":

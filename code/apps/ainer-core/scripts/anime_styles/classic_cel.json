@@ -1,0 +1,44 @@
+{
+  "name": "classic_cel",
+  "description": "90s TV cel look: thick dark lines, hard 2-band shadows, no bloom, neutral grade",
+  "lines": {
+    "outline_px": 3.6,
+    "face_outline_px": 2.0,
+    "color": "#1a1016",
+    "inner_lines": 0.9,
+    "inner_normal_threshold": 0.5,
+    "inner_depth_threshold": 0.04,
+    "inner_thickness_px": 1
+  },
+  "shading": {
+    "band_softness": 0.03,
+    "shadow_shift": -0.05,
+    "face_shadow_shift": 0.15,
+    "face_normal_proxy": 0.9,
+    "shade_tint": "#a89cc8",
+    "gi_equalization": 1.0
+  },
+  "rim": {
+    "strength": 0.0,
+    "color": "#ffffff",
+    "power": 5.0,
+    "lift": 0.0
+  },
+  "light": {
+    "key_energy": 2.8,
+    "key_elevation_deg": 45,
+    "key_azimuth_deg": -35,
+    "key_softness_deg": 1.5,
+    "ambient": 0.75,
+    "back_rim_energy": 0.0,
+    "key_azimuth_note": "camera-relative: 0 = from behind the camera"
+  },
+  "post": {
+    "bloom": 0.0,
+    "bloom_threshold": 1.0,
+    "saturation": 1.12,
+    "gain": "#ffffff",
+    "lift": "#000000",
+    "gamma": 1.0
+  }
+}

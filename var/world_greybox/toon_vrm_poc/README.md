@@ -36,3 +36,7 @@ Source take: `var/world_greybox/runs/wpr_01M4SXHWJKKKH7JZZMKQTPPBP6/shot18/greyb
 - Take motion is coarse (8 fps keys, simple swing walk) → slight foot sliding; no finger curl, no spring bones (hair/clothes static), no blinks/lip sync.
 - Characters mostly seen from the side/back in this shot, so faces barely visible.
 - Environment still greybox (flat walls, no props textures); lighting is a single sun.
+
+## Update (follow-up, see `../anime_npr/README.md`)
+- **Bug fixed**: actors did not turn (VRM armature `rotation_mode='QUATERNION'` ignored the keyed `rotation_euler` yaw) → walkers slid sideways facing the window wall. Now `XYZ` + unwrapped yaw; automatic `qa_motion` facing/path/wall check (`qa_motion.json`, `--qa-only`, `--legacy-yaw-bug`).
+- Recolour = detail-preserving hue shift; outlines in screen space. The renders in this folder predate the fix.

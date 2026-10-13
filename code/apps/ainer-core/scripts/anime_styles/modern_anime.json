@@ -1,0 +1,44 @@
+{
+  "name": "modern_anime",
+  "description": "Modern TV anime: thin coloured lines, soft shading, warm rim light, bloom, warm grade",
+  "lines": {
+    "outline_px": 1.8,
+    "face_outline_px": 1.0,
+    "color": "#4a2a2e",
+    "inner_lines": 0.45,
+    "inner_normal_threshold": 0.55,
+    "inner_depth_threshold": 0.06,
+    "inner_thickness_px": 0
+  },
+  "shading": {
+    "band_softness": 0.22,
+    "shadow_shift": 0.0,
+    "face_shadow_shift": 0.25,
+    "face_normal_proxy": 0.85,
+    "shade_tint": "#c8a8c0",
+    "gi_equalization": 0.85
+  },
+  "rim": {
+    "strength": 0.5,
+    "color": "#ffd2a8",
+    "power": 4.0,
+    "lift": 0.03
+  },
+  "light": {
+    "key_energy": 3.0,
+    "key_elevation_deg": 35,
+    "key_azimuth_deg": -40,
+    "key_softness_deg": 3.0,
+    "ambient": 0.85,
+    "back_rim_energy": 2.0,
+    "key_azimuth_note": "camera-relative: 0 = from behind the camera"
+  },
+  "post": {
+    "bloom": 0.35,
+    "bloom_threshold": 0.8,
+    "saturation": 1.08,
+    "gain": "#fff2e0",
+    "lift": "#0a0610",
+    "gamma": 1.0
+  }
+}
