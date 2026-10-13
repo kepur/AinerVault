@@ -64,7 +64,9 @@ MOOD_TEXT = {
 }
 DEFAULTS = {"max_retry": 2, "max_check_rounds": 2, "resolution": [640, 384], "close_resolution": [384, 256],
             "fit_max_error": 0.08, "keep_designed_if_error_below": 0.012, "az_window_deg": 70,
-            "fallback_to_original": True, "music_gain": 0.22, "room_tone_db": -34}
+            "fallback_to_original": True, "music_gain": 0.22, "room_tone_db": -34,
+            # 只有这些镜头类型走白模；对白/内心/反应镜头直接用原管线的面部安全版（清晰脸 + 嘴型同步）
+            "greybox_kinds": ["action"]}
 
 
 class PipelineError(RuntimeError):
@@ -118,7 +120,24 @@ class Ctx:
         c = self.frames().get(str(n))
         return (c or {}).get("frame")
 
+    def face_safe(self) -> dict:
+        """原管线面部安全版样片（如 Codex 的 twenty-shot preview）：整片 + shot-order.json 逐镜切点/帧率/时长。"""
+        src = self.cfg.get("face_safe_source") or {}
+        if not src.get("video") or not Path(src["video"]).exists():
+            return {}
+        if not hasattr(self, "_fs"):
+            self._fs = {o["number"]: o for o in json.loads(Path(src["order"]).read_text())}
+        return self._fs
+
     def original_clip(self, n: int) -> str | None:
+        o = self.face_safe().get(n)
+        if o:
+            dst = self.out / "face_safe" / f"{n:02d}.mp4"
+            if not dst.exists():
+                dst.parent.mkdir(exist_ok=True)
+                ff("-ss", f"{o['start_s']:.4f}", "-i", self.cfg["face_safe_source"]["video"], "-t", f"{o['duration_s']:.4f}",
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dst))
+            return str(dst)
         c = self.frames().get(str(n)) or {}
         url = (c.get("asset") or {}).get("url")
         p = media_path(url) if url else None
@@ -508,6 +527,7 @@ def add_foley(ctx: Ctx, s: dict, video: Path, attempt: int) -> Path:
 def room_tone(ctx: Ctx, s: dict, video: Path, attempt: int) -> Path:
     """mmaudio 也给不出可闻声音时：铺一层环境底噪（低通粉噪 + 轻微嗡声），在报告里标注为 synthetic_room_tone。"""
     sd = ctx.out / f"shot{s['n']:02d}"
+    sd.mkdir(parents=True, exist_ok=True)
     out = sd / f"roomtone_a{attempt}.mp4"
     dur = qa.probe(str(video))["duration_s"]
     db = ctx.cfg["room_tone_db"]
@@ -571,6 +591,12 @@ def run_shot(ctx: Ctx, s: dict, *, force: bool = False):
     if rec.get("final") and not force:
         return
     rec.setdefault("attempts", [])
+    if s["kind"] not in ctx.cfg["greybox_kinds"] and ctx.original_clip(n) and not (rec.get("override") or {}).get("source") == "greybox":
+        rec["final"] = {"source": "original", "video": ctx.original_clip(n), "pass": None, "failed": [],
+                        "why": f"{s['kind']} shot: face-safe original route (sharp face, lip-sync); greybox only for {ctx.cfg['greybox_kinds']}"}
+        ctx.log(f"shot {n}: {s['kind']} → face-safe original take")
+        ctx.save()
+        return
     failed: list[str] = []
     # 已有尝试按当前闸门重判（闸门改过也一致）；过了就不重渲
     for a in rec["attempts"]:
@@ -709,7 +735,12 @@ def concat(ctx: Ctx, tl: list[dict]) -> dict:
         fz = ctx.rec(s["n"]).get("final") or {}
         dst = parts / f"{s['n']:02d}.mp4"
         if fz.get("video"):
-            _normalize(fz["video"], dst, s["dur"] / 1000, W, H)
+            src = fz["video"]
+            if (not qa.probe(src)["has_audio"]) or qa.audio_rms_db(src) <= qa.TH["audio_rms_db"]:
+                src = str(room_tone(ctx, s, Path(src), "final"))   # 选中的镜头（含原管线回退）太静 → 铺环境底噪
+                if "synthetic_room_tone" not in fz.setdefault("post", []):
+                    fz["post"].append("synthetic_room_tone")
+            _normalize(src, dst, s["dur"] / 1000, W, H)
         else:
             frame = ctx.frame(s["n"]) or {}
             if not frame.get("url"):
@@ -810,6 +841,10 @@ def execute(db: Session, run_id: str, *, only: set[int] | None = None, force: se
     if run is None:
         raise PipelineError(f"运行 {run_id} 不存在")
     ctx = Ctx(db, run, log)
+    for sc in ctx.cfg["shots"]:   # 时长/推理帧率与面部安全版对齐（真实配音/动作时长，不拉伸）
+        o = ctx.face_safe().get(sc["n"])
+        if o:
+            sc["dur"], sc["fps"] = int(round(o["duration_s"] * 1000)), int(o.get("inference_fps") or sc["fps"])
     import os
     ctx.st["worker_pid"] = os.getpid()
     try:
