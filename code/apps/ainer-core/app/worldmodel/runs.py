@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ids import new_id
 from app.models import WorldPipelineRun
 from app.worldmodel import switches
 
@@ -33,7 +34,7 @@ def create(db: Session, *, world_id: str, scope_kind: str, scope_id: str, config
             raise RunError("greybox_disabled", f"world-greybox 未对 {scope_kind}={scope_id} 打开：{d.reason}"
                            "（默认路径是原动态漫剧管线；需要 feature flag + 作用域开关）", 409)
         config = {**config, "fallback_to_original": config.get("fallback_to_original", d.fallback_to_original)}
-    run = WorldPipelineRun(world_id=world_id, scope_kind=scope_kind, scope_id=scope_id, title=title, config=config,
+    run = WorldPipelineRun(id=new_id("wpr"), world_id=world_id, scope_kind=scope_kind, scope_id=scope_id, title=title, config=config,
                            status="pending", progress=0.0, out_dir=out_dir or "", state={"shots": {}})
     db.add(run)
     db.flush()

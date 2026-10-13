@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.director import config
+from app.ids import new_id
 from app.models import WorldGreyboxSwitch
 
 SCOPES = ("shot", "plan", "chapter", "production", "novel")
@@ -35,7 +36,7 @@ def set_switch(db: Session, scope_kind: str, scope_id: str, *, enabled: bool,
     sw = db.scalar(select(WorldGreyboxSwitch).where(WorldGreyboxSwitch.scope_kind == scope_kind,
                                                     WorldGreyboxSwitch.scope_id == scope_id))
     if sw is None:
-        sw = WorldGreyboxSwitch(scope_kind=scope_kind, scope_id=scope_id)
+        sw = WorldGreyboxSwitch(id=new_id("wgs"), scope_kind=scope_kind, scope_id=scope_id)
         db.add(sw)
     sw.enabled, sw.fallback_to_original, sw.note = enabled, fallback_to_original, note
     db.flush()

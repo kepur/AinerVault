@@ -238,7 +238,7 @@ def _free_space(ctx: Ctx, perf: WorldPerformance):
     snap = ws.snapshot(ctx.db, perf.world_id, perf.world_version, [perf.region_key])
     region = next(r for r in snap["regions"] if r["key"] == perf.region_key)
     lo, hi = region["bounds_aabb"]["min"], region["bounds_aabb"]["max"]
-    boxes = [geo.instance_aabb(i) for i in snap["instances"] if i["region"] == perf.region_key and i.get("collision", True)]
+    boxes = [i["aabb"] for i in snap["instances"] if i["region"] == perf.region_key and i.get("collision", True)]
     boxes = [b for b in boxes if b]
 
     def ok(p) -> bool:
