@@ -24,6 +24,9 @@ ap.add_argument("--frames", default="25:97:3"); ap.add_argument("--strength", ty
 ap.add_argument("--steps", type=int, default=28); ap.add_argument("--seed", type=int, default=1234)
 ap.add_argument("--res", default="1280x768"); ap.add_argument("--ref-blend", type=float, default=0.0)
 ap.add_argument("--cfg", type=float, default=7.0)
+ap.add_argument("--prev-warp", type=float, default=0.0,
+                help="blend weight of the previous repainted keyframe, optical-flow warped (Farneback on the 3D renders)")
+ap.add_argument("--skip-existing", action="store_true")
 ap.add_argument("--cn-scale", type=float, default=0.7)
 a = ap.parse_args()
 W, H = map(int, a.res.split("x"))
@@ -57,24 +60,38 @@ f0, f1, st = map(int, a.frames.split(":"))
 times, prev, log = [], None, []
 for fr in range(f0, f1 + 1, st):
     t = time.time()
+    outp = os.path.join(a.out, "frames", f"{fr:04d}.png")
     init = Image.open(os.path.join(a.src, "frames", f"{fr:04d}.png")).convert("RGB").resize((W, H), Image.LANCZOS)
+    init3d = init.copy()
+    if a.skip_existing and os.path.exists(outp):          # resume: reuse finished keyframes
+        prev, init_3d_prev = Image.open(outp).convert("RGB"), init3d
+        continue
     pdir = os.path.join(a.src, "passes", f"f{fr:04d}")
     line = ImageOps.invert(Image.open(os.path.join(pdir, "line.png")).convert("L")).convert("RGB").resize((W, H))
     depth = ImageOps.invert(Image.open(os.path.join(pdir, "depth.png")).convert("L")).convert("RGB").resize((W, H))
     if prev is not None and a.ref_blend > 0:
         init = Image.blend(init, prev, a.ref_blend)
+    if prev is not None and a.prev_warp > 0:
+        import cv2
+        g1 = cv2.cvtColor(np.asarray(init_3d_prev), cv2.COLOR_RGB2GRAY)
+        g2 = cv2.cvtColor(np.asarray(init), cv2.COLOR_RGB2GRAY)
+        fl = cv2.calcOpticalFlowFarneback(g2, g1, None, 0.5, 4, 31, 5, 7, 1.5, 0)   # cur -> prev
+        gx, gy = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+        warped = cv2.remap(np.asarray(prev), gx + fl[..., 0], gy + fl[..., 1], cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE)
+        init = Image.blend(init, Image.fromarray(warped), a.prev_warp)
     g = torch.Generator("cpu").manual_seed(a.seed)
     # union control_mode: 1 = depth, 3 = canny/lineart
     img = pipe(prompt=PROMPT, negative_prompt=NEG, image=init, control_image=[depth, line], control_mode=[1, 3],
                controlnet_conditioning_scale=a.cn_scale, strength=a.strength,
                num_inference_steps=a.steps, guidance_scale=a.cfg, width=W, height=H, generator=g).images[0]
-    img.save(os.path.join(a.out, "frames", f"{fr:04d}.png"))
-    prev = img
+    img.save(outp)
+    prev, init_3d_prev = img, init3d
     times.append(time.time() - t)
     print(f"REPAINT {fr} {times[-1]:.1f}s", flush=True)
 json.dump({"frames": a.frames, "res": [W, H], "strength": a.strength, "steps": a.steps, "seed": a.seed, "cfg": a.cfg,
-           "ref_blend": a.ref_blend, "cn_scale": a.cn_scale,
+           "ref_blend": a.ref_blend, "prev_warp": a.prev_warp, "cn_scale": a.cn_scale,
            "model": "cagliostrolab/animagine-xl-3.1", "controlnet": "xinsir/controlnet-union-sdxl-1.0 (promax)",
-           "per_frame_s": [round(x, 1) for x in times], "avg_s": round(sum(times[1:]) / max(1, len(times) - 1), 1),
-           "first_s": round(times[0], 1), "device": dev, "prompt": PROMPT, "negative": NEG},
+           "per_frame_s": [round(x, 1) for x in times], "avg_s": round(sum(times[1:]) / max(1, len(times) - 1), 1) if times else None,
+           "first_s": round(times[0], 1) if times else None, "device": dev, "prompt": PROMPT, "negative": NEG},
           open(os.path.join(a.out, "timing.json"), "w"), indent=1)

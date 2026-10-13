@@ -367,6 +367,67 @@ def lineart(ctx, la):
     return gp
 
 
+def secondary_motion(ctx, seed=7):
+    """Bake additive secondary motion on every 24 fps frame on top of the take's 8 fps (Bezier) keys:
+    walk-phase hip/chest counter-rotation, arm-swing follow-through on the chest, vertical bob, idle breathing,
+    slow small head turns with per-actor offsets, and blinks (VRoid face shape key Fcl_EYE_Close / Blink)."""
+    import random
+    from mathutils import Quaternion
+    rnd = random.Random(seed); scene = ctx["scene"]; NF = ctx["NF"]
+    bones = ("Hips", "Spine1", "Spine2", "Head", "Neck")
+    per = {}
+    for name, rig in ctx["rigs"].items():
+        arm = rig["arm"]; pos, base = [], {}
+        for fr in range(1, NF + 1):
+            scene.frame_set(fr)
+            pos.append(arm.location.copy())
+            for b in bones:
+                r = rig["rest"].get(b)
+                if r:
+                    base[(b, fr)] = arm.pose.bones[r["bone"]].rotation_quaternion.copy()
+        per[name] = (pos, base)
+    for name, rig in ctx["rigs"].items():
+        arm = rig["arm"]; pos, base = per[name]
+        off, hz, blink_t = rnd.random() * 6.28, 0.25 + rnd.random() * 0.15, 0.4 + rnd.random() * 0.8
+        dist = 0.0; face = next((o for o in rig["meshes"] if o.data.shape_keys and any(
+            k.name.lower().endswith(("eye_close", "blink")) for k in o.data.shape_keys.key_blocks)), None)
+        bk = None
+        if face:
+            bk = next(k for k in face.data.shape_keys.key_blocks if k.name.lower().endswith(("eye_close", "blink")))
+        blinks = []
+        t = blink_t
+        while t < NF / FPS:
+            blinks.append(t); t += 2.2 + rnd.random() * 1.8
+        for fr in range(1, NF + 1):
+            i = fr - 1; tt = i / FPS
+            v = (pos[min(i + 1, NF - 1)] - pos[max(i - 1, 0)]); v.z = 0
+            sp = v.length * FPS / 2; dist += sp / FPS
+            walk = min(1.0, sp / 0.8)
+            ph = dist / 0.62 * math.pi                     # one step ~0.62 m
+            breathe = math.sin(2 * math.pi * tt / 3.6 + off)
+            extra = {
+                "Hips": Quaternion((0, 1, 0), math.radians(6 * walk * math.sin(ph))),
+                "Spine1": Quaternion((0, 1, 0), math.radians(-8 * walk * math.sin(ph - 0.35)))
+                          @ Quaternion((1, 0, 0), math.radians(1.2 * breathe)),
+                "Spine2": Quaternion((1, 0, 0), math.radians(0.8 * breathe)),
+                "Neck": Quaternion((0, 1, 0), math.radians(3 * walk * math.sin(ph - 0.7))),
+                "Head": Quaternion((0, 1, 0), math.radians(5 * math.sin(2 * math.pi * hz * tt + off)))
+                        @ Quaternion((1, 0, 0), math.radians(1.5 * walk * math.cos(2 * ph))),
+            }
+            for b, q in extra.items():
+                r = rig["rest"].get(b)
+                if r and (b, fr) in base:
+                    pb = arm.pose.bones[r["bone"]]
+                    pb.rotation_quaternion = base[(b, fr)] @ q
+                    pb.keyframe_insert("rotation_quaternion", frame=fr)
+            arm.location = pos[i] + Vector((0, 0, 0.018 * walk * (math.cos(2 * ph) - 1) * 0.5))
+            arm.keyframe_insert("location", frame=fr)
+            if bk:
+                w = max((max(0.0, 1 - abs(tt - b_) / 0.07) for b_ in blinks), default=0.0)
+                bk.value = min(1.0, w * 1.3); bk.keyframe_insert("value", frame=fr)
+        print(f"NPR secondary {name}: blink_key={bk.name if bk else None} blinks={len(blinks)}", flush=True)
+
+
 # ---------------------------------------------------------------- main
 def main():
     os.makedirs(OUT, exist_ok=True)
@@ -391,6 +452,8 @@ def main():
     for m in bpy.data.materials:
         if m.name.startswith("env_") and m.node_tree:
             add_aovs_env(m)
+    if "--secondary" in argv:
+        secondary_motion(ctx)
     if CAM == "closeup":
         closeup_camera(ctx)
     lights(ctx, cs)
