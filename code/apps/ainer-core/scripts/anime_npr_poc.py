@@ -73,6 +73,7 @@ def compile_style(preset):
             "saturation": float(P["saturation"]), "gain": hexc(P["gain"], lin=False), "lift": hexc(P["lift"], lin=False),
             "gamma": float(P["gamma"]),
         },
+        "lineart": L.get("lineart"),
         "passes": ["combined", "base(AOV)", "light(AOV)", "line", "depth", "normal"],
     }
 
@@ -323,7 +324,47 @@ def compositor(scene, cs, pass_dir=None):
                                 ("final", img, "RGBA")):
             it = fo.file_output_items.new(typ, name)
             Lk.new(sock, fo.inputs[it.name])
+
+        def _per_frame_dir(sc, *_a):   # one sub-folder per frame: passes/fNNNN/<pass>.png
+            fo.directory = os.path.join(pass_dir, f"f{sc.frame_current:04d}")
+        bpy.app.handlers.frame_change_post.append(_per_frame_dir)
     return ng
+
+
+def lineart(ctx, la):
+    """Grease Pencil Line Art over the characters only: contour + crease + material borders + intersections.
+    World-space radius => naturally thinner with depth (variable width); thickness modifier tapers stroke ends."""
+    coll = bpy.data.collections.new("npr_chars"); ctx["scene"].collection.children.link(coll)
+    for rig in ctx["rigs"].values():
+        for ob in rig["meshes"]:
+            coll.objects.link(ob)
+            # face: occludes lines but draws none (its eye/mouth material borders and UV seams read as scars);
+            # the MToon hull outline still draws the face silhouette
+            if any(s_.material and "FACE_00_SKIN" in s_.material.name.upper() for s_ in ob.material_slots):
+                ob.lineart.usage = "OCCLUSION_ONLY"
+    bpy.ops.object.grease_pencil_add(type="LINEART_SCENE")
+    gp = bpy.context.active_object; md = gp.modifiers[0]
+    md.source_type = "COLLECTION"; md.source_collection = coll
+    md.use_contour = md.use_crease = md.use_material = md.use_intersection = True
+    md.use_loose = False
+    md.crease_threshold = math.radians(la["crease_deg"]); md.radius = la["radius_m"]; md.opacity = la["opacity"]
+    md.use_crease_on_smooth = True
+    for m in gp.data.materials:
+        if m and m.grease_pencil:
+            m.grease_pencil.color = (0.02, 0.015, 0.02, 1)
+    try:
+        th = gp.modifiers.new("taper", "GREASE_PENCIL_THICKNESS")
+        th.use_uniform_thickness = False
+        th.thickness_factor = 1.0
+        if hasattr(th, "use_custom_curve"):
+            th.use_custom_curve = True
+            c = th.custom_curve; c.initialize()
+            pts = c.curves[0].points
+            pts[0].location = (0, 1 - la["taper"]); pts[-1].location = (1, 1 - la["taper"])
+            pts.new(0.5, 1.0); c.update()
+    except Exception as e:  # noqa: BLE001
+        print("NPR lineart taper skipped:", e)
+    return gp
 
 
 # ---------------------------------------------------------------- main
@@ -353,6 +394,8 @@ def main():
     if CAM == "closeup":
         closeup_camera(ctx)
     lights(ctx, cs)
+    if cs.get("lineart"):
+        lineart(ctx, cs["lineart"])
     ee = scene.eevee
     for a_, v in (("use_shadows", True), ("shadow_resolution_scale", 1.0), ("shadow_ray_count", 2),
                   ("shadow_step_count", 8)):
