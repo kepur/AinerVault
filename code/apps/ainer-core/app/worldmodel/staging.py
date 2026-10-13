@@ -124,7 +124,7 @@ def fit_camera(actors: dict[str, tuple[Sequence[float], float]], placements: dic
                W: int, H: int, *, lens_choices=(24, 28, 35, 45, 55), heights=(1.1, 1.3, 1.5),
                az_step_deg: int = 10, dists=(1.2, 1.6, 2.0, 2.6, 3.2, 4.0, 5.0),
                az_range: tuple[int, int] = (0, 360), others: dict | None = None,
-               free_y: tuple[float, float] | None = None) -> tuple[dict, float]:
+               free_y: tuple[float, float] | None = None, valid_pos=None) -> tuple[dict, float]:
     """网格搜索：绕在场人物质心的一圈机位 × 焦距 × 高度，挑与首帧框最贴的相机。
 
     others：首帧里没有、但世界里此刻在场的人 —— 不许挡住首帧人物、不许贴脸（occlusion_penalty）。
@@ -134,6 +134,8 @@ def fit_camera(actors: dict[str, tuple[Sequence[float], float]], placements: dic
 
     def placement_error(cam, actors, placements, W, H):  # noqa: F811  局部：加上遮挡/空间约束
         if free_y and not (free_y[0] <= cam["pos"][1] <= free_y[1]):
+            return 1e9
+        if valid_pos is not None and not valid_pos(cam["pos"]):
             return 1e9
         e = _placement_error(cam, actors, placements, W, H)
         return e + occlusion_penalty(cam, actors, others, W, H) if e < 1e8 else e

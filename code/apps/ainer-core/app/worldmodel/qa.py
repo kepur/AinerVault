@@ -174,9 +174,52 @@ def mood_check(mood: str | None, prompt: str, audio_db: float, music_cue: str | 
     return {"ok": ok, "mood": mood, "prompt_terms": hit, "music_cue": music_cue, "audio_db": audio_db}
 
 
+def _cam_vec(c: dict) -> tuple[float, float, float]:
+    return (c["scale"] - 1.0, c["shift_x"], c["shift_y"])
+
+
+def camera_gate(cm: dict, planned: str, *, textured: bool = True, reference: dict | None = None) -> dict[str, Any]:
+    """运镜闸门。
+
+    旧版有运算优先级 bug：``textured and in_range and A or B`` —— 只要平移量够就过，缩放撞边界（画面崩）也算过
+    （第一章镜 3：scale=1.45 撞上限、shift_x=-0.075 照样判过）。现在：
+      1) 缩放撞搜索边界 = 没测到一致的几何变换 → 不算运镜；
+      2) 有白模（clay）实测运镜时，生成片的运镜向量要与白模同向（余弦 > 0.3）；
+      3) 没有白模时按计划类型判：推 → 放大，拉 → 缩小，摇/移 → 水平位移，升降 → 竖直位移或缩放。
+    """
+    out = {**cm, "planned": planned}
+    if planned == "hold":
+        return {**out, "ok": True, "why": "hold"}
+    in_range = 0.705 < cm["scale"] < 1.445
+    mag = math.hypot(cm["scale"] - 1, math.hypot(cm["shift_x"], cm["shift_y"]))
+    if not textured or not in_range:
+        return {**out, "ok": False, "why": "zoom search hit its bound or frame untextured: no consistent camera transform"}
+    if mag < min(TH["cam_scale"], TH["cam_shift"]):
+        return {**out, "ok": False, "why": "no measurable camera move"}
+    ref_ok = reference is not None and 0.705 < reference.get("scale", 1) < 1.445 and \
+        math.hypot(reference["scale"] - 1, math.hypot(reference["shift_x"], reference["shift_y"])) >= 0.01
+    if ref_ok:
+        a, b = _cam_vec(cm), _cam_vec(reference)
+        na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(x * x for x in b))
+        cos = sum(x * y for x, y in zip(a, b)) / (na * nb + 1e-9)
+        out["reference"] = {"scale": reference["scale"], "shift_x": reference["shift_x"], "shift_y": reference["shift_y"],
+                            "cosine": round(cos, 3)}
+        return {**out, "ok": cos > 0.3, "why": f"direction vs greybox clay cosine={cos:.2f}"}
+    if planned in ("push_in", "zoom_in"):
+        ok = cm["scale"] - 1 >= TH["cam_scale"]
+    elif planned == "pull_out":
+        ok = 1 - cm["scale"] >= TH["cam_scale"]
+    elif planned.startswith(("pan", "truck")):
+        ok = abs(cm["shift_x"]) >= TH["cam_shift"]
+    else:
+        ok = abs(cm["shift_y"]) >= TH["cam_shift"] or abs(cm["scale"] - 1) >= TH["cam_scale"]
+    return {**out, "ok": ok, "why": f"planned-type rule for {planned}"}
+
+
 def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mood: str | None, prompt: str,
               first_frame: str | None = None, greybox: dict | None = None, voice_s: float | None = None,
-              music_cue: str | None = None, check_first: bool = True) -> dict[str, Any]:
+              music_cue: str | None = None, check_first: bool = True,
+              reference_camera: dict | None = None) -> dict[str, Any]:
     """一镜全部闸门。greybox：Blender camera.json（每人逐帧 bbox）。"""
     info = probe(video)
     fr = frames_gray(video)
@@ -184,11 +227,7 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
     m = motion_stats(fr)
     res["motion"] = {**m, "ok": m["mean_diff"] >= TH["motion_diff"] and m["nondup"] >= TH["nondup"]}
     cm = camera_motion(fr)
-    textured = float(fr.std()) >= 2.0  # 纯色画面上相位相关是噪声，不算机位运动
-    # 缩放搜索撞到边界（0.70/1.45）= 没有找到一致的几何变换（画面崩/换景），不算有效运镜
-    in_range = 0.705 < cm["scale"] < 1.445
-    moved = textured and in_range and abs(cm["scale"] - 1) >= TH["cam_scale"] or math.hypot(cm["shift_x"], cm["shift_y"]) >= TH["cam_shift"]
-    res["camera"] = {**cm, "planned": planned_move, "ok": moved if planned_move != "hold" else True}
+    res["camera"] = camera_gate(cm, planned_move, textured=float(fr.std()) >= 2.0, reference=reference_camera)
     adb = audio_rms_db(video) if info["has_audio"] else -120.0
     a_ok = info["has_audio"] and abs(info["audio_duration_s"] - info["duration_s"]) <= TH["audio_slack_s"] \
         and adb > TH["audio_rms_db"] and duration_s - 0.15 <= info["duration_s"] <= duration_s + 8.0 / max(1.0, info["fps"] or 8) + 0.1  # LTX 帧数取 8k+1，成片按目标时长裁
