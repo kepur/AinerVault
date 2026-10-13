@@ -191,7 +191,7 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
     res["camera"] = {**cm, "planned": planned_move, "ok": moved if planned_move != "hold" else True}
     adb = audio_rms_db(video) if info["has_audio"] else -120.0
     a_ok = info["has_audio"] and abs(info["audio_duration_s"] - info["duration_s"]) <= TH["audio_slack_s"] \
-        and adb > TH["audio_rms_db"] and duration_s - 0.15 <= info["duration_s"] <= duration_s + 0.6  # LTX 帧数取 8k+1，成片按目标时长裁
+        and adb > TH["audio_rms_db"] and duration_s - 0.15 <= info["duration_s"] <= duration_s + 8.0 / max(1.0, info["fps"] or 8) + 0.1  # LTX 帧数取 8k+1，成片按目标时长裁
     if voice_s is not None:
         a_ok = a_ok and voice_s <= info["duration_s"] + 0.1
     res["audio"] = {"ok": a_ok, "rms_db": adb, "audio_s": info["audio_duration_s"], "video_s": info["duration_s"],
