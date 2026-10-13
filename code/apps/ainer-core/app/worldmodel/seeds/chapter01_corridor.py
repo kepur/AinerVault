@@ -387,6 +387,7 @@ def build(db, *, max_rounds: int = 3, cameras: dict[int, dict] | None = None) ->
 CODEX_RUN_DIR = "AiComicStudio/var/chapter-01/preview-twenty-v3"
 ACTOR_DESC = {"thomas": "the thin black-haired Thomas in a navy sweater vest", "brad": "the stocky green-haired Brad",
               "tyler": "the tall red-haired Tyler in black", "kyle": "the blond Kyle in a navy track jacket"}
+ACTOR_HUE = {"tyler": "red", "brad": "green", "kyle": "blond"}   # qa.HUES 里的标志色 → 身份闸门按白模可见面积缩放
 ACTION_EN = {
     1: "In a 1990s school corridor, three delinquent boys corner the thin black-haired Thomas against the lockers. "
        "The bullies lean in and shift their weight menacingly; Thomas shrinks back.",
@@ -419,7 +420,8 @@ def pipeline_config(db, workflow_root: str) -> dict:
         "frames": {"type": "comic_run", "path": f"{run_dir}/run.json"},
         "voices": {"dir": run_dir, "pattern": "voice-{n:02d}.wav"},
         "frame_w": FRAME_W, "frame_h": FRAME_H,
-        "actors": {k: {**v, "desc": ACTOR_DESC.get(k, k)} for k, v in ACTORS.items()},
+        "actors": {k: {**v, "desc": ACTOR_DESC.get(k, k), **({"hue": ACTOR_HUE[k]} if k in ACTOR_HUE else {})}
+                   for k, v in ACTORS.items()},
         "shots": shots,
         "music": [{"name": "tension", "from_shot": 1, "bpm": 92, "key": "D minor",
                    "prompt": "tense dark cinematic underscore, low strings pulse, muted percussion, menacing, school "

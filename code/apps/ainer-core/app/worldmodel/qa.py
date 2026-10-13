@@ -124,8 +124,29 @@ HUES = {  # 本章人物的标志色：Tyler 红发、Brad 绿发、Kyle 金发�
 }
 
 
-def identity_colors(path: str, min_presence: float = 0.0015) -> dict[str, Any]:
-    """人物身份保持（代理）：首帧里明显存在的标志色，在后半段每帧都不能掉到 60% 以下（人物融化/消失会掉）。"""
+def expected_visibility(greybox: dict | None, hue_of: dict[str, str] | None) -> dict[str, float]:
+    """白模里每个带标志色的人：后半段最小可见框面积 / 第 1 帧面积（人按走位走远/出画时，颜色本来就该变少）。"""
+    if not greybox or not hue_of:
+        return {}
+    out: dict[str, float] = {}
+    for actor, per in (greybox.get("actors") or {}).items():
+        hue = hue_of.get(actor)
+        if not hue or len(per) < 4:
+            continue
+        area = [((s["bbox"][2] - s["bbox"][0]) * (s["bbox"][3] - s["bbox"][1])) if s.get("bbox") else 0.0 for s in per]
+        base = area[1] or area[0]
+        if base <= 0:
+            continue
+        r = min(area[len(area) // 2:]) / base
+        out[hue] = min(out.get(hue, 1e9), r)
+    return out
+
+
+def identity_colors(path: str, min_presence: float = 0.0015, expected: dict[str, float] | None = None) -> dict[str, Any]:
+    """人物身份保持（代理）：首帧里明显存在的标志色，在后半段每帧都不能掉到 60% 以下（人物融化/消失会掉）。
+
+    expected：白模给出的该色人物可见面积比（走远/出画）；门槛按它缩放，低于 0.15 的不判（按走位本来就看不见）。
+    """
     raw = subprocess.run([FFMPEG, "-v", "error", "-i", path, "-vf", f"scale={SMALL[0]}:{SMALL[1]}", "-pix_fmt", "rgb24",
                           "-f", "rawvideo", "-"], capture_output=True, timeout=120).stdout
     fr = np.frombuffer(raw, np.uint8).reshape(-1, SMALL[1], SMALL[0], 3).astype(np.float32)
@@ -139,7 +160,11 @@ def identity_colors(path: str, min_presence: float = 0.0015) -> dict[str, Any]:
             continue
         later = [float(fn(f[..., 0], f[..., 1], f[..., 2]).mean()) / base for f in fr[len(fr) // 2:]]
         out[k] = round(min(later), 3)
-    return {"ok": all(v >= TH["identity"] for v in out.values()), "ratios": out}
+    exp = expected or {}
+    need = {k: TH["identity"] * min(1.0, exp.get(k, 1.0)) for k in out}
+    judged = {k: v for k, v in out.items() if exp.get(k, 1.0) >= 0.15}
+    return {"ok": all(v >= need[k] for k, v in judged.items()), "ratios": out,
+            "expected": {k: round(v, 3) for k, v in exp.items()}}
 
 
 def audio_rms_db(path: str) -> float:
@@ -219,7 +244,7 @@ def camera_gate(cm: dict, planned: str, *, textured: bool = True, reference: dic
 def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mood: str | None, prompt: str,
               first_frame: str | None = None, greybox: dict | None = None, voice_s: float | None = None,
               music_cue: str | None = None, check_first: bool = True,
-              reference_camera: dict | None = None) -> dict[str, Any]:
+              reference_camera: dict | None = None, hue_of: dict[str, str] | None = None) -> dict[str, Any]:
     """一镜全部闸门。greybox：Blender camera.json（每人逐帧 bbox）。"""
     info = probe(video)
     fr = frames_gray(video)
@@ -240,8 +265,10 @@ def gate_shot(video: str, *, kind: str, planned_move: str, duration_s: float, mo
         c = _corr(image_gray(first_frame), fr[0])
         pos["first_frame_corr"] = round(c, 3)
         pos["ok"] = c >= TH["first_corr"]
-    ident = identity_colors(video)
+    ident = identity_colors(video, expected=expected_visibility(greybox, hue_of))
     pos["identity"] = ident["ratios"]
+    if ident.get("expected"):
+        pos["identity_expected"] = ident["expected"]
     pos["ok"] = pos["ok"] and ident["ok"]
     if greybox and kind == "action":
         W, H = greybox["resolution"]

@@ -440,26 +440,28 @@ def generate(ctx: Ctx, s: dict, attempt: int, failed: list[str], history: list[d
     elif strategy == "segments":
         # 短窗口 + 关键帧接力：前半段 layout；取前半段最后一帧（身份仍完好）作后半段首帧，再按后半段白模出
         clay = gb["dir"] / "clay.mp4"
-        info = qa.probe(str(clay))
-        nf = round(info["duration_s"] * s["fps"])
-        half_f = max(9, ((nf // 2 - 1) // 8) * 8 + 1)
-        half_ms = int(half_f / s["fps"] * 1000)
+        fps = s["fps"]
+        nf = int(round(qa.probe(str(clay))["duration_s"] * fps))
+        h = int(math.ceil(max(nf / 2 - 1, 8) / 8) * 8 + 1)              # 前段帧数：≥ 一半的 8k+1
+        r = int(math.ceil(max(nf - h, 8) / 8) * 8 + 1)                  # 后段帧数（含与前段共享的接力帧）
         c1, c2 = sd / f"clay_a{attempt}_1.mp4", sd / f"clay_a{attempt}_2.mp4"
-        ff("-i", str(clay), "-vf", f"select='lt(n\\,{half_f})',setpts=N/FRAME_RATE/TB", "-an", str(c1))
-        ff("-i", str(clay), "-vf", f"select='gte(n\\,{half_f - 1})',setpts=N/FRAME_RATE/TB", "-an", str(c2))
-        p1 = {**inp, "duration_ms": half_ms, "control": {"type": "layout", "video": {"b64": b64(c1)}}}
+        ff("-i", str(clay), "-vf", f"select='lt(n\\,{h})',setpts=N/{fps}/TB", "-r", str(fps), "-an", str(c1))
+        ff("-i", str(clay), "-vf", f"select='gte(n\\,{h - 1})',setpts=N/{fps}/TB,tpad=stop_mode=clone:stop={r}",
+           "-r", str(fps), "-frames:v", str(r), "-an", str(c2))
+        p1 = {**inp, "duration_ms": int(h * 1000 / fps), "control": {"type": "layout", "video": {"b64": b64(c1)}}}
         r1, t1 = _render(ctx, s, p1, key + ":1", sd / f"task_a{attempt}_1.json", sd / f"raw_a{attempt}_1.mp4")
         last = sd / f"key_a{attempt}.png"
-        ff("-sseof", "-0.2", "-i", str(r1), "-frames:v", "1", "-update", "1", str(last))
-        p2 = {**inp, "duration_ms": max(1000, s["dur"] - half_ms + int(1000 / s["fps"])),
-              "first_frame": {"url": ctx.core + publish(last, "png")},
+        ff("-i", str(r1), "-vf", f"select='eq(n\\,{h - 1})'", "-frames:v", "1", str(last))
+        p2 = {**inp, "duration_ms": int(r * 1000 / fps), "first_frame": {"url": ctx.core + publish(last, "png")},
               "control": {"type": "layout", "video": {"b64": b64(c2)}}, "params": {"seed": seed + 5, "stage2_steps": 2}}
         r2, t2 = _render(ctx, s, p2, key + ":2", sd / f"task_a{attempt}_2.json", sd / f"raw_a{attempt}_2.mp4")
         raw = sd / f"raw_a{attempt}.mp4"
+        dur = nf / fps
         ff("-i", str(r1), "-i", str(r2), "-filter_complex",
-           "[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[v2];[1:a]atrim=start=" + f"{1 / s['fps']:.4f}" + ",asetpts=PTS-STARTPTS[a2];"
-           "[0:v][0:a][v2][a2]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
-           "-pix_fmt", "yuv420p", "-c:a", "aac", str(raw))
+           f"[0:v]fps={fps},trim=end_frame={h},setpts=N/{fps}/TB[v1];[1:v]fps={fps},trim=start_frame=1,setpts=N/{fps}/TB[v2];"
+           f"[0:a]atrim=duration={h / fps:.4f},asetpts=PTS-STARTPTS[a1];[1:a]atrim=start={1 / fps:.4f},asetpts=PTS-STARTPTS[a2];"
+           f"[v1][a1][v2][a2]concat=n=2:v=1:a=1[vv][aa];[vv]trim=end_frame={nf}[v];[aa]atrim=duration={dur:.4f}[a]",
+           "-map", "[v]", "-map", "[a]", "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(raw))
         task_ids += [t1, t2]
         post.append("keyframe_relay_2_segments")
         route = "greybox:ltx25_layout x2 (keyframe relay)"
@@ -555,7 +557,8 @@ def gate(ctx: Ctx, s: dict, a: dict) -> dict:
     return qa.gate_shot(a["video"], kind=s["kind"], planned_move=s["move"]["type"], duration_s=s["dur"] / 1000,
                         mood=s.get("mood"), prompt=a["prompt"],
                         first_frame=str(media_path(frame["url"])) if frame.get("url") else None,
-                        greybox=gbj, voice_s=vs, music_cue=music_cue_for(ctx, s), reference_camera=ref)
+                        greybox=gbj, voice_s=vs, music_cue=music_cue_for(ctx, s), reference_camera=ref,
+                        hue_of={a: m["hue"] for a, m in ctx.cfg["actors"].items() if m.get("hue")})
 
 
 def _score(q: dict) -> tuple:
