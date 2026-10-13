@@ -64,7 +64,7 @@ MOOD_TEXT = {
 }
 DEFAULTS = {"max_retry": 2, "max_check_rounds": 2, "resolution": [640, 384], "close_resolution": [384, 256],
             "fit_max_error": 0.08, "keep_designed_if_error_below": 0.012, "az_window_deg": 70,
-            "fallback_to_original": True, "music_gain": 0.22, "room_tone_db": -34,
+            "fallback_to_original": True, "music_gain": 0.22, "room_tone_db": -20,
             # 只有这些镜头类型走白模；对白/内心/反应镜头直接用原管线的面部安全版（清晰脸 + 嘴型同步）
             "greybox_kinds": ["action"]}
 
