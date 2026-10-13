@@ -394,7 +394,10 @@ def strategy_for(s: dict, attempt: int, history: list[dict]) -> str:
     identity_fail = any("positions" in (h.get("qa") or {}).get("failed", []) for h in history)
     if attempt == 0 or not identity_fail:
         return "layout"
-    return "union" if attempt == 1 else "segments"
+    used = {h.get("strategy") for h in history}
+    if "union" not in used:
+        return "union"
+    return "segments"
 
 
 def _render(ctx: Ctx, s: dict, inp: dict, key: str, ckpt: Path, dst: Path) -> tuple[Path, str]:
