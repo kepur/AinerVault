@@ -599,7 +599,10 @@ def _face_safe_shot(ctx: Ctx, n: int):
 
 
 def dialogue_greybox(ctx: Ctx, s: dict, attempt: int) -> dict:
-    """人脸卡首帧 + 调速配音 A2V（白模骨架控制）→ 本地嘴型合成。"""
+    """人脸卡首帧 + 白模骨架控制 i2v（身体/头部姿态）→ 调速配音 + 本地嘴型合成。
+
+    网关的 a2v 管线不接受 control（IC-LoRA），所以“配音驱动”与“白模控制”不能在同一次推理里；
+    这里身体走骨架控制，口型完全由 Rhubarb 嘴型贴片提供（原管线对白镜最终画面的嘴也是这层贴片）。"""
     from app.worldmodel.dialogue_route import dur as adur, mouth_pass
     n = s["n"]
     fs = _face_safe_shot(ctx, n)
@@ -616,15 +619,15 @@ def dialogue_greybox(ctx: Ctx, s: dict, attempt: int) -> dict:
     prompt = (f"{ctx.cfg.get('style_prompt', '')} Close-up. {who} faces the camera, head and shoulders follow the pose driver; "
               f"body language matches the scene. {line} Everyone else holds still.").strip()
     inp = {"prompt": prompt, "first_frame": {"url": ctx.core + fs.frame["url"]}, "width": 384, "height": 256, "fps": 8,
-           "duration_ms": body_ms, "motion": "animate", "audio": {"mode": "drive", "track": {"b64": b64(fs.voice)}},
+           "duration_ms": body_ms, "motion": "animate", "audio": {"mode": "generate"},   # 网关：a2v 不能叠加 control → 身体走骨架控制 i2v，嘴型/声音由嘴型合成提供
            "control": {"type": "union", "videos": {"pose": {"b64": b64(pose)}}, "strengths": {"pose": ctx.cfg.get("dialogue_pose_strength", 0.5)}},
            "params": {"seed": int(ctx.cfg.get("seed_base", 31000)) + n * 10 + 500 + attempt, "stage2_steps": 2}}
     key = f"{ctx.cfg.get('key_prefix', 'wg')}:s{n:02d}:dlg{attempt}"
-    ctx.log(f"shot {n} dialogue-greybox attempt {attempt}: a2v+pose 384x256@8 {body_ms}ms")
+    ctx.log(f"shot {n} dialogue-greybox attempt {attempt}: i2v+pose (voice via cel-mouth pass) 384x256@8 {body_ms}ms")
     raw, tid = _render(ctx, s, inp, key, sd / "task.json", sd / "body.mp4")
     out = mouth_pass(raw, fs.voice, fs, sd / "mouth")
     return {"video": str(out), "body": str(raw), "task_id": tid, "greybox_dir": str(gb["dir"]), "voice": str(fs.voice),
-            "ref_face": str(MEDIA / Path(fs.ref_face_url).name), "route": "greybox:dialogue_a2v+pose+cel_mouth"}
+            "ref_face": str(MEDIA / Path(fs.ref_face_url).name), "route": "greybox:dialogue_i2v+pose+cel_mouth"}
 
 
 def ab_decide(m: dict) -> dict:
