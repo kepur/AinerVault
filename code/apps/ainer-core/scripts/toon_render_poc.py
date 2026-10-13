@@ -246,4 +246,5 @@ def main():
     json.dump(info, open(os.path.join(OUT, "timing.json"), "w"), indent=1)
     print("TOON_DONE", json.dumps(info), flush=True)
 
-main()
+if __name__ == "__main__":
+    main()
