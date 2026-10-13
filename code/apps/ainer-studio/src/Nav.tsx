@@ -8,7 +8,7 @@
  */
 import { readCtx, type CtxPatch } from "./ctx";
 
-export type View = "canvas" | "flow" | "box" | "characters" | "styles" | "translation" | "comic" | "comic-assets" | "hub";
+export type View = "canvas" | "flow" | "box" | "characters" | "styles" | "translation" | "comic" | "comic-assets" | "hub" | "world";
 export type Stage = "a" | "b" | "c" | "d";
 
 export const VIEWS: { id: View; label: string }[] = [
@@ -17,6 +17,7 @@ export const VIEWS: { id: View; label: string }[] = [
   { id: "canvas", label: "分镜管理" },
   { id: "flow", label: "无限画布" },
   { id: "box", label: "3D-BOX 预演" },
+  { id: "world", label: "World / Greybox（可选）" },
   { id: "characters", label: "角色库" },
   { id: "styles", label: "风格广场" },
   { id: "comic", label: "动态漫剧" },
@@ -36,7 +37,7 @@ export interface StageDef {
 export const STAGES: StageDef[] = [
   { id: "a", label: "故事与翻译", hint: "原文、文化映射、译文对照与定稿", views: ["translation"], adminPage: "chapter" },
   { id: "b", label: "角色与素材", hint: "角色、道具、地点、造型与标准素材", views: ["characters", "styles"] },
-  { id: "c", label: "画布与导演", hint: "自由创作、舞台、机位与章节分镜", views: ["flow", "canvas", "box"] },
+  { id: "c", label: "画布与导演", hint: "自由创作、舞台、机位与章节分镜", views: ["flow", "canvas", "box", "world"] },
   { id: "d", label: "漫剧与成片", hint: "声音优先、镜头路由、2D 合成与导出", views: ["comic"], adminPage: "handoff" },
 ];
 
@@ -44,7 +45,7 @@ const STAGE_OF: Record<View, Stage> = {
   hub: "a",
   translation: "a", comic: "d", "comic-assets": "b",
   characters: "b", styles: "b",
-  canvas: "c", flow: "c", box: "c",
+  canvas: "c", flow: "c", box: "c", world: "c",
 };
 
 /** 没写 stage 时按当前面板反推，保证旧链接落在对的阶段 */

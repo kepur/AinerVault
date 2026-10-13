@@ -1,0 +1,32 @@
+.wg-panel{display:flex;flex-direction:column;height:100%;min-height:0;padding:16px 20px;gap:12px;color:var(--cv-text,#eee);background:var(--cv-bg,#111318)}
+.wg-panel>header{display:flex;gap:24px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.wg-panel h2{font-size:18px;margin:2px 0}.wg-panel h2 span{font-size:12px;color:var(--cv-muted,#999);margin-left:8px}
+.wg-optin{display:flex;flex-direction:column;gap:4px;font-size:13px;max-width:520px}.wg-optin small{color:var(--cv-muted,#999)}
+.wg-warn{color:#e8c547}.wg-err{color:var(--cv-danger,#fc7777);font-size:12px}
+.wg-empty{padding:40px 10px;color:var(--cv-muted,#999);font-size:13px}
+.wg-body{display:grid;grid-template-columns:minmax(320px,680px) 1fr;gap:16px;min-height:0;flex:1}
+.wg-body>aside{display:flex;flex-direction:column;gap:10px;overflow:auto;min-height:0}
+.wg-runs,.wg-perfs{display:flex;flex-direction:column;gap:6px}
+.wg-runs button,.wg-perfs button{text-align:left;padding:8px 10px;border-radius:10px;border:1px solid var(--cv-line,#393b44);background:#0c0e13;color:inherit;cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.wg-runs button.on,.wg-perfs button.on{border-color:#4c8dff}
+.wg-runs small{color:var(--cv-muted,#999);font-size:11px}
+.wg-run-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px}
+.wg-map{width:100%;background:#0c0e13;border-radius:12px;border:1px solid var(--cv-line,#393b44)}
+.wg-region{fill:#171a22;stroke:#5a6070}.wg-chunk{fill:none;stroke:#2a2f3a;stroke-dasharray:3 3}
+.wg-inst{fill:#3a3f4c;stroke:#6b7180}.wg-inst.soft{fill:none;stroke-dasharray:4 2}
+.wg-landmark{fill:#e8c547}.wg-track{fill:none;stroke-width:2.5}.wg-track.faint{stroke-width:1;opacity:.35}
+.wg-map text{font-size:11px}.wg-cam circle{fill:#fff}.wg-cam line{stroke:#fff;stroke-width:1.5}
+.wg-shots{overflow:auto;min-height:0;display:flex;flex-direction:column;gap:10px;padding-right:4px}
+.wg-shot{border:1px solid var(--cv-line,#393b44);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.wg-shot.fallback{border-color:#7a6a2a}
+.wg-shot-title{display:flex;justify-content:space-between;gap:10px;font-size:13px}.wg-shot-title small{color:var(--cv-muted,#999)}
+.wg-badges{display:flex;gap:6px;flex-wrap:wrap}
+.wg-badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid}
+.wg-badge.ok{color:#3ec46d;border-color:#3ec46d55}.wg-badge.bad{color:#ef5b5b;border-color:#ef5b5b55}.wg-badge.na{color:#999;border-color:#5555}
+.wg-media{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.wg-media figure{margin:0;background:#0c0e13;border:1px solid var(--cv-line,#393b44);border-radius:10px;overflow:hidden}
+.wg-media video{display:block;width:100%;height:120px;object-fit:contain;background:#000}
+.wg-media figcaption{font-size:11px;padding:4px 6px;color:var(--cv-muted,#999)}
+.wg-shot>small{font-size:11px;color:var(--cv-muted,#999)}
+.wg-actions{display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:1000px){.wg-body{grid-template-columns:1fr}.wg-media{grid-template-columns:1fr 1fr}}

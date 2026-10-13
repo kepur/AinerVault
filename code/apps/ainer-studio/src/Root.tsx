@@ -14,6 +14,8 @@ const Plaza = lazy(() => import("./library/Plaza"));
 const CreativeCanvas = lazy(() => import("./canvas"));
 const Translation = lazy(() => import("./workbench/Translation"));
 const ComicAssets = lazy(() => import("./workbench/ComicAssets"));
+// World / Greybox：可选的 world-greybox 闭环（默认关），逐镜对比原管线与 greybox
+const WorldPanel = lazy(() => import("./world/WorldPanel"));
 
 function ScopedBoxEditor({id,onBack,backLabel}:{id:string;onBack:()=>void;backLabel?:string}) {
   const [state,setState]=useState<{ready:boolean;error:string}>({ready:false,error:''});
@@ -113,6 +115,7 @@ export default function Root() {
         {view === "styles" && <Plaza />}
         {view === "translation" && <Translation />}
         {view === "comic-assets" && <ComicAssets />}
+        {view === "world" && <WorldPanel />}
       </Suspense></WorkbenchBoundary>
     </StudioShell>
   );
