@@ -45,3 +45,17 @@
 - NarrativeIR 事件层；WorldDelta 由 LLM 按章节自动提议（当前为结构 + 手工/脚本提议）。
 - 打斗动作外部服务（GVHMR/InterMask）与重定向。
 - UE5 单向导出（`director/ue_worker` 仍为 mock，开关关）。
+
+## R5 — dialogue two-pass anchor route A/B (2026-10-13)
+
+Route: `dialogue_route="two_pass_anchors"` (opt-in, needs `dialogue_greybox`; `world_greybox_enabled` stays false). Gateway runs a greybox IC-LoRA pre-pass,
+pulls anchor frames every 8 frames (≈1 s at 8 fps), then runs a2v driven by the retimed Codex voice. The face card first frame, 384×256 @ 8 fps and duration are kept.
+Shots 2/8/13/15 × anchor_strength_mid 0.4/0.6/0.8 × {native a2v mouth, + Rhubarb cel mouth}. Gateway reported `via=anchors` (pipeline a2v_control_anchored).
+
+**Verdict: not adopted on any shot.** 0/24 candidates passed. Face sharpness fell 2–20×, CLIP identity dropped from ~0.86 to 0.49–0.72, and lip-sync corr came in below Codex.
+The cause is in the gateway: its pre-pass runs from the prompt alone, without the first frame or reference, so the mid anchors (even at 0.4) bring in a different, photoreal person.
+The face card only survives frame 0. The dialogue greybox clay is also a back/OTS framing, not a face close-up, so "matching the greybox" competes with the face-safe close-up.
+Fix needed upstream: condition the pre-pass on first_frame (or reference_sheet), or derive anchors by warping the face card. Re-test with the same harness after that.
+
+Harness: `python code/apps/ainer-core/scripts/world_dialogue_twopass_ab.py <run_dir> --shots 2,8,13,15 --mids 0.6,0.4,0.8` (resumable, DB-free).
+Results: `var/world_greybox/runs/wpr_01M4SXHWJKKKH7JZZMKQTPPBP6/ab_2p/metrics_table.md`, sheets `var/world_greybox/runs/wpr_01M4SXHWJKKKH7JZZMKQTPPBP6/ab_2p/shotNN_mXX_codex_vs_2p.png`, side-by-side `var/world_greybox/runs/wpr_01M4SXHWJKKKH7JZZMKQTPPBP6/ab_2p/shotNN_mXX_sbs.mp4`.
