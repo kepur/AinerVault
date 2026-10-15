@@ -1,0 +1,31 @@
+{
+  "scope": "lexical JSON Pointer token audit; ~ may be followed only by 0 or 1",
+  "rule": "^(?:/(?:[^~/]|~[01])*)*$",
+  "cases": [
+    {
+      "value": "",
+      "valid_under_pointer_token_rule": true
+    },
+    {
+      "value": "/curves/0",
+      "valid_under_pointer_token_rule": true
+    },
+    {
+      "value": "/a~0b/~1escaped",
+      "valid_under_pointer_token_rule": true
+    },
+    {
+      "value": "/bad~2escape",
+      "valid_under_pointer_token_rule": false
+    },
+    {
+      "value": "/bad~",
+      "valid_under_pointer_token_rule": false
+    },
+    {
+      "value": "curves/0",
+      "valid_under_pointer_token_rule": false
+    }
+  ],
+  "optional_format_checker_probe": "Installed jsonschema has no json-pointer checker; no package installed. FormatChecker unknown-format success is not evidence."
+}

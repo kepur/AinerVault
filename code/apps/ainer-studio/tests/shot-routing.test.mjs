@@ -2,11 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {resolveShotRoute,shotRouteInput,shotRouteIssue} from '../src/workbench/shotRouting.ts';
 
-const plan={route:'dialogue_a2v',fps:4,estimated_s:66,label:'对白',reason:'有对白',dialogue_lines:1,card_layout:true,
+const plan={route:'dialogue_a2v',fps:8,estimated_s:66,label:'对白',reason:'有对白',dialogue_lines:1,card_layout:true,
   actors:[],cast:[{entity_id:'t',name:'Tyler'},{entity_id:'m',name:'Thomas'}],
-  routes:{dialogue_a2v:{label:'对白',fps:4,est_s:66},layer_foley:{label:'图层',fps:8,est_s:35},ltx25_action:{label:'整画面',fps:8,est_s:76},ltx25_layout:{label:'白模',fps:8,est_s:127}}};
-test('default dialogue delegates fps to engine and shows its actual 4 fps',()=>{
-  assert.equal(resolveShotRoute(plan,{route:'auto',fps:null}).fps,4);
+  routes:{dialogue_a2v:{label:'对白',fps:8,est_s:66},layer_foley:{label:'图层',fps:8,est_s:35},ltx25_action:{label:'整画面',fps:8,est_s:76},ltx25_layout:{label:'白模',fps:8,est_s:127}}};
+test('default dialogue delegates fps to engine and shows its actual 8 fps',()=>{
+  assert.equal(resolveShotRoute(plan,{route:'auto',fps:null}).fps,8);
   const input=shotRouteInput('p','f',plan,{route:'auto',fps:null});
   assert.equal(input.fps,null);assert.equal(input.route,'auto');assert.equal(input.frame_asset_id,'f');
 });
@@ -52,7 +52,7 @@ test('layer and layout routes reject a non-card first frame',()=>{
 
 const qualityPlan={...plan,quality_profiles:{preview:{label:'预览',width:640,height:384},standard:{label:'清晰',width:960,height:576},high:{label:'高清',width:1280,height:768}}};
 test('clarity survives the actual render payload independently of frame rate',()=>{
-  assert.equal(shotRouteInput('p','f',qualityPlan,{fps:4}).quality,'preview');
+  assert.equal(shotRouteInput('p','f',qualityPlan,{fps:8}).quality,'preview');
   const input=shotRouteInput('p','f',qualityPlan,{quality:'high',fps:12});
   assert.equal(input.quality,'high');assert.equal(input.fps,12);
   assert.equal('quality' in shotRouteInput('p','f',plan,{}),false);

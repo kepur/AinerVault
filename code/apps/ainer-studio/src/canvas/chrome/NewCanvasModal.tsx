@@ -68,10 +68,10 @@ const PRESETS: PresetIdea[] = [
   },
 ];
 
-export function NewCanvasModal({ onClose }: { onClose: () => void }) {
+export function NewCanvasModal({ onClose, initialTab = "blank" }: { onClose: () => void; initialTab?: Tab }) {
   const s = useCanvas();
   const latest = useLatest(s);
-  const [tab, setTab] = useState<Tab>("blank");
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   /* ── 空白画布表单 ── */
   const [blankTitle, setBlankTitle] = useState("");
@@ -217,8 +217,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
               onClick={() => setTab("idea")}
             >
               <Icon name="sparkle" size={14} />
-              <span>AI 辅助规划（可选）</span>
-              <span className="cv-new">DAG</span>
+              <span>从想法生成整张画布</span>
             </button>
           </div>
           <button type="button" className="cv-newcanvas-close" onClick={onClose} title="关闭 (Esc)">
@@ -229,7 +228,7 @@ export function NewCanvasModal({ onClose }: { onClose: () => void }) {
         {tab === "idea" ? (
           <div className="cv-newcanvas-body">
             <div className="cv-newcanvas-tip">
-              从提供的<b>有限基础素材</b>（人物照片、可选服装和场景底图）出发，由本机大模型自动拆解摄影机调度与首尾衔接，铺设纳逗/钟馗式 <b>DAG 分镜生成网络</b>。
+              一张人物照片＋一句想法（服装照、场景图可选）：本机大模型拆好分镜，把定妆照、场景、分镜图、视频、成片<b>全部摆成画布上的节点</b>。每一步的提示词和参考都能改，改哪一步就从哪一步重出。
             </div>
 
             {/* 快速预设按钮组 */}

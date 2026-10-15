@@ -1,0 +1,65 @@
+{
+  "scope": "structure only; semantic validator not implemented",
+  "checks": [
+    {
+      "case": "positive_0",
+      "pass": true
+    },
+    {
+      "case": "positive_1",
+      "pass": true
+    },
+    {
+      "case": "positive_2",
+      "pass": true
+    },
+    {
+      "case": "positive_3",
+      "pass": true
+    },
+    {
+      "case": "positive_4",
+      "pass": true
+    },
+    {
+      "case": "positive_5",
+      "pass": true
+    },
+    {
+      "case": "positive_6",
+      "pass": true
+    },
+    {
+      "case": "positive_7",
+      "pass": true
+    },
+    {
+      "case": "missing_audio_sample_rate",
+      "pass": true
+    },
+    {
+      "case": "missing_audio_offset_samples",
+      "pass": true
+    },
+    {
+      "case": "missing_audio_sha256",
+      "pass": true
+    },
+    {
+      "case": "missing_audio_alignment",
+      "pass": true
+    },
+    {
+      "case": "aligned_without_provenance",
+      "pass": true
+    },
+    {
+      "case": "unknown_error",
+      "pass": true
+    },
+    {
+      "case": "empty_errors",
+      "pass": true
+    }
+  ]
+}

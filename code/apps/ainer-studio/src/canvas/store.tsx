@@ -75,8 +75,6 @@ const GROUP_HEAD = 28;
 const GROUP_SIZE = { w: 520, h: 360 };
 /** 自动命名（纳逗式「图片 13」「分组 4」） */
 const TITLE_PREFIX: Record<NodeKind, string> = { stage: "舞台", coverage: "镜头", image: "图片", video: "视频", audio: "音频", text: "文本", group: "分组", box3d: "白模" };
-/** 复制出来的节点相对原节点往右下错开多少 */
-const COPY_OFFSET = 40;
 
 /** 默认打开哪张：第一张场次画布（整章总览镜头多，留给需要看全局的时候）；没有就整章总览 */
 function defaultBoard(list: CanvasMeta[]): CanvasMeta | null {
@@ -1027,6 +1025,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       }
       const taken = new Set(nodesRef.current.map(n => n.data.title));
       const wantIds = new Set(want.map(n => n.id));
+      // 拷贝放在原件右边、整体错开一个选区宽度（纳逗「图片 2 拷贝 1」就挨在原图旁边）。
+      // 以前只往右下错开 40px，拷贝几乎盖住原件，看起来像没复制、又分不清哪张是哪张
+      const wOf = (n: CNode) => n.measured?.width ?? n.width ?? 240;
+      const tops = want.filter(n => !n.parentId);
+      const spanX = tops.length ? Math.max(...tops.map(n => n.position.x + wOf(n))) - Math.min(...tops.map(n => n.position.x)) : 0;
       for (const { from, node } of made) {
         const d = node.data;
         if (d.recipe) d.recipe = remapRecipe(d.recipe, idMap);
@@ -1039,7 +1042,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
           node.expandParent = true;
         } else {
           if (from.parentId) { node.parentId = from.parentId; node.expandParent = true; }
-          node.position = { x: from.position.x + COPY_OFFSET, y: from.position.y + COPY_OFFSET };
+          const dx = from.parentId ? wOf(from) + 24 : Math.max(spanX, wOf(from)) + 48;
+          node.position = { x: from.position.x + dx, y: from.position.y };
         }
         if (from.type === "group") {
           node.width = from.width ?? from.measured?.width ?? GROUP_SIZE.w;
@@ -1773,7 +1777,16 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         let saved = rec.version ? validDoc(rec.doc) : null;
         const context=readCtx();
         if(context.medium==='comic'&&(!saved?.production||(context.production&&saved.production.id!==context.production)))throw new Error('正在切换到当前漫剧项目的独立画布');
-        if(context.medium!=='comic'&&saved?.production)throw new Error('这张画布属于动态漫画，请先切换制作类型');
+        // 链接打开的画布不属于当前空间/制作类型：直接切过去（换 workspace/medium 会整块重挂画布，按新地址再载入一次），
+        // 不再报错让用户自己去找开关 —— 那是死胡同
+        if(context.medium!=='comic'&&saved?.production){
+          writeCtx({workspace:'novel',medium:'comic',novel:rec.novel_id??null,chapter:rec.chapter_id??null,production:saved.production.id,canvas:rec.id});
+          return;
+        }
+        if(context.workspace==='free'&&(rec.novel_id||rec.chapter_id||rec.plan_id)){
+          writeCtx({workspace:'novel',novel:rec.novel_id??null,chapter:rec.chapter_id??null,plan:rec.plan_id??null,canvas:rec.id});
+          return;
+        }
         if(!new URLSearchParams(location.search).has('workspace')&&!rec.novel_id)writeCtx({workspace:'free'});
         const plan = rec.plan_id ?? "";
         const chap = rec.chapter_id || "";
@@ -1786,7 +1799,6 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         r.versions.set(boardId, rec.version);
         r.local = false;
         setMeta(rec);
-        if(readCtx().workspace==='free'&&(rec.novel_id||rec.chapter_id||rec.plan_id))throw new Error('这是小说制作画布，请在小说空间打开');
         setNovelId(rec.novel_id ?? "");
         setChapterId(rec.chapter_id ?? "");
         setPlanId(rec.plan_id ?? "");
@@ -2051,6 +2063,22 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         e.preventDefault();
         setNodes(nodesRef.current.map(n => (n.selected ? n : { ...n, selected: true })));
         bump();
+        return;
+      }
+      // 纳逗/Figma 的手感：⌘D 复制、⌘G 编组、⇧⌘G 解散 —— 以前只能右键找，菜单里有、键盘上没有
+      if (mod && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        const ids = nodesRef.current.filter(n => n.selected).map(n => n.id);
+        if (ids.length) duplicate(ids);
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          for (const n of nodesRef.current.filter(x => x.selected && x.type === "group")) ungroup(n.id);
+        } else {
+          groupSelected();
+        }
         return;
       }
       if (mod || e.altKey) return;

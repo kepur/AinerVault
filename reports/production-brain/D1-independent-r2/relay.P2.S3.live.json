@@ -1,0 +1,342 @@
+{
+  "id": "relay.P2.S3",
+  "project_id": "relay",
+  "track_id": "relay.P2.S",
+  "seq": 3,
+  "title": "【只读】独立审议7份一级设计并释放下游",
+  "kind": "verify",
+  "tier": 2,
+  "status": "accepted",
+  "prompt": "独立审议codex本轮7份一级设计：awz.P3.E3/F1/R2、relay.P2.A1、forge.F1.C1、hub.P1.C1/D1。你不能是这些提议的作者或实现者；只写reports/V-tier1-design-bundle-20261015/。先读各项目AGENTS/入口和任务完整prompt/acceptance，再读实际交付、来源文件与contracts草案、原报告；来源清单在reports/coordination/codex-lead-20261015-172550/。逐任务分别建议accept/reject和具体缺口，不预设通过、不改产品、不自动accept。只读源码核权威/接口/参数来源、例子与schema、精确哈希/预算/暂停边界，区分设计目标和现已实现能力。R2许可结论只核流程与已引用原文，不替用户给具体目标授权。E3的持久操作语义/双版本/混合提交禁止/快照历史缺口/逆操作限制；A1swap和内存实际源码、C1GRU偏置映射与随机数/梯度等价限制；C1审片与D1时间曲线/单一控制者/占位unsupported须仔细核。可做新临时目录中的结构核验，零模型/GPU/下载/安装/付费/生产写入/提交推送/删除；不重跑或覆盖旧报告。每项给完整SHA及成立/不成立/未验证，完成report不next。\n",
+  "params": {},
+  "params_version": 0,
+  "acceptance": "",
+  "context_files": [],
+  "file_scope": [
+    "reports/V-tier1-design-bundle-20261015/"
+  ],
+  "depends_on": [
+    "awz.P3.E3",
+    "awz.P3.F1",
+    "awz.P3.R2",
+    "relay.P2.A1",
+    "forge.F1.C1",
+    "hub.P1.C1",
+    "hub.P1.D1"
+  ],
+  "verifies": [
+    "awz.P3.E3",
+    "awz.P3.F1",
+    "awz.P3.R2",
+    "relay.P2.A1",
+    "forge.F1.C1",
+    "hub.P1.C1",
+    "hub.P1.D1"
+  ],
+  "needs_gpu": false,
+  "dedupe_key": "tier1-bundle-independent-review-20261015",
+  "max_attempts": 3,
+  "attempts": 0,
+  "assignee": "grokbot-k7q2",
+  "author": "grokbot-k7q2",
+  "lease_until": null,
+  "lease_s": 1200,
+  "progress": null,
+  "last_message": "结构核验与源码SHA完成，开始写报告",
+  "result": "# relay.P2.S3 独立审议（grokbot-k7q2，2026-10-15 18:3x +03）\n审议者不是这 7 项的作者或实现者（作者/执行者均为 codex）。只读，未改产品，未自动 accept。\n产物 SHA：13/13 与 output-identities.json 一致（下表）；evidence.json 12 个来源文件 SHA/字节 12/12 一致。\n结构核验：临时目录 /var/folders/zv/vypfm1y977x338zzyccqx3br0000gn/T/s3-struct-hy8dpti6（本机没有 jsonschema，也未安装，只做了手写字段/顺序检查；结果 13/13 见 grokbot-k7q2-structure_checks.json）。schema 层面的拒绝能力（$schema 元校验）我**未验证**。\n\n| 任务 | 建议 | 主要结论 |\n|---|---|---|\n| awz.P3.E3 | accept（附缺口） | 已核成立：Hub service.py 的 9 个 op 和 from_key/to_key 名称；没有 remove_region/asset/fact、unlock_region，所以“持久逆操作受限”成立；_touched_region_keys 只覆盖 move/remove/add_instance/add_landmark，成立；snapshot 中 assets 没有按版本过滤、chunks 只取当前 rev、world 内含 current_version，“快照历史缺口”成立；apply_delta 有 base_version 比较、begin_nested、WorldVersion、mark_stale_takes，成立（并发原子性未验证，与原报告说法一致）。schema 用 oneOf + additionalProperties:false 禁止两族混合，持久族限定 class=world，成立。缺口：①golden_cases.json 只有 8 例，文档 §6 列了 14 例（缺 move_instance 版本+1、仅改相机、token 换人/过期、下标漂移/越类别、changed_past、未覆盖 op 保守 stale）；②持久族的 base 也强制要求 scene_id/revision，和“持久变更不动 revision”的语义不清；③preview_token 和 receipt 没有 schema。 |\n| awz.P3.F1 | accept | 五项用途分开判断、reference 不能推出 train/商用、CC-BY/付费/研究特批都标为未批准，现行自产/CC0 不变：都成立。这份是纯设计，没有源码需要核对。缺口：记录字段和结构化规则还没有 schema 草案，留给实现卡。 |\n| awz.P3.R2 | accept | 流程、三方分离、证据和模板已核，完整；用户决定权和 pending 不执行的写法成立；没有对具体目标放行，也没有安装 REA，成立。引用的 MIT/Apache/GPL-3.0 原文链接，我未联网复核：**未验证**。我不替用户给任何具体目标授权。 |\n| relay.P2.A1 | accept（附缺口） | 已核成立：memory_worker 在 1402/2829 行记录 initial_swap，判断条件为“增量 > swap_growth_gib×2^30”；config.py 的 swap_sample_seconds/swap_growth_samples 在 src 中没有任何使用者，“不误称 10 秒×3”成立；pilot.yaml 为 8/8，brain0.yaml 为 16/64，成立；gpu.py 的 LTX 用 pgrep 判重型、m0 锁用 lsof 只观察，成立；任务 params_version=5，值与 arbiter-params.json 一致。缺口：①“约每秒检查”的循环间隔我没核：**未验证**；②relay.P2.A2 的 params 仍是 {}（v4），A2 执行者需要显式引用 A1 的 v5；③卡片 §52 写“50 GB”，参数写 50 GiB，单位不一致；④registration 标签“P2-A1-v1”和 params_version 5 叫法容易混。 |\n| forge.F1.C1 | accept | 已核成立：pilot_model._GRUCell 为 r=σ(xr+hr)、z=σ(xg+hg)、n=tanh(xn+r·(hn+bhn))、h'=(1−z)n+zh，b 加在 x 侧，Wx/Wh 按 r,z,n 排列。与 PyTorch 公式对照后，映射 b→bias_ih、bhn→bias_hh 的 n 段、r/z 段固定为 0 在前向上成立；文档写明“不等于训练/梯度等价，需冻结 r/z 隐偏置并定义优化器状态映射”，这个限制写法正确。我用 AST 独立复算 MLX 导入文件数为 20，“纠正单模块旧说法”成立。PyTorch 2.14 文档链接未打开：**未验证**。数值/梯度对齐：**未验证**（按要求不运行）。 |\n| hub.P1.C1 | accept | 硬约束和成对偏好分开、证据缺失记为未验证、评价器换版要对同一基线、时间单位三选一且左闭右开、执行数据先于视觉判断、盲评揭盲顺序：都成立。缺口：issue 记录没有 schema；严重度到修改类别的路由没有例子。 |\n| hub.P1.D1 | reject（小修） | 已核成立：binding 中 sim_hz=120；6 个示例（3 组请求/响应）的阶段边界都有序且在 0–600 内；controller_ref 都是 pending:D5，mapping_status 为 pending_D5，execution_status 为 unsupported；mouth 因缺音频列为 unsupported；ones/twos/threes 写成按 fps 保持取样，成立。**文档和 schema 不一致**：①文档要求 owner_kind/owner_id，schema 用的是 owner{kind,id,authorization_ref}（可以接受，但要统一）；②文档要求音频按 sample_rate 换算，schema 里没有 sample_rate 字段，只有 audio_ref；③文档列出的 10 个错误码（含 control_conflict、lock_conflict、changed_past）在 schema 中一个都没有，也没有错误响应结构；④单一控制者/重叠拒绝无法靠 schema 表达，只能语义层实现，文档要写明。补齐 ②③ 后可以 accept。 |\n\n## 产物 SHA256（完整，全部与登记一致）\n- E3 WORLD_CHANGE_PROTOCOL.md bbeb501283a6afb52f407e3c1e0a732ca7a7a47a9ac081392b1cb0d631e93d90\n- E3 world_change.schema.json e43256456e83e278283e7feb4096e99f00749aad8c797376ef23921d5ef5d354\n- E3 golden_cases.json 5a04773fc6a5dc072ea658336474fdf10514f767b2c4982df8b5ea6e80771eff\n- F1 ASSET_HUB_V0.md 7c149e577cde4a9943ab0e0703451c9b8ed5bf678d2d5bcd67814e93ea9ee6a7\n- R2 CLEAN_ROOM_AND_LICENSE.md 82add70b490a43afc4ac83b7960bbbe7745eda612a5e7ce278e2ca64f1c69c37\n- R2 license_review.md 74fbb85ea64af6c205aa641583dd616dd35fc4808560d433adae251bc5807f5f\n- R2 behavior_spec.md 384e3e575f60994c7f1d237974d908304d5bc5fcd8fa02df2677bcd6491310ee\n- A1 v8-upgrade-task-cards-20261015.md c5f1bbffd8151f858839c91d0ce6b73a1b9f63c02a1fb64ce82ee17cbedd8241\n- A1 arbiter-params.json d0fbb5e3a149e83e92d68d7547d23ff2a90f7df54bf8e82f1ab4421340894773\n- C1(forge) TRAINING_BACKENDS.md ccc9f1fe5dd55bf7c1a0d76d51b5bdb81d89db6b75d34eb868c8cd7abdebe5df\n- C1(hub) review_standard_v0.md 6ae005b5aa94c78518233c4a566daa1dfec224156c972a69c072b9cd26dfc71e\n- D1 performance_interface_v0.md e251d79c42e4152a284e9d2249d5684248fc21b2c76b7b0d21a616595df70591\n- D1 performance_interface_v0.schema.json 2e3b6546ccb74c068e25cee8d7fb8532973ef98765ff8e21135fcbb64fd97676\n- 核对用的来源：service.py 5e35aac97a6bd8c424d6ae9805ce1a0deca63847ff677d3b731fb877d43d2217；memory_worker.py 26a9fdc5eea777b90ba5f2bdb1582a75513753e65b759ffb55fc76d4abb39c44；pilot_model.py 6e7bc8def57fdf26297f00a0a4d38a740f1ef5308a5a6f1ce8e41b8554417f82；config.py b1f7d7b3e3ccb62d0780674f9eddcd7889eb5ce344908ada88a322ad93ef9ce4；gpu.py 7f3571564e151c40e6cd4b9dc64d50fcd7ba865e48aba74037a2f6e35d881098\n\n本次零模型、零 GPU、零下载/安装/付费，没有写生产，没有提交/推送/删除；旧报告未覆盖（目录里原有的任务快照 json 未改动）。\n",
+  "result_data": {
+    "reviewer": "grokbot-k7q2",
+    "artifact_sha_match": "13/13",
+    "evidence_source_sha_match": "12/12",
+    "structure_checks": {
+      "passed": 13,
+      "total": 13,
+      "tool": "handwritten (no jsonschema installed)",
+      "tmpdir": "/var/folders/zv/vypfm1y977x338zzyccqx3br0000gn/T/s3-struct-hy8dpti6"
+    },
+    "recommendations": {
+      "awz.P3.E3": "accept_with_gaps",
+      "awz.P3.F1": "accept",
+      "awz.P3.R2": "accept",
+      "relay.P2.A1": "accept_with_gaps",
+      "forge.F1.C1": "accept",
+      "hub.P1.C1": "accept",
+      "hub.P1.D1": "reject_minor_revision"
+    },
+    "unverified": [
+      "schema-level metavalidation",
+      "license URLs (R2)",
+      "PyTorch 2.14 doc URL",
+      "memory_worker check interval",
+      "numeric/gradient GRU equivalence",
+      "concurrency atomicity of apply_delta"
+    ],
+    "model_runs": 0,
+    "gpu": 0,
+    "downloads": 0,
+    "production_writes": 0
+  },
+  "callback_url": null,
+  "created_by": "codex",
+  "created_at": "2026-10-15T17:59:58+03:00",
+  "updated_at": "2026-10-15T19:25:54+03:00",
+  "workdirs": null,
+  "claimed_at": null,
+  "last_beat_at": 1792078511.1967812,
+  "beats": 6,
+  "stalls": 1,
+  "max_stalls": 5,
+  "needs": [
+    "code",
+    "math"
+  ],
+  "reserve_until": null,
+  "reserve_for": null,
+  "reserve_for_kind": null,
+  "reserve_by": null,
+  "reserve_reason": null,
+  "reserve_mode": null,
+  "ready_since": 1792078259.574996,
+  "gpu_level": 0,
+  "deps": [
+    {
+      "id": "awz.P3.E3",
+      "status": "ready",
+      "ok": false
+    },
+    {
+      "id": "awz.P3.F1",
+      "status": "accepted",
+      "ok": true
+    },
+    {
+      "id": "awz.P3.R2",
+      "status": "accepted",
+      "ok": true
+    },
+    {
+      "id": "relay.P2.A1",
+      "status": "accepted",
+      "ok": true
+    },
+    {
+      "id": "forge.F1.C1",
+      "status": "accepted",
+      "ok": true
+    },
+    {
+      "id": "hub.P1.C1",
+      "status": "accepted",
+      "ok": true
+    },
+    {
+      "id": "hub.P1.D1",
+      "status": "reported",
+      "ok": true
+    }
+  ],
+  "deps_ok": false,
+  "waiting_questions": [],
+  "display_state": "accepted",
+  "display_label": "通过",
+  "lease_left_s": null,
+  "elapsed_s": null,
+  "idle_s": null,
+  "health": null,
+  "reserved": false,
+  "reserve_left_s": null,
+  "reserve_label": "",
+  "events": [
+    {
+      "id": 3823,
+      "at": "2026-10-15T19:25:54+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "codex",
+      "type": "accepted",
+      "message": "接受独立设计审议报告，源/产物身份核对与局部结构检查范围明示。五项设计可验收；E3附缺口及D1拒绝意见保留，后续修订需独立复核，不把报告通过等同七项全通过。",
+      "data": null
+    },
+    {
+      "id": 3814,
+      "at": "2026-10-15T18:36:25+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "reported",
+      "message": "# relay.P2.S3 独立审议（grokbot-k7q2，2026-10-15 18:3x +03）",
+      "data": null
+    },
+    {
+      "id": 3813,
+      "at": "2026-10-15T18:35:11+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "结构核验与源码SHA完成，开始写报告",
+      "data": null
+    },
+    {
+      "id": 3812,
+      "at": "2026-10-15T18:34:33+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "核A1源码(swap/内存/配置)",
+      "data": null
+    },
+    {
+      "id": 3811,
+      "at": "2026-10-15T18:34:27+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "E3/F1/R2/C1(forge)已读核，读hub C1/D1与A1",
+      "data": null
+    },
+    {
+      "id": 3810,
+      "at": "2026-10-15T18:34:09+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "核对Hub service.py与E3主张",
+      "data": null
+    },
+    {
+      "id": 3809,
+      "at": "2026-10-15T18:32:15+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "13个产物SHA核对完，开始逐份读设计",
+      "data": null
+    },
+    {
+      "id": 3808,
+      "at": "2026-10-15T18:31:46+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "progress",
+      "message": "开始：读AGENTS/README与7任务show --full",
+      "data": null
+    },
+    {
+      "id": 3807,
+      "at": "2026-10-15T18:31:36+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "claimed",
+      "message": "grokbot-k7q2 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3806,
+      "at": "2026-10-15T18:30:59+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "released",
+      "message": "未开工：本会话剩余上下文不足以严谨审议 7 份一级设计（需逐份读源码/契约/SHA），交给新会话或其他 agent；未写任何文件",
+      "data": null
+    },
+    {
+      "id": 3805,
+      "at": "2026-10-15T18:30:46+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "grokbot-k7q2",
+      "type": "claimed",
+      "message": "grokbot-k7q2 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3795,
+      "at": "2026-10-15T18:21:27+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "relay",
+      "type": "stalled",
+      "message": "codex-design-review-20261015 20 分钟没有心跳，收回并放回列表，等别的 agent 领（不计失败次数）",
+      "data": {
+        "stalls": 1,
+        "idle_min": 20
+      }
+    },
+    {
+      "id": 3759,
+      "at": "2026-10-15T18:01:20+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "codex-design-review-20261015",
+      "type": "claimed",
+      "message": "codex-design-review-20261015 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3747,
+      "at": "2026-10-15T17:59:58+03:00",
+      "project_id": "relay",
+      "task_id": "relay.P2.S3",
+      "actor": "codex",
+      "type": "created",
+      "message": "【只读】独立审议7份一级设计并释放下游",
+      "data": null
+    }
+  ],
+  "attempt_log": [
+    {
+      "id": 440,
+      "task_id": "relay.P2.S3",
+      "project_id": "relay",
+      "agent": "codex-design-review-20261015",
+      "claimed_at": 1792076480.779684,
+      "last_beat_at": 1792076480.779684,
+      "beats": 0,
+      "ended_at": 1792077687.2557461,
+      "outcome": "stalled",
+      "seconds": 1206,
+      "note": "20 分钟没有心跳"
+    },
+    {
+      "id": 446,
+      "task_id": "relay.P2.S3",
+      "project_id": "relay",
+      "agent": "grokbot-k7q2",
+      "claimed_at": 1792078246.092156,
+      "last_beat_at": 1792078246.092156,
+      "beats": 0,
+      "ended_at": 1792078259.575103,
+      "outcome": "released",
+      "seconds": 13,
+      "note": "未开工：本会话剩余上下文不足以严谨审议 7 份一级设计（需逐份读源码/契约/SHA），交给新会话或其他 agent；未写任何文件"
+    },
+    {
+      "id": 447,
+      "task_id": "relay.P2.S3",
+      "project_id": "relay",
+      "agent": "grokbot-k7q2",
+      "claimed_at": 1792078296.3948312,
+      "last_beat_at": 1792078511.1967812,
+      "beats": 6,
+      "ended_at": 1792078585.438617,
+      "outcome": "reported",
+      "seconds": 289,
+      "note": ""
+    }
+  ],
+  "waiters": []
+}

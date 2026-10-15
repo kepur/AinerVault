@@ -1,0 +1,16 @@
+cases=26 false_green=0 canonical_rejected=0
+divergences=12 structural_deferred=5
+schema_sha=34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c
+  divergence: {'name': 'example-request-audio-clock', 'kind': 'd2-semantic-stricter', 'codes': ['missing_audio_alignment']}
+  divergence: {'name': 'request-sim-hz-24', 'kind': 'structural-deferred-to-semantic', 'codes': ['invalid_time_curve']}
+  divergence: {'name': 'request-intensity-2', 'kind': 'structural-deferred-to-semantic', 'codes': ['out_of_range']}
+  divergence: {'name': 'request-lock-pointer-no-slash', 'kind': 'structural-deferred-to-semantic', 'codes': ['lock_conflict']}
+  divergence: {'name': 'response-pending-claimed-candidate', 'kind': 'structural-deferred-to-semantic', 'codes': ['unsupported_action']}
+  divergence: {'name': 'response-nan-value', 'kind': 'd2-semantic-stricter', 'codes': ['out_of_range']}
+  divergence: {'name': 'response-out-of-range', 'kind': 'd2-semantic-stricter', 'codes': ['out_of_range']}
+  divergence: {'name': 'response-phase-inverted', 'kind': 'd2-semantic-stricter', 'codes': ['invalid_time_curve']}
+  divergence: {'name': 'response-duplicate-writer', 'kind': 'd2-semantic-stricter', 'codes': ['control_conflict']}
+  divergence: {'name': 'response-mouth-without-audio', 'kind': 'd2-semantic-stricter', 'codes': ['missing_audio_alignment']}
+  divergence: {'name': 'response-stale-plan-revision', 'kind': 'd2-semantic-stricter', 'codes': ['stale_revision']}
+  divergence: {'name': 'error-bad-pointer', 'kind': 'structural-deferred-to-semantic', 'codes': ['lock_conflict']}
+RESULT: PASS

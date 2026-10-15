@@ -1,0 +1,77 @@
+[
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/check_pointer_revision.py",
+    "bytes": 8951,
+    "sha256": "3879a59832026c36e01f2006e163a989992cc8a30ae03c03b9152535db1748f9"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/commands.json",
+    "bytes": 932,
+    "sha256": "b9881e7bbd1711720e7cb506339110a718097bb10e6f61f2c3753250cb119490"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/document-diff.patch",
+    "bytes": 1952,
+    "sha256": "0bea8b6c9742d51c087205b68718f4bf3542bfb1b7f66b18ea5a9954d94f66b1"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/failure-control.log",
+    "bytes": 699,
+    "sha256": "1c918d8fcc0423f801577589fe16a39abcc80d8a7a15b2842834cb9e2c2d392e"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/hub.P1.D1.live.json",
+    "bytes": 15592,
+    "sha256": "634548866502fb64b84c55dadbbaa39142f7fae893c19f9bd17464bd93fa65ab"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/hub.P1.D4.live.json",
+    "bytes": 10077,
+    "sha256": "897edff3961502bf4b46a309a7ba9968ddca3dec45f7fa1ecb475aaaa704f3e1"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/metrics.json",
+    "bytes": 2688,
+    "sha256": "486f68eb0f319901438255524364d101a3413cca6ceeb03002b915e10350a2a0"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/r2-evidence-unchanged.json",
+    "bytes": 5928,
+    "sha256": "7f1a9b7791cdf86d09afb1b982da1054d8e9e544bc850d214b6f0e6da892973c"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/relay-summary.md",
+    "bytes": 881,
+    "sha256": "30d133c2c8a8e173297b0a80c9aba50511492df465d52193bd76a48beec9a876"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/results-failure-control.json",
+    "bytes": 9303,
+    "sha256": "53bb01f90914f312a6e00e541682a3077ea34d1fb4cbb51c6975f09dcc065770"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/results.json",
+    "bytes": 9139,
+    "sha256": "4e52352605d32573e33ca81c498daa103a0029e2e8e166a3297c4a3246a9efaf"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/review.md",
+    "bytes": 4974,
+    "sha256": "6ea5e42f9c39009e9d86db188810806d0c4d1736c764ca882240ad71f15e1a27"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/run.log",
+    "bytes": 699,
+    "sha256": "cec1b25c897540955928ea4a153c4936c08c2641cb58617443aa36e42d40db57"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/schema-diff-failure-control.json",
+    "bytes": 148,
+    "sha256": "8ff16c40586c16a98476f63aba8d79418e0319e2d8bc0f8c2ef445bea80f03f9"
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/schema-diff.json",
+    "bytes": 148,
+    "sha256": "8ff16c40586c16a98476f63aba8d79418e0319e2d8bc0f8c2ef445bea80f03f9"
+  }
+]

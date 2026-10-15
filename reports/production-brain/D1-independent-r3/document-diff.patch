@@ -1,0 +1,16 @@
+--- /Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r3/r2-performance_interface_v0.md
++++ /Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md
+@@ -1,6 +1,6 @@
+ # 角色表演接口 v0（hub.P1.D1）
+ 
+-状态：Codex 设计草案 r2，2026-10-15，待独立复审；无控制编译器/运行实现。schema只定义输入和候选输出的结构，不能证明某个角色包已支持。依据D-011/D-012、制作计划J1、DillonGoo拆解与审片C1。
++状态：Codex 设计草案 r3，2026-10-15，待独立复审；无控制编译器/运行实现。schema只定义输入和候选输出的结构，不能证明某个角色包已支持。依据D-011/D-012、制作计划J1、DillonGoo拆解与审片C1。
+ 
+ ## 输入与时间
+ 
+@@ -65,3 +65,5 @@
+ 配套 schema 只检查结构、枚举与局部条件。以下为 D2 语义校验器必须 fail-closed 的合同要求，当前设计没有实现这些校验：所有数值有限；阶段边界依序且在请求区间内；keyframes tick 有序且无重复并覆盖完整轨区间（允许末端边界值）；单位和向量维度符合已登记控制器；每个实际部位（含别名展开）同一区间只一名控制者；锁定项、已执行区间和请求/响应绑定一致；每个 mouth 轨有可信音频和 aligned 产物；pending_D5 轨永不 executable。缺控制器注册/别名或世界实际状态时记 unsupported/未验证，不因结构通过而放行执行。ones/twos/threes 只约束姿态呈现，不降低音频或世界时钟。
+ 
+ r1 原字节归档于 reports/production-brain/D1-r2/r1-*，r2 仅补设计合同，不授权音频生成、表演执行、渲染或模型运行。
++
++r3 仅收紧 errors[].path：空串表示根，非根由 / 分隔；每个 token 中 ~ 只允许 ~0 或 ~1。r2 原字节保存在 reports/production-brain/D1-r3/r2-*，独立复核原失败不覆盖。其余 r2 合同不变。

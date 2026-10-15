@@ -46,9 +46,15 @@
   color: var(--cv-kc);
   background: color-mix(in srgb, var(--cv-kc) 15%, transparent);
 }
-.cv-node__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 标题优先：放不下时先挤角标（flex-shrink 4:1），人名、镜号这些最要紧的字最后才省略 */
+.cv-node__title { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .cv-node__pin { flex: none; width: 10px; height: 10px; color: var(--cv-warn); }
-.cv-node__badges { flex: none; margin-left: auto; display: flex; gap: 4px; }
+.cv-node__badges { flex: 0 4 auto; min-width: 0; overflow: hidden; margin-left: auto; display: flex; gap: 4px; }
+/* 定妆照卡片底部：是哪种图、原名（标题已经是译名） */
+.cv-pic__cap {
+  padding: 4px 8px; font-size: 10.5px; line-height: 16px; color: var(--cv-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .cv-card {
   position: relative;
@@ -511,3 +517,27 @@ img.cv-vid__media { display: block; object-fit: cover; }
 
 .cv-audio { padding: 16px 10px; }
 .cv-audio audio { width: 100%; height: 36px; }
+
+/* 分组框：铺满 xyflow 给的节点尺寸；xyflow 自带的 group 样式（浅灰底、边框）要清掉 */
+.cv-root .react-flow__node-group { background: transparent; border: 0; padding: 0; box-shadow: none; border-radius: var(--cv-radius-lg); }
+.cv-group {
+  position: relative; width: 100%; height: 100%;
+  border-radius: var(--cv-radius-lg);
+  background: rgba(255, 255, 255, .025);
+  border: 1px dashed var(--cv-line-2);
+  transition: border-color var(--cv-fast) var(--cv-ease), background var(--cv-fast) var(--cv-ease);
+}
+.cv-group.is-selected { border: 1px solid var(--cv-accent); background: var(--cv-accent-soft); }
+.cv-group__head {
+  position: absolute; left: 2px; top: -22px; height: 18px; max-width: 100%;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--cv-muted); white-space: nowrap;
+}
+.cv-group.is-selected .cv-group__head { color: var(--cv-text); }
+.cv-group__title { overflow: hidden; text-overflow: ellipsis; cursor: text; }
+.cv-group__input {
+  font: inherit; font-size: 11px; color: var(--cv-text); background: var(--cv-surface-3);
+  border: 1px solid var(--cv-accent); border-radius: 4px; padding: 0 4px; height: 18px; width: 140px;
+}
+.cv-root .cv-group__line { border-color: var(--cv-accent); }
+.cv-root .cv-group__handle { width: 8px; height: 8px; border-radius: 2px; background: var(--cv-accent); border: 0; }

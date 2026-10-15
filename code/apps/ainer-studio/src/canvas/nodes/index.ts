@@ -3,6 +3,7 @@ import type { NodeTypes } from "@xyflow/react";
 import SharedStageNode from "./SharedStageNode";
 import AudioNode from "./AudioNode";
 import Box3DNode from "./Box3DNode";
+import GroupNode from "./GroupNode";
 import ImageNode from "./ImageNode";
 import TextNode from "./TextNode";
 import VideoNode from "./VideoNode";
@@ -19,4 +20,5 @@ export const nodeTypes = {
   audio: AudioNode,
   box3d: memo(Box3DNode),
   stage: SharedStageNode, coverage: SharedStageNode,
+  group: GroupNode,
 } satisfies NodeTypes;

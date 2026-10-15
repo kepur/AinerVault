@@ -1,0 +1,8 @@
+plan files: ['bag_elephant_comedy.json', 'bag_elephant_suspense.json'] -> 10 refs
+NEG dup-json-keys: correctly failed (dup key detected)
+NEG alias-shadows-canonical: correctly failed with 2 errors; e.g. [alias-shadows-canonical] alias tech:comedy.deadpan shadows canonical ref (N6)
+NEG dangling-index: correctly failed with 3 errors; e.g. [dangling-index] ref_index keys != refs+aliases (missing [] extra ['tech:ghost.dangling'])
+NEG dup-alias: correctly failed with 5 errors; e.g. [dup-alias] dup alias tech:shared.dupe in N2 and N1
+NEG renamed-old-id: correctly failed with 6 errors; e.g. [renamed-old-id] missing id N1
+NEG missing-plan-ref: correctly failed with 5 errors; e.g. [missing-plan-ref] ref_index keys != refs+aliases (missing ['tech:edit.smash_cut'] extra [])
+NEG md-heading-mismatch: correctly failed with 1 errors; e.g. [md-heading-mismatch] MD headings != ids (missing ['C6'] extra [])

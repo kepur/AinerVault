@@ -1,0 +1,268 @@
+{
+  "id": "hub.P1.D4",
+  "project_id": "hub",
+  "track_id": "hub.P1.D",
+  "seq": 4,
+  "title": "【独立复核】表演接口D1 r3音频时钟与错误合同",
+  "kind": "verify",
+  "tier": 2,
+  "status": "claimed",
+  "prompt": "# 非作者独立复审 hub.P1.D1 r2\n只读 docs/v2/production_brain/performance_interface_v0.md 与配套schema，查看 reports/production-brain/D1-r2/ r1归档及原relay.P2.S3负面报告。不得是Codex/D1任一作者。\n检查原十错误码、真实音频身份/sample_rate/anchor_tick/offset_samples/对齐状态与sha、缺/坏音频mouth unsupported、D5 pending不可执行、owner字段/区间、语义层责任以及文档schema一致。使用现有jsonschema（可调用AWZ现有.venv/python只读，不安装）独立构造正反例，脚本失败必须非零；区分结构保证、待实现语义、真实执行未验证。复现时不要覆盖作者证据。\n只写 reports/production-brain/D1-independent-r2/ 新目录。不得改合同/其他源码，无GPU/下载/付费/生产操作。报告明确成立/不成立/未验证及accept/reject建议、自动SHA与精确命令。\n\n当前已为D1 r3局部补核：D1-independent-r2为只读归档，不重写。只写reports/production-brain/D1-independent-r3/，核r3新SHA、精确差异和Pointer边界/失败控制。原94项可复用已确认证据，不必无关重跑。r2原字节在D1-r3/r2-*。\n",
+  "params": {},
+  "params_version": 0,
+  "acceptance": "",
+  "context_files": [],
+  "file_scope": [
+    "reports/production-brain/D1-independent-r3/"
+  ],
+  "depends_on": [
+    "hub.P1.D1"
+  ],
+  "verifies": [
+    "hub.P1.D1"
+  ],
+  "needs_gpu": false,
+  "dedupe_key": "hub-d1-design-r2-review",
+  "max_attempts": 3,
+  "attempts": 0,
+  "assignee": "codex-design-review-20261015",
+  "author": "codex-design-review-20261015",
+  "lease_until": 1792083578.1547232,
+  "lease_s": 1200,
+  "progress": null,
+  "last_message": null,
+  "result": "# hub.P1.D4 独立复审：建议 reject（局部小修）\n原r1音频/十错误码/owner缺口已闭合；当前r2与作者SHA一致，r1归档字节保留。\n独立结构核验94/94（86独立构造+8原样例；28正/66负），schema元校验通过；6身份/合同检查、5纯算术核对通过。\n正常脚本exit0，故意失败控制exit1，失败证据保留。\n唯一未闭合：errors[].path文档称JSON Pointer，schema仅 ^(/|$)，放行 /bad~2escape 和 /bad~。独立真实回归4/6、2失败、exit1；建议仅修该语法边界后按新SHA补核。\nD5 pending不可执行的结构条件成立；缺/坏音频mouth unsupported、时序/唯一控制者/绑定等语义职责已明示给D2，未运行语义实现。\n真实音频/表演/渲染/E2E未验证；零模型/GPU/下载/安装/付费，未改产品或作者证据，不自动accept，不next。\n完整报告：/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/review.md\n指标：同目录metrics.json；实际命令和退出：commands.json。\n",
+  "result_data": {
+    "task": "hub.P1.D4",
+    "reviewer": "codex-design-review-20261015",
+    "author_of_design": "codex",
+    "independent": true,
+    "recommendation": "reject_minor_pointer_contract",
+    "review_scope": "D1 r2 design/schema only",
+    "structure": {
+      "passed": 94,
+      "total": 94,
+      "independently_constructed": 86,
+      "embedded_author_examples": 8,
+      "positive": 28,
+      "negative": 66
+    },
+    "pointer_regression": {
+      "passed": 4,
+      "total": 6,
+      "failed": 2,
+      "exit_code": 1
+    },
+    "failure_control_exit_code": 1,
+    "normal_exit_code": 0,
+    "clock_arithmetic_passed": 5,
+    "checks_passed": 6,
+    "semantic_implementation": "unverified/not run",
+    "actual_audio_and_performance": "unverified/not run",
+    "product_changes": [],
+    "model_imports": 0,
+    "gpu_runs": 0,
+    "downloads": 0,
+    "installs": 0,
+    "paid_calls": 0,
+    "production_product_writes": 0,
+    "commits": 0,
+    "pushes": 0,
+    "inputs": [
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+        "bytes": 27487,
+        "sha256": "c8ce4696a960294de7731d7956a7c3e373eef4b2232e909354dc30230b8bbec5"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+        "bytes": 8496,
+        "sha256": "39d1743a69685408775971bbdb6633c2c6357e90aa781c1ac21a3f4678df15ff"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/r1-performance_interface_v0.md",
+        "bytes": 5976,
+        "sha256": "e251d79c42e4152a284e9d2249d5684248fc21b2c76b7b0d21a616595df70591"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/r1-performance_interface_v0.schema.json",
+        "bytes": 22210,
+        "sha256": "2e3b6546ccb74c068e25cee8d7fb8532973ef98765ff8e21135fcbb64fd97676"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/report.md",
+        "bytes": 626,
+        "sha256": "c11ee98e6b3d876d16c58a567f2b1343a8d0d4f92034086003bf6d46e1c7f7ef"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/identities.json",
+        "bytes": 445,
+        "sha256": "fe6882f110e0fe207cc837bae2247b557df1ffb93d970d89598d67b0202163ac"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/structure-checks.json",
+        "bytes": 1063,
+        "sha256": "41476d16f389d18881ffa2ab8fbc9fdcf5cead9478bd6176f070b394edb26179"
+      },
+      {
+        "path": "/Users/mac/AinerWorkFlow/AinerRelay/reports/V-tier1-design-bundle-20261015/grokbot-k7q2-review.md",
+        "bytes": 6856,
+        "sha256": "02bb6c29a1e9e540a97e1ce2daba075450b1f14d9138df039843c0bbe60bee3f"
+      }
+    ]
+  },
+  "callback_url": null,
+  "created_by": "codex",
+  "created_at": "2026-10-15T19:32:33+03:00",
+  "updated_at": "2026-10-15T19:40:04+03:00",
+  "workdirs": null,
+  "claimed_at": 1792082378.1547232,
+  "last_beat_at": 1792082378.1547232,
+  "beats": 0,
+  "stalls": 0,
+  "max_stalls": 5,
+  "needs": [
+    "code"
+  ],
+  "reserve_until": null,
+  "reserve_for": null,
+  "reserve_for_kind": null,
+  "reserve_by": null,
+  "reserve_reason": null,
+  "reserve_mode": null,
+  "ready_since": 1792082359.931702,
+  "gpu_level": 0,
+  "deps": [
+    {
+      "id": "hub.P1.D1",
+      "status": "reported",
+      "ok": true
+    }
+  ],
+  "deps_ok": true,
+  "waiting_questions": [],
+  "display_state": "claimed",
+  "display_label": "进行中",
+  "lease_left_s": 1130,
+  "elapsed_s": 70,
+  "idle_s": 70,
+  "health": "active",
+  "reserved": false,
+  "reserve_left_s": null,
+  "reserve_label": "",
+  "events": [
+    {
+      "id": 3874,
+      "at": "2026-10-15T19:40:04+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex",
+      "type": "edited",
+      "message": "title、prompt、file_scope",
+      "data": null
+    },
+    {
+      "id": 3873,
+      "at": "2026-10-15T19:39:38+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex-design-review-20261015",
+      "type": "claimed",
+      "message": "codex-design-review-20261015 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3868,
+      "at": "2026-10-15T19:39:19+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex",
+      "type": "status_ready",
+      "message": "保留r2负面复核有效证据；待D1小修新SHA后只补核Pointer及身份，不覆盖原94项与失败日志。",
+      "data": null
+    },
+    {
+      "id": 3864,
+      "at": "2026-10-15T19:38:49+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex-design-review-20261015",
+      "type": "reported",
+      "message": "# hub.P1.D4 独立复审：建议 reject（局部小修）",
+      "data": null
+    },
+    {
+      "id": 3861,
+      "at": "2026-10-15T19:37:03+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex-design-review-20261015",
+      "type": "progress",
+      "message": "94项结构正反例符合预期，故意失败控制exit1；原拒绝项闭合，发现error.path非法JSON Pointer转义仍可通过，正在报告。",
+      "data": null
+    },
+    {
+      "id": 3852,
+      "at": "2026-10-15T19:34:29+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex-design-review-20261015",
+      "type": "progress",
+      "message": "已读r1归档、r2文档/schema与原拒绝项；独立构造结构正反例，区分D2语义责任。",
+      "data": null
+    },
+    {
+      "id": 3846,
+      "at": "2026-10-15T19:33:35+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex-design-review-20261015",
+      "type": "claimed",
+      "message": "codex-design-review-20261015 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3843,
+      "at": "2026-10-15T19:32:33+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D4",
+      "actor": "codex",
+      "type": "created",
+      "message": "【独立复核】表演接口D1 r2音频时钟与错误合同",
+      "data": null
+    }
+  ],
+  "attempt_log": [
+    {
+      "id": 452,
+      "task_id": "hub.P1.D4",
+      "project_id": "hub",
+      "agent": "codex-design-review-20261015",
+      "claimed_at": 1792082015.845639,
+      "last_beat_at": 1792082223.668389,
+      "beats": 2,
+      "ended_at": 1792082329.0602582,
+      "outcome": "reported",
+      "seconds": 313,
+      "note": ""
+    },
+    {
+      "id": 454,
+      "task_id": "hub.P1.D4",
+      "project_id": "hub",
+      "agent": "codex-design-review-20261015",
+      "claimed_at": 1792082378.1547232,
+      "last_beat_at": 1792082378.1547232,
+      "beats": 0,
+      "ended_at": null,
+      "outcome": "running",
+      "seconds": 70,
+      "note": ""
+    }
+  ],
+  "waiters": []
+}

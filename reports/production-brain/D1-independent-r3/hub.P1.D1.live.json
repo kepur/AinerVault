@@ -1,0 +1,324 @@
+{
+  "id": "hub.P1.D1",
+  "project_id": "hub",
+  "track_id": "hub.P1.D",
+  "seq": 1,
+  "title": "【一级】hub P1-D1 角色表演接口 v0（表演意图 → 角色包控制曲线）",
+  "kind": "design",
+  "tier": 1,
+  "status": "reported",
+  "prompt": "# 【一级】hub P1-D1 角色表演接口 v0（制作脑 → 角色包控制面）\n\n依据：/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/research/DILLONGOO_TEARDOWN_20261015.md 第 4 节；/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/NORTH_STAR.md 第 3 节；D-011/D-012。\n\n## 交付\n`/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md` 和 schema 草案 `/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json`。\n\n## 内容\n1. **输入（表演任务）**：\n   - 角色；\n   - 表演意图，例如惊讶、犹豫、强装镇定、冷幽默式的平静；\n   - 强度、对象（看谁、对谁）；\n   - 所在节拍（引用 NarrativeIR 事件或制作计划节拍）；\n   - 开始与持续时间；\n   - 锁定项。\n2. **输出（控制曲线）**：调用角色包 v2 的控制面（awz.P3.D5）：\n   - 视线；\n   - 表情单元（精简 FACS）；\n   - 口型；\n   - 头、身姿态与手势宏；\n   - 二次运动覆盖；\n   - 每条都带时间曲线：预备、到位、停留、回落，以及一拍二或一拍三节奏。\n\n   D5 未完成时，先定接口形状，控制器名用占位并标“待 D5”。\n3. **与现有格式的关系**：AWZ 表演轨 `awz.performance/v0`（expressions、gaze、lines）、AinerHub SceneStage 和 ScenePerformance 的动作轨，只走一条谱系（见 docs/v2/10_PRODUCTION_BRAIN.md 第 4 节）。\n4. **可检查信号**：审片能核对的指标，例如视线是否在节拍内转向对象、表情峰值是否落在台词重音附近、停留时长是否在范围内。位置、接触、时序用执行数据检查，表情和表演质量交给视觉审片。\n5. **控制权**：同一角色同一部位，同一时刻只有一个生效的控制者，包括导演表演指令、角色运行策略、用户手调和将来的世界脑。\n6. **三个例子**：书包变大象时，同一角色在悬疑版、喜剧版、冷幽默版的表演任务和输出曲线对比。\n\n## 不做\n不改代码，不改其他文件。结论写进文档后 relay report。\n",
+  "params": {},
+  "params_version": 0,
+  "acceptance": "输入/输出字段；预备-到位-停留-回落与节奏；与 awz.performance/v0、SceneStage 一条谱系；可检查信号且分执行数据与视觉审片；单一控制者；书包三版本示例",
+  "context_files": [
+    "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/research/DILLONGOO_TEARDOWN_20261015.md",
+    "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/NORTH_STAR.md"
+  ],
+  "file_scope": [
+    "docs/v2/production_brain/performance_interface_v0.md",
+    "docs/v2/production_brain/performance_interface_v0.schema.json"
+  ],
+  "depends_on": null,
+  "verifies": [],
+  "needs_gpu": false,
+  "dedupe_key": "hub-p1-D1",
+  "max_attempts": 3,
+  "attempts": 2,
+  "assignee": "codex",
+  "author": "codex",
+  "lease_until": null,
+  "lease_s": 1800,
+  "progress": null,
+  "last_message": null,
+  "result": "hub.P1.D1 r3：按D4唯一缺口收紧JSON Pointer转义，保留r2两文件原字节及独立原失败。未改音频/错误码/控制面约定，仅设计schema。待D4按新SHA独立补核，不自验收。\n产物docs/v2/production_brain/performance_interface_v0.{md,schema.json}；新身份reports/production-brain/D1-r3/identities.json。\n",
+  "result_data": [
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+      "sha256": "34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+      "sha256": "73c3e88952e50f9e720ac2f80debe2915884a014f8498177e94de6c9ff039946"
+    }
+  ],
+  "callback_url": null,
+  "created_by": "claude",
+  "created_at": "2026-10-15T16:28:37+03:00",
+  "updated_at": "2026-10-15T19:39:20+03:00",
+  "workdirs": null,
+  "claimed_at": null,
+  "last_beat_at": 1792082360.086601,
+  "beats": 0,
+  "stalls": 0,
+  "max_stalls": 5,
+  "needs": [],
+  "reserve_until": null,
+  "reserve_for": null,
+  "reserve_for_kind": null,
+  "reserve_by": null,
+  "reserve_reason": null,
+  "reserve_mode": null,
+  "ready_since": 1792082359.781291,
+  "gpu_level": 0,
+  "deps": [],
+  "deps_ok": true,
+  "waiting_questions": [],
+  "display_state": "reported",
+  "display_label": "待验收",
+  "lease_left_s": null,
+  "elapsed_s": null,
+  "idle_s": null,
+  "health": null,
+  "reserved": false,
+  "reserve_left_s": null,
+  "reserve_label": "",
+  "events": [
+    {
+      "id": 3870,
+      "at": "2026-10-15T19:39:20+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "reported",
+      "message": "hub.P1.D1 r3：按D4唯一缺口收紧JSON Pointer转义，保留r2两文件原字节及独立原失败。未改音频/错误码/控制面约定，仅设计schema。待D4按新SHA独立补核，不自验收。",
+      "data": null
+    },
+    {
+      "id": 3869,
+      "at": "2026-10-15T19:39:20+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "claimed",
+      "message": "codex 领取（第 3 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3867,
+      "at": "2026-10-15T19:39:19+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "rejected",
+      "message": "D4独立确认JSON Pointer非法转义仍通过：/bad~2escape、/bad~。仅修errors[].path为RFC6901合法语法，归档r2原字节和报告，不改其余合同；非作者按新SHA补核。",
+      "data": {
+        "requeue": true,
+        "previous_result": "# hub.P1.D1 r2 设计修订\n补全实际音频原字节身份、sample_rate、anchor_tick、offset_samples、alignment状态和aligned产物身份；增加十错误码的路径化错误记录schema；统一binding与owner字段命名，明确阶段/唯一控制者/有限值/绑定/口型等为D2语义层责任。r1两文件保存在本目录，未覆盖原报告。\n配套schema元校验和15项结构检查通过，日志structure-checks.json；身份见identities.json。无语义实现、真实音频、表演、渲染、模型或E2E；所有D5控制器仍pending/unsupported。待非作者独立复审，不自验收。\n",
+        "previous_data": [
+          {
+            "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+            "sha256": "c8ce4696a960294de7731d7956a7c3e373eef4b2232e909354dc30230b8bbec5",
+            "bytes": 27487
+          },
+          {
+            "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+            "sha256": "39d1743a69685408775971bbdb6633c2c6357e90aa781c1ac21a3f4678df15ff",
+            "bytes": 8496
+          }
+        ]
+      }
+    },
+    {
+      "id": 3842,
+      "at": "2026-10-15T19:32:33+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "reported",
+      "message": "# hub.P1.D1 r2 设计修订",
+      "data": null
+    },
+    {
+      "id": 3840,
+      "at": "2026-10-15T19:28:06+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "claimed",
+      "message": "codex 领取（第 2 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3824,
+      "at": "2026-10-15T19:25:54+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "rejected",
+      "message": "S3独立发现真实接口缺口：音频仅audio_ref无sample_rate/offset/实际身份与对齐状态，缺错误响应schema。请保存r1为新归档，统一owner对象命名，补可选但完整的实际音频时间基准/摘要/对齐状态和路径化错误响应（含原10错误码），明确单一控制者/跨字段阶段顺序需要语义层校验。缺音频仍unsupported，pending D5不可执行；只设计/schema，不改其他源码/新运行。r2独立复核后终审。",
+      "data": {
+        "requeue": true,
+        "previous_result": "# hub.P1.D1 一级设计报告（Codex，2026-10-15）\n\n表演输入与候选曲线、120Hz/视频fps/音频时钟、预备-到位-停留-回落、ones/twos/threes、单一控制者与锁定冲突；与现有SceneStage/WorldPerformance/AWZ轨一条谱系；三版本书包事件例子。D5控制器全部pending且unsupported，缺音频口型unsupported；schema包含3组request/response。未执行表演/渲染，待审议。\n\n交付：\n- /Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md\n- /Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json\n\n证据：/Users/mac/AinerWorkFlow/AinerRelay/reports/coordination/codex-lead-20261015-172550/evidence.json（自动来源SHA/AST）；/Users/mac/AinerWorkFlow/AinerRelay/reports/coordination/codex-lead-20261015-172550/output-identities.json（自动产物SHA）。\n结构核对：两份新schema元校验、9个正例与4个拒绝条件共13项通过，见schema-static-checks.json；仅结构检查，语义/并发/模型/渲染/E2E全部未运行。\n未改任何产品源码或已有科学参数；没有训练、GPU、模型、下载、安装、付费、提交推送、删除、生产部署。结论为设计提议，待不同作者/平级审议，不自验收。\n",
+        "previous_data": [
+          {
+            "task": "awz.P3.E3",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/design/WORLD_CHANGE_PROTOCOL.md",
+            "bytes": 9386,
+            "sha256": "bbeb501283a6afb52f407e3c1e0a732ca7a7a47a9ac081392b1cb0d631e93d90"
+          },
+          {
+            "task": "awz.P3.E3",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/contracts/drafts/world_change.v1/world_change.schema.json",
+            "bytes": 7639,
+            "sha256": "e43256456e83e278283e7feb4096e99f00749aad8c797376ef23921d5ef5d354"
+          },
+          {
+            "task": "awz.P3.E3",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/contracts/drafts/world_change.v1/golden_cases.json",
+            "bytes": 857,
+            "sha256": "5a04773fc6a5dc072ea658336474fdf10514f767b2c4982df8b5ea6e80771eff"
+          },
+          {
+            "task": "awz.P3.F1",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/design/ASSET_HUB_V0.md",
+            "bytes": 5013,
+            "sha256": "7c149e577cde4a9943ab0e0703451c9b8ed5bf678d2d5bcd67814e93ea9ee6a7"
+          },
+          {
+            "task": "awz.P3.R2",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/design/CLEAN_ROOM_AND_LICENSE.md",
+            "bytes": 6236,
+            "sha256": "82add70b490a43afc4ac83b7960bbbe7745eda612a5e7ce278e2ca64f1c69c37"
+          },
+          {
+            "task": "awz.P3.R2",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/design/templates/license_review.md",
+            "bytes": 1104,
+            "sha256": "74fbb85ea64af6c205aa641583dd616dd35fc4808560d433adae251bc5807f5f"
+          },
+          {
+            "task": "awz.P3.R2",
+            "path": "/Users/mac/AinerWorkFlow/AnimeWorldZero/docs/design/templates/behavior_spec.md",
+            "bytes": 1044,
+            "sha256": "384e3e575f60994c7f1d237974d908304d5bc5fcd8fa02df2677bcd6491310ee"
+          },
+          {
+            "task": "relay.P2.A1",
+            "path": "/Users/mac/AinerWorkFlow/AinerRelay/reports/coordination/v8-upgrade-task-cards-20261015.md",
+            "bytes": 27483,
+            "sha256": "c5f1bbffd8151f858839c91d0ce6b73a1b9f63c02a1fb64ce82ee17cbedd8241"
+          },
+          {
+            "task": "relay.P2.A1",
+            "path": "/Users/mac/AinerWorkFlow/AinerRelay/reports/coordination/codex-lead-20261015-172550/arbiter-params.json",
+            "bytes": 779,
+            "sha256": "d0fbb5e3a149e83e92d68d7547d23ff2a90f7df54bf8e82f1ab4421340894773"
+          },
+          {
+            "task": "forge.F1.C1",
+            "path": "/Users/mac/AinerWorkFlow/AinerForge/docs/TRAINING_BACKENDS.md",
+            "bytes": 5625,
+            "sha256": "ccc9f1fe5dd55bf7c1a0d76d51b5bdb81d89db6b75d34eb868c8cd7abdebe5df"
+          },
+          {
+            "task": "hub.P1.C1",
+            "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/review_standard_v0.md",
+            "bytes": 5877,
+            "sha256": "6ae005b5aa94c78518233c4a566daa1dfec224156c972a69c072b9cd26dfc71e"
+          },
+          {
+            "task": "hub.P1.D1",
+            "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+            "bytes": 5976,
+            "sha256": "e251d79c42e4152a284e9d2249d5684248fc21b2c76b7b0d21a616595df70591"
+          },
+          {
+            "task": "hub.P1.D1",
+            "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+            "bytes": 22210,
+            "sha256": "2e3b6546ccb74c068e25cee8d7fb8532973ef98765ff8e21135fcbb64fd97676"
+          }
+        ]
+      }
+    },
+    {
+      "id": 3577,
+      "at": "2026-10-15T17:39:37+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "reported",
+      "message": "# hub.P1.D1 一级设计报告（Codex，2026-10-15）",
+      "data": null
+    },
+    {
+      "id": 3532,
+      "at": "2026-10-15T17:33:27+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "codex",
+      "type": "claimed",
+      "message": "codex 领取（第 1 次）",
+      "data": {
+        "params_version": 0
+      }
+    },
+    {
+      "id": 3460,
+      "at": "2026-10-15T16:29:07+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "claude",
+      "type": "edited",
+      "message": "prompt",
+      "data": null
+    },
+    {
+      "id": 3457,
+      "at": "2026-10-15T16:28:37+03:00",
+      "project_id": "hub",
+      "task_id": "hub.P1.D1",
+      "actor": "claude",
+      "type": "created",
+      "message": "【一级】hub P1-D1 角色表演接口 v0（表演意图 → 角色包控制曲线）",
+      "data": null
+    }
+  ],
+  "attempt_log": [
+    {
+      "id": 419,
+      "task_id": "hub.P1.D1",
+      "project_id": "hub",
+      "agent": "codex",
+      "claimed_at": 1792074807.7610948,
+      "last_beat_at": 1792074807.7610948,
+      "beats": 0,
+      "ended_at": 1792075177.8369741,
+      "outcome": "reported",
+      "seconds": 370,
+      "note": ""
+    },
+    {
+      "id": 449,
+      "task_id": "hub.P1.D1",
+      "project_id": "hub",
+      "agent": "codex",
+      "claimed_at": 1792081686.756608,
+      "last_beat_at": 1792081686.756608,
+      "beats": 0,
+      "ended_at": 1792081953.112211,
+      "outcome": "reported",
+      "seconds": 266,
+      "note": ""
+    },
+    {
+      "id": 453,
+      "task_id": "hub.P1.D1",
+      "project_id": "hub",
+      "agent": "codex",
+      "claimed_at": 1792082360.086601,
+      "last_beat_at": 1792082360.086601,
+      "beats": 0,
+      "ended_at": 1792082360.297001,
+      "outcome": "reported",
+      "seconds": 0,
+      "note": ""
+    }
+  ],
+  "waiters": []
+}

@@ -1,0 +1,127 @@
+[
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/cases-failure-control.json",
+    "sha256": "2e940a178174eb731b6dd48131dc3dabfd499a1823286e8ba673bbbfced4409b",
+    "bytes": 105861
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/cases.json",
+    "sha256": "41c61cb3d3b1cdbe45e026a1db09a899098ef4d51835ff356a61eea0ce784fde",
+    "bytes": 104987
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/commands.json",
+    "sha256": "5b532099c8ba946304b4f2d2c5b6052184914446e6c8e1705bd27bda218fb748",
+    "bytes": 1815
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/failure-control.log",
+    "sha256": "5b17554e3526f4c25c00fa87787fecea1ea58096d09cfd780013f2c314a668c3",
+    "bytes": 965
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/hub.P1.D1.live.json",
+    "sha256": "21c60018b50a62892341a11059873b99e5475328faba4fa2414613fa32d20320",
+    "bytes": 13239
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/hub.P1.D4.live.json",
+    "sha256": "96baa1f9767a7f651c4177a8b72df2b52b093cadf45da20cf30b080b101c320b",
+    "bytes": 3979
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/independent_review.py",
+    "sha256": "ab02dd738e503df8927337c3e91ba4933a9f3ffcddc81d6580903096ff3e0919",
+    "bytes": 16403
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/initial-cases.json",
+    "sha256": "41c61cb3d3b1cdbe45e026a1db09a899098ef4d51835ff356a61eea0ce784fde",
+    "bytes": 104987
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/initial-results.json",
+    "sha256": "5a9b64161839af575527bdd67e3b6f3fa61d78982a5de028e30c885974f67a9d",
+    "bytes": 79948
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/initial-semantic-boundaries.json",
+    "sha256": "40fe09e940f9fce655ae8c2ec1c6d6d2248f9842f8fe188e553ef1c17392529f",
+    "bytes": 26991
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/inputs-unchanged.json",
+    "sha256": "7aebfefa2d0ebdc4bb3b61039b3a480ec627ef5871f11224888c20cfeb84251c",
+    "bytes": 1131
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/metrics.json",
+    "sha256": "b7dab710ec229d1473213a2b9c1d7c4a25725a5254c0037b986c7bf56bef3fb4",
+    "bytes": 2746
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/pointer-contract-results.json",
+    "sha256": "c6a79299fa35bc4eb85ad86979c6cd9d9301b890f3ccb0d771c60fe90f55bfa6",
+    "bytes": 2697
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/pointer-contract.log",
+    "sha256": "c6a79299fa35bc4eb85ad86979c6cd9d9301b890f3ccb0d771c60fe90f55bfa6",
+    "bytes": 2697
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/pointer-lexical-check.json",
+    "sha256": "ac24994d00e7c1ef3ea64bc37e6dcfd459df376f7b95d4d28273e11c37635cfa",
+    "bytes": 817
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/pointer_contract_check.py",
+    "sha256": "06ac694c9ec108d7b02bd657f7c0e7fcf11daa84d5de8608192f416c3e42d217",
+    "bytes": 1334
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/relay-summary.md",
+    "sha256": "7e39018cca28c938920363ddb195fe58a65afcfa2ae2c428503b0543350c21ff",
+    "bytes": 1053
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/relay.P2.S3.live.json",
+    "sha256": "e2656ec495c5f6a50319f20b5b6cd3f08076c0c61f9e01a8b3cf891c5bd23cb3",
+    "bytes": 16973
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/results-failure-control.json",
+    "sha256": "054d9693111f8e2d4ea996f099e983ee6dd5925445f1a980d80c2520013dc20e",
+    "bytes": 80105
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/results.json",
+    "sha256": "5a9b64161839af575527bdd67e3b6f3fa61d78982a5de028e30c885974f67a9d",
+    "bytes": 79948
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/review.md",
+    "sha256": "68637ece7074b95f432ed0b9340c2b18b7ab660f2e5bd33e80943d74dcc45b3f",
+    "bytes": 7198
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/run-verified-exit.log",
+    "sha256": "ac924ffc4d9ed488910082b4c9bcbc49f2727fec62d14115ef5dc4de385b0869",
+    "bytes": 965
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/run.log",
+    "sha256": "ac924ffc4d9ed488910082b4c9bcbc49f2727fec62d14115ef5dc4de385b0869",
+    "bytes": 965
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/semantic-boundaries-failure-control.json",
+    "sha256": "40fe09e940f9fce655ae8c2ec1c6d6d2248f9842f8fe188e553ef1c17392529f",
+    "bytes": 26991
+  },
+  {
+    "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/semantic-boundaries.json",
+    "sha256": "40fe09e940f9fce655ae8c2ec1c6d6d2248f9842f8fe188e553ef1c17392529f",
+    "bytes": 26991
+  }
+]

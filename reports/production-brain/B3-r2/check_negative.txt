@@ -1,0 +1,5 @@
+NEG bad-ref-format: correctly failed with 4 errors; e.g. [bad-ref-format] N1 bad ref 'bad ref with space'
+NEG dup-ref: correctly failed with 2 errors; e.g. [dup-ref] dup refs
+NEG missing-plan-ref: correctly failed with 3 errors; e.g. [missing-plan-ref] ref_index tech:edit.smash_cut != D8
+NEG md-inconsistent: correctly failed with 1 errors; e.g. [md-inconsistent] MD missing N1.effect
+exit:0

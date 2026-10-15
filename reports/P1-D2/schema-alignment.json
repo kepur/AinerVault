@@ -1,0 +1,381 @@
+{
+  "task": "hub.P1.D2",
+  "failure_control": false,
+  "python": "3.12.10",
+  "jsonschema": "4.26.0",
+  "schema_sha256": "34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c",
+  "schema_sha256_expected": "34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c",
+  "doc_sha256": "73c3e88952e50f9e720ac2f80debe2915884a014f8498177e94de6c9ff039946",
+  "doc_sha256_expected": "73c3e88952e50f9e720ac2f80debe2915884a014f8498177e94de6c9ff039946",
+  "schema_meta_valid": true,
+  "cases": 26,
+  "false_green": [],
+  "canonical_rejected": [],
+  "structural_deferred_to_semantic": [
+    "request-sim-hz-24",
+    "request-intensity-2",
+    "request-lock-pointer-no-slash",
+    "response-pending-claimed-candidate",
+    "error-bad-pointer"
+  ],
+  "divergences": [
+    {
+      "name": "example-request-audio-clock",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "missing_audio_alignment"
+      ]
+    },
+    {
+      "name": "request-sim-hz-24",
+      "kind": "structural-deferred-to-semantic",
+      "codes": [
+        "invalid_time_curve"
+      ]
+    },
+    {
+      "name": "request-intensity-2",
+      "kind": "structural-deferred-to-semantic",
+      "codes": [
+        "out_of_range"
+      ]
+    },
+    {
+      "name": "request-lock-pointer-no-slash",
+      "kind": "structural-deferred-to-semantic",
+      "codes": [
+        "lock_conflict"
+      ]
+    },
+    {
+      "name": "response-pending-claimed-candidate",
+      "kind": "structural-deferred-to-semantic",
+      "codes": [
+        "unsupported_action"
+      ]
+    },
+    {
+      "name": "response-nan-value",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "out_of_range"
+      ]
+    },
+    {
+      "name": "response-out-of-range",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "out_of_range"
+      ]
+    },
+    {
+      "name": "response-phase-inverted",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "invalid_time_curve"
+      ]
+    },
+    {
+      "name": "response-duplicate-writer",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "control_conflict"
+      ]
+    },
+    {
+      "name": "response-mouth-without-audio",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "missing_audio_alignment"
+      ]
+    },
+    {
+      "name": "response-stale-plan-revision",
+      "kind": "d2-semantic-stricter",
+      "codes": [
+        "stale_revision"
+      ]
+    },
+    {
+      "name": "error-bad-pointer",
+      "kind": "structural-deferred-to-semantic",
+      "codes": [
+        "lock_conflict"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "name": "example-request-suspense",
+      "note": "D1 schema 标准例子",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-response-suspense",
+      "note": "D1 schema 标准例子（必须仍为候选/未支持）",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-request-comedy",
+      "note": "D1 schema 标准例子",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-response-comedy",
+      "note": "D1 schema 标准例子（必须仍为候选/未支持）",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-request-dry",
+      "note": "D1 schema 标准例子",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-response-dry",
+      "note": "D1 schema 标准例子（必须仍为候选/未支持）",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "example-request-audio-clock",
+      "note": "pending 对齐：D2 语义层应拒绝",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "missing_audio_alignment"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "example-error-audio-clock",
+      "note": "D1 schema 标准错误记录",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": true,
+      "d2_codes": [],
+      "d2_executable": false
+    },
+    {
+      "name": "request-sim-hz-24",
+      "note": "24Hz 冒充 120Hz",
+      "schema_valid": false,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "invalid_time_curve"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "request-intensity-2",
+      "note": "越界强度",
+      "schema_valid": false,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "out_of_range"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "request-negative-duration",
+      "note": "负时长",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "invalid_time_curve"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "request-lock-pointer-no-slash",
+      "note": "D1 r3 Pointer 语法",
+      "schema_valid": false,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "lock_conflict"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "request-extra-property",
+      "note": "additionalProperties=false",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-render-fps-0",
+      "note": "render_fps 最小 1",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "invalid_time_curve"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-single-keyframe",
+      "note": "keyframes minItems=2",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-pending-claimed-candidate",
+      "note": "pending_D5 then 分支要求 unsupported",
+      "schema_valid": false,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-nan-value",
+      "note": "NaN：D2 语义层必须拒绝（JSON 无 NaN）",
+      "schema_valid": true,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "out_of_range"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-out-of-range",
+      "note": "单位范围",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "out_of_range"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-phase-inverted",
+      "note": "预备/到位顺序",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "invalid_time_curve"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-duplicate-writer",
+      "note": "相同部位双写",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "control_conflict"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-mouth-without-audio",
+      "note": "未对齐音频写口型",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "missing_audio_alignment"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "response-stale-plan-revision",
+      "note": "旧版本绑定",
+      "schema_valid": true,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "stale_revision"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "error-unknown-code",
+      "note": "十码之外",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "error-empty-errors",
+      "note": "errors minItems=1",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "error-bad-pointer",
+      "note": "D1 r3 Pointer 转义",
+      "schema_valid": false,
+      "d2_structural_ok": true,
+      "d2_ok": false,
+      "d2_codes": [
+        "lock_conflict"
+      ],
+      "d2_executable": false
+    },
+    {
+      "name": "error-with-curves",
+      "note": "错误记录不得夹带成功曲线",
+      "schema_valid": false,
+      "d2_structural_ok": false,
+      "d2_ok": false,
+      "d2_codes": [
+        "unsupported_action"
+      ],
+      "d2_executable": false
+    }
+  ]
+}

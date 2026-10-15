@@ -1,0 +1,13 @@
+{"id": "P1", "desc": "有效 issue 通过", "expect": "empty", "codes": [], "pass": true, "errors": []}
+{"id": "P2", "desc": "有效 verdict 通过", "expect": "empty", "codes": [], "pass": true, "errors": []}
+{"id": "P3", "desc": "有效 comparison 通过", "expect": "empty", "codes": [], "pass": true, "errors": []}
+{"id": "P4", "desc": "有效 choice 通过", "expect": "empty", "codes": [], "pass": true, "errors": []}
+{"id": "N1", "desc": "comparison 双候选同一 take", "expect": "same_take", "codes": ["same_take"], "pass": true, "errors": [{"code": "same_take", "path": "/candidate_b/take_id", "message": "成对比较必须是两个不同 take，不伪称相同 take"}]}
+{"id": "N2", "desc": "comparison 未查硬约束", "expect": "hard_constraints_skipped", "codes": ["hard_constraints_skipped"], "pass": true, "errors": [{"code": "hard_constraints_skipped", "path": "/hard_constraints_checked", "message": "先查硬约束再分题材判断；未查硬约束的比较不得用"}]}
+{"id": "N3", "desc": "choice 非 user 记录用户选择", "expect": "wrong_reviewer", "codes": ["wrong_reviewer"], "pass": true, "errors": [{"code": "wrong_reviewer", "path": "/reviewer/kind", "message": "用户选择必须由 kind=user 记录"}]}
+{"id": "N4", "desc": "choice 所选不在候选内", "expect": "unknown_selection", "codes": ["unknown_selection"], "pass": true, "errors": [{"code": "unknown_selection", "path": "/selected_take_id", "message": "所选 take 不在候选名单中"}]}
+{"id": "N5", "desc": "verdict 硬 unverified 却总体 pass", "expect": "missing_evidence", "codes": ["missing_evidence"], "pass": true, "errors": [{"code": "missing_evidence", "path": "/overall", "message": "硬约束有 unverified 时总体不能 pass"}]}
+{"id": "N6", "desc": "input sha 与 fixture 登记不一致", "expect": "stale_media", "codes": ["stale_media"], "pass": true, "errors": [{"code": "stale_media", "path": "/inputs/0/sha256", "message": "输入字节身份与 fixture 登记不一致"}]}
+{"id": "N7", "desc": "touches_lock=false 却列 lock_paths", "expect": "lock_violation", "codes": ["lock_violation"], "pass": true, "errors": [{"code": "lock_violation", "path": "/lock_impact", "message": "touches_lock=false 却列出 lock_paths，前后矛盾"}]}
+{"id": "MUT", "desc": "恒过桩下坏 verdict 漏网且恢复后重现（敏感性）", "expect": "stub misses blocker_overridden, restore catches", "detail": "real=['blocker_overridden'] stub=[] restored=['blocker_overridden']", "pass": true}
+{"new_counterexamples": 7, "positives": 4, "all_hold": true}

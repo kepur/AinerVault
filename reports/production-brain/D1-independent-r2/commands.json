@@ -1,0 +1,54 @@
+[
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r2/independent_review.py"
+    ],
+    "returncode": null,
+    "stdout_file": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/run.log",
+    "exit_evidence": "Initial shell ended with cat; script exit not separately captured. Repeated once below to capture exact code; initial outputs preserved."
+  },
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r2/independent_review.py",
+      "--failure-control"
+    ],
+    "returncode": 1,
+    "expected_returncode": 1
+  },
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r2/independent_review.py"
+    ],
+    "returncode": 0,
+    "expected_returncode": 0,
+    "stdout_file": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/run-verified-exit.log"
+  },
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r2/pointer_contract_check.py"
+    ],
+    "returncode": 1,
+    "expected_returncode": 1,
+    "meaning": "Real remaining contract mismatch, not an intentional expectation mutation."
+  }
+]

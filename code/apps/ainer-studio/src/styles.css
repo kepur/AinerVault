@@ -285,6 +285,11 @@ button.ghost { background: transparent; border-color: transparent; }
 .tpl.ex { border-color: rgba(124,108,255,.5); background: linear-gradient(135deg, rgba(124,108,255,.14), var(--panel)); }
 .tpl em { color: var(--accent-2); font-style: normal; font-size: 11px; }
 .box-home h3 { margin: 26px 0 10px; }
+/* 已有舞台时模板收在这里 */
+.box-home .box-new { margin-top: 26px; }
+.box-home .box-old-toggle { margin-left: 10px; font-size: 12px; padding: 2px 10px; }
+.box-home .proj.is-old { opacity: .6; }
+.box-home .box-new > summary { cursor: pointer; font-weight: 600; color: var(--accent-2); margin-bottom: 12px; }
 .box-home h3 small { color: var(--muted); font-weight: 400; }
 .proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .proj { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; }

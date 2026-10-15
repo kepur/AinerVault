@@ -153,6 +153,8 @@ function sizeNote(aspect: string, res: string, sizes?: [number, number][]): stri
   if (same.length) {
     const fit = same.find(s => area(s) <= area(want));
     if (!fit) return `该模型最小 ${same[same.length - 1][0]}×${same[same.length - 1][1]}，按此出`;
+    // 只差在对齐 64 像素（480p → 768×448 这类）不算「被改了」：黄色警告会让人以为参数选错了
+    if (Math.min(...fit) >= Math.min(...want) * 0.85) return null;
     return fit === same[0] ? `该模型最大 ${fit[0]}×${fit[1]}，按此出` : `按 ${fit[0]}×${fit[1]} 出`;
   }
   const best = [...sizes].sort((a, b) => off(a) - off(b) || area(b) - area(a))[0];

@@ -1,0 +1,961 @@
+[
+  {
+    "case": "unordered_phases",
+    "schema_accepts": true,
+    "future_semantic_requirement": "invalid_time_curve",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 121,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": null
+  },
+  {
+    "case": "duplicate_keyframe_tick",
+    "schema_accepts": true,
+    "future_semantic_requirement": "invalid_time_curve",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 120,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": null
+  },
+  {
+    "case": "keyframes_do_not_cover_start",
+    "schema_accepts": true,
+    "future_semantic_requirement": "invalid_time_curve",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": null
+  },
+  {
+    "case": "same_interval_two_owners",
+    "schema_accepts": true,
+    "future_semantic_requirement": "control_conflict",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "second-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": null
+  },
+  {
+    "case": "request_response_binding_mismatch",
+    "schema_accepts": true,
+    "future_semantic_requirement": "stale_revision / binding check",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 12,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "gaze",
+          "body_part": "eyes",
+          "controller_ref": "pending:D5/gaze/object",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.45,
+      "target_ref": "object-reveal",
+      "start_tick": 120,
+      "duration_ticks": 480,
+      "locks": [],
+      "audio_ref": null
+    }
+  },
+  {
+    "case": "nonfinite_Python_instance",
+    "schema_accepts": true,
+    "future_semantic_requirement": "All numeric values finite; strict JSON parsing and D2 finite checks.",
+    "interpretation": "Non-JSON Python object probe only; not an admitted JSON fixture."
+  },
+  {
+    "case": "mouth_without_trusted_alignment_none",
+    "schema_accepts": true,
+    "future_semantic_requirement": "mouth unsupported; missing_audio_alignment",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "mouth",
+          "body_part": "mouth",
+          "controller_ref": "d4-fixture/registered/mouth",
+          "mapping_status": "registered",
+          "execution_status": "candidate",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.45,
+      "target_ref": "object-reveal",
+      "start_tick": 120,
+      "duration_ticks": 480,
+      "locks": [],
+      "audio_ref": null
+    }
+  },
+  {
+    "case": "mouth_without_trusted_alignment_pending",
+    "schema_accepts": true,
+    "future_semantic_requirement": "mouth unsupported; missing_audio_alignment",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "mouth",
+          "body_part": "mouth",
+          "controller_ref": "d4-fixture/registered/mouth",
+          "mapping_status": "registered",
+          "execution_status": "candidate",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.45,
+      "target_ref": "object-reveal",
+      "start_tick": 120,
+      "duration_ticks": 480,
+      "locks": [],
+      "audio_ref": {
+        "asset_ref": "fixture:independent/no-real-audio",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sample_rate": 44100,
+        "anchor_tick": 120,
+        "offset_samples": -2205,
+        "alignment": {
+          "status": "pending"
+        }
+      }
+    }
+  },
+  {
+    "case": "mouth_without_trusted_alignment_failed",
+    "schema_accepts": true,
+    "future_semantic_requirement": "mouth unsupported; missing_audio_alignment",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "response-d4-independent",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "mouth",
+          "body_part": "mouth",
+          "controller_ref": "d4-fixture/registered/mouth",
+          "mapping_status": "registered",
+          "execution_status": "candidate",
+          "unsupported_reason": "D5 registry missing; proposal only",
+          "unit": "degree",
+          "target_ref": "object-reveal",
+          "phases": {
+            "start_tick": 120,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 480,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "d4-director",
+            "authorization_ref": "fixture-only"
+          },
+          "keyframes": [
+            {
+              "tick": 120,
+              "value": [
+                0,
+                0
+              ]
+            },
+            {
+              "tick": 240,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 480,
+              "value": [
+                20,
+                10
+              ]
+            },
+            {
+              "tick": 600,
+              "value": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "No actual audio/alignment"
+        }
+      ]
+    },
+    "paired_request": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.45,
+      "target_ref": "object-reveal",
+      "start_tick": 120,
+      "duration_ticks": 480,
+      "locks": [],
+      "audio_ref": {
+        "asset_ref": "fixture:independent/no-real-audio",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sample_rate": 44100,
+        "anchor_tick": 120,
+        "offset_samples": -2205,
+        "alignment": {
+          "status": "failed"
+        }
+      }
+    }
+  },
+  {
+    "case": "syntactically_valid_but_false_audio_digest",
+    "schema_accepts": true,
+    "future_semantic_requirement": "resolve bytes and compare exact digest; missing_audio_alignment/unsupported",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "request-d4-independent",
+      "binding": {
+        "plan_id": "d4-independent-plan",
+        "plan_revision": 7,
+        "beat_id": "beat-reveal",
+        "event_id": "event-transform",
+        "world_id": "world-fixture",
+        "world_version": 11,
+        "scene_id": "scene-fixture",
+        "scene_revision": 3,
+        "take_id": "take-d4",
+        "actor_id": "actor-1",
+        "character_ref": "pending:D5/d4-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.45,
+      "target_ref": "object-reveal",
+      "start_tick": 120,
+      "duration_ticks": 480,
+      "locks": [],
+      "audio_ref": {
+        "asset_ref": "fixture:independent/no-real-audio",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sample_rate": 44100,
+        "anchor_tick": 120,
+        "offset_samples": -2205,
+        "alignment": {
+          "status": "aligned",
+          "ref": "fixture:independent/no-real-alignment",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      }
+    },
+    "paired_request": null
+  },
+  {
+    "case": "invalid_JSON_Pointer_escape",
+    "schema_accepts": true,
+    "future_semantic_requirement": "Path must be a JSON Pointer; current pattern checks only leading slash.",
+    "interpretation": "Documented semantic-layer boundary; no semantic implementation tested.",
+    "instance": {
+      "protocol": "hub.performance/v0",
+      "record_kind": "error",
+      "request_id": "request-d4-independent",
+      "errors": [
+        {
+          "code": "missing_audio_alignment",
+          "path": "/bad~2escape",
+          "message": "No actual aligned audio; mouth unsupported."
+        }
+      ]
+    },
+    "paired_request": null
+  }
+]

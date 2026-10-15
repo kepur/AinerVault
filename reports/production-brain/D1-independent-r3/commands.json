@@ -1,0 +1,29 @@
+[
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r3/check_pointer_revision.py"
+    ],
+    "returncode": 0,
+    "expected_returncode": 0,
+    "stdout_file": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/run.log"
+  },
+  {
+    "cwd": "/Users/mac/AinerWorkFlow/AinerHub_IDEA",
+    "env": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "argv": [
+      "/Users/mac/AinerWorkFlow/AnimeWorldZero/.venv/bin/python",
+      "reports/production-brain/D1-independent-r3/check_pointer_revision.py",
+      "--failure-control"
+    ],
+    "returncode": 1,
+    "expected_returncode": 1,
+    "stdout_file": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r3/failure-control.log"
+  }
+]

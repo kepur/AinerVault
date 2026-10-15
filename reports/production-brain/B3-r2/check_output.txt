@@ -1,0 +1,4 @@
+count=27 version=v0.1 n=27 ref_index=27
+plan10 resolvable: 10/10
+PASS: all 27 entries + ref_index + MD consistent
+exit:0

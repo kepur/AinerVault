@@ -1,0 +1,3 @@
+plan files: ['bag_elephant_comedy.json', 'bag_elephant_suspense.json'] -> 10 refs
+entries=27 plan_refs=10 md_heads<checked> r1_identity<checked>
+PASS: independent recheck green (dup-keys clean, 27 entries, ref_index bijective, plan10 exact map, tech closure, MD bidirectional, B2 rework, r1 identity)

@@ -31,7 +31,7 @@ const SAVE: Record<SaveState, { text: string; tone: string; title: string } | nu
 };
 
 const KIND_CN: Record<TaskKind, string> = {
-  comic: "漫剧制作", director: "导演出片", ltx25: "文字出片", gen: "生成", blender: "渲控制素材", box_agent: "搭景", run: "一键出片", quick: "快速成片",
+  comic: "漫剧制作", director: "导演出片", ltx25: "文字出片", gen: "生成", blender: "渲控制素材", box_agent: "搭景", run: "一键出片", quick: "想法画布",
 };
 const STATUS_CN: Record<TrackedTask["status"], string> = {
   queued: "排队中", running: "进行中", succeeded: "完成", failed: "失败", cancelled: "已取消",
@@ -418,16 +418,16 @@ function ExecutePill() {
       <button
         type="button"
         className={`cv-pill cv-glass cv-exec-btn${active ? " is-busy" : ""}${el ? " is-open" : ""}`}
-        title="执行画布（DAG 生成）：按配方拓扑顺序在服务端生成定妆照、分镜图与视频"
+        title="把画布上还没出过、或提示词/参考改过的节点，按先后依赖在本机生成（定妆照 → 分镜图 → 视频）；关掉浏览器也会继续"
         onClick={e => setEl(el ? null : e.currentTarget)}
       >
         {active ? <Spinner size={12} /> : <Icon name="sparkle" size={13} />}
-        {active ? `执行中 ${done}/${total}` : "✦ 执行画布"}
+        {active ? `生成中 ${done}/${total}` : "生成全部"}
       </button>
       {el && (
         <Popover anchor={el} placement="bottom-end" onClose={() => setEl(null)} className="cv-runpop" role="dialog">
           <div className="cv-pop-title">
-            执行画布 (DAG 生成)<span>{s.board?.title || "当前画布"}</span>
+            生成全部<span>{s.board?.title || "当前画布"}</span>
           </div>
           {active && ex ? (
             <div className="cv-run-live">
@@ -676,7 +676,7 @@ export function TopBar({ nav, initialManager=false, initialAssemble=false, onMan
       </div>
 
       <div className="cv-topbar-side">
-        <button type="button" className="cv-pill cv-glass" disabled={!s.board||s.loading} onClick={e=>{if(comic)manualComic();else setManualEl(e.currentTarget);}} title={comic?'直接编辑当前镜头的方案、帧率、动作与音效':'在画布上手动制作图片或视频'}><Icon name="plus" size={14}/>{comic?'手动出片':'手动创作'}</button>
+        <button type="button" className="cv-pill cv-glass" disabled={!s.board||s.loading} onClick={e=>{if(comic)manualComic();else setManualEl(e.currentTarget);}} title={comic?'直接编辑当前镜头的方案、帧率、动作与音效':'在画布上手动制作图片或视频'}><Icon name="plus" size={14}/>{comic?'手动出片':'新建生成'}</button>
         <button type="button" className="cv-pill cv-glass" aria-expanded={managerOpen} onClick={()=>setManagerOpen(!managerOpen)} title="在画布内管理首帧、视频与镜头状态"><Icon name="grid" size={14}/>分镜管理</button>
         <button type="button" className="cv-pill cv-glass" title="带着当前作品和章节进入翻译工作台" onClick={() => navigate("translation")}>翻译</button>
         <button type="button" className="cv-pill cv-glass" title="切换制作类型并打开各自的画布" onClick={() => navigate("flow",{medium:comic?'video':'comic'})}>{comic?'视频制作':'动态漫画'}</button>

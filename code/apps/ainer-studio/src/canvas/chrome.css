@@ -1548,10 +1548,19 @@ span.cv-ref-role { display: grid; place-items: center; line-height: 18px; color:
   border-color: rgba(139, 92, 246, .65) !important;
 }
 
-.cv-board-home { max-height: 70vh; min-width: 360px; }
-.cv-board-home-list { display: grid; gap: 8px; max-height: 45vh; overflow: auto; margin-top: 16px; }
-.cv-board-home-list .cv-btn { justify-content: space-between; text-align: left; }
-.cv-board-home-list span { color: var(--cv-muted); font-size: 11px; margin-left: 16px; }
+.cv-board-home { max-height: 68vh; width: min(520px, calc(100vw - 48px)); display: flex; flex-direction: column; }
+.cv-board-home-acts { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+.cv-board-home-list { display: grid; gap: 6px; min-height: 0; overflow: auto; margin-top: 14px; text-align: left; }
+.cv-board-home-list h4 { margin: 8px 2px 2px; font-size: 11px; font-weight: 600; color: var(--cv-muted); }
+/* .cv-root button 的复位会把背景、边框、内边距清掉，这里要带上 .cv-root 才压得住 */
+.cv-root .cv-board-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  width: 100%; min-width: 0; padding: 9px 12px; border-radius: 10px;
+  background: var(--cv-surface-2); border: 1px solid var(--cv-line); text-align: left;
+}
+.cv-root .cv-board-row:hover:not(:disabled) { border-color: var(--cv-accent); }
+.cv-board-row__t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 12.5px; }
+.cv-board-row__m { color: var(--cv-muted); font-size: 11px; white-space: nowrap; }
 
 .cv-library > .cv-input { width: 100%; margin: 8px 0; }
 .cv-library .cv-cast-row > .cv-btn { width: 100%; justify-content: space-between; }

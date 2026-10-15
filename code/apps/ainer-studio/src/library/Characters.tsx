@@ -14,6 +14,7 @@ import { prod, type EpochOption, type ResourceRef, type CanonicalView } from "..
 import { cv } from "../canvas/api";
 import type { CanvasMeta } from "../canvas/model";
 import "../production/production.css";
+import { useLocalNames, type LocalNames } from "../production/useLocalNames";
 
 const StylingRoom = lazy(() => import("./StylingRoom"));
 
@@ -36,8 +37,13 @@ function Filter({ label, value, options, onChange }: { label: string; value: str
   );
 }
 
-function CharThumb({ c, onOpen }: { c: CharCard; onOpen: () => void }) {
+/** 小说角色的实体 id（卡片 id 是 e:<实体 id>） */
+const entityOf = (c: CharCard) => c.entity_id ?? (c.id.startsWith("e:") ? c.id.slice(2) : null);
+
+function CharThumb({ c, onOpen, names }: { c: CharCard; onOpen: () => void; names: LocalNames }) {
   const t = c.tags ?? {};
+  // 英文版剧本里叫 Thomas Ashford、这里存的是原著名「谢文东」：卡片上两个都写，不然对不上剧本里的人
+  const local = c.source === "novel" ? names.get(entityOf(c) ?? "") : undefined;
   return (
     <div className="char-card" onClick={onOpen}>
       <div className="pic">
@@ -47,7 +53,8 @@ function CharThumb({ c, onOpen }: { c: CharCard; onOpen: () => void }) {
         {!!c.pending && img(c.cover) && <span className="badge busy">出图中 {c.pending}</span>}
       </div>
       <div className="meta">
-        <b>{c.name}</b>
+        <b title={local ? `本版译名 ${local.target}，原名 ${c.name}` : undefined}>{local?.target || c.name}</b>
+        {local && local.target !== c.name && <small className="char-orig">原名 {c.name}</small>}
         <div className="tags">{[t.gender, t.age, t.culture, t.era].filter(x => x && x !== "未知").map(x => <span key={x}>{x}</span>)}</div>
         <small>{c.source === "novel" ? `《${c.novel ?? ""}》` : SOURCE_ZH[c.source]}</small>
       </div>
@@ -340,9 +347,16 @@ export default function Characters({ onOpenBox }: { onOpenBox: (id: string) => v
   const [adding, setAdding] = useState<CharCard | null>(null);
   const [err, setErr] = useState("");
 
+  const names = useLocalNames(novelId, init.locale);
+  // 本书的角色在前端按「原名 + 本版译名」搜：用户照着英文剧本搜 Thomas，后端只认识「谢文东」
+  const localSearch = scope === "book" && names.size > 0;
   const load = useCallback(() => lib.characters(scope, {
-    gender, age, culture, q: q.trim() || undefined, novel_id: scope === "book" ? novelId ?? undefined : undefined,
-  }).then(setRows).catch(e => setErr(String(e.message ?? e))), [scope, gender, age, culture, q, novelId]);
+    gender, age, culture, q: localSearch ? undefined : q.trim() || undefined, novel_id: scope === "book" ? novelId ?? undefined : undefined,
+  }).then(setRows).catch(e => setErr(String(e.message ?? e))), [scope, gender, age, culture, localSearch ? "" : q, novelId, localSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const needle = q.trim().toLowerCase();
+  const shown = localSearch && needle
+    ? rows.filter(c => c.name.toLowerCase().includes(needle) || (names.get(entityOf(c) ?? "")?.target ?? "").toLowerCase().includes(needle))
+    : rows;
   useEffect(() => { load(); }, [load]);
   useEffect(() => { lib.voices().then(setVoices).catch(() => setVoices([])); }, []);
   const pending = rows.some(r => r.pending);
@@ -372,9 +386,9 @@ export default function Characters({ onOpenBox }: { onOpenBox: (id: string) => v
       </div>
       {err && <div className="err">{err}</div>}
       <div className="card-grid chars">
-        {rows.map(c => <CharThumb key={c.id} c={c} onOpen={() => setOpen(c.id)} />)}
+        {shown.map(c => <CharThumb key={c.id} c={c} names={names} onOpen={() => setOpen(c.id)} />)}
       </div>
-      {!rows.length && <div className="note center">{scope === "book" ? "这本书还没有人物实体：先在后台出世界模型" : scope === "mine" ? "小说里的角色有参考图后会出现在这里；造型室里保存的造型也在这里" : "没有匹配的角色"}</div>}
+      {!shown.length && <div className="note center">{scope === "book" ? "这本书还没有人物实体：先在后台出世界模型" : scope === "mine" ? "小说里的角色有参考图后会出现在这里；造型室里保存的造型也在这里" : "没有匹配的角色"}</div>}
       {open && !editing && (
         <Detail cid={open} voices={voices} onClose={() => setOpen(null)} onChanged={load}
           onEdit={c => setEditing(c)} onAdd={c => setAdding(c)} />

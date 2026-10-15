@@ -3,13 +3,14 @@ export type EndView = 'free' | 'same' | 'body_front' | 'body_side' | 'body_back'
 export type ShotQuality = 'preview' | 'standard' | 'high' | 'compact' | 'balanced';
 export type ShotCamera = 'auto'|'hold'|'push_in'|'pull_out'|'pan_left'|'pan_right';
 export interface ShotActor {action:string;end_view:EndView}
-export interface ShotMove {dx:number;arm?:boolean;dy?:number}
+export interface ShotMove {dx:number;arm?:boolean;dy?:number;travel_fraction?:number}
 export interface ShotRoutePlan {
   route:ShotRouteId;label:string;fps:number;estimated_s:number;reason:string;dialogue_lines:number;card_layout:boolean;
   actors:({entity_id:string}&ShotActor)[];
   routes:Record<ShotRouteId,{label:string;fps:number;est_s:number}>;
   cast:{entity_id:string;name:string}[];
   quality_profiles?:Record<ShotQuality,{label:string;width:number;height:number}>;
+  group_detail?:{person_count:number;source_min_body_width_px:number;profiles:Record<ShotQuality,{estimated_face_width_px:number;risk:'high'|'medium'|'low'}>}|null;
   face_close?:boolean;
   camera?:ShotCamera;camera_reason?:string;
 }
@@ -20,7 +21,7 @@ export interface ShotRouteSettings {
   actors?:Record<string,ShotActor>;moves?:Record<string,ShotMove>;foley_prompt?:string;
 }
 export const SHOT_FPS:Record<ShotRouteId,number[]> = {
-  dialogue_a2v:[4,8,12],layer_foley:[8,12],ltx25_action:[4,8,12],ltx25_layout:[4,8,12],
+  dialogue_a2v:[8,12],layer_foley:[8,12],ltx25_action:[8,12],ltx25_layout:[8,12],
 };
 export function resolveShotRoute(plan:ShotRoutePlan,value:ShotRouteSettings) {
   const route=value.route||'auto';
@@ -51,6 +52,7 @@ export function shotRouteIssue(plan:ShotRoutePlan|null,value:ShotRouteSettings):
     if(!entries.length)return '至少设置一位角色的白模走位或伸手动作';
     if(entries.some(([id,m])=>!cast.has(id)||!Number.isFinite(m.dx)||Math.abs(m.dx)>.4))return '白模走位只能设置本镜角色，范围为画面宽度的 ±40%';
     if(entries.some(([,m])=>m.dy!==undefined&&(!Number.isFinite(m.dy)||Math.abs(m.dy)>.35)))return '远近走位范围为画面高度的 ±35%，脚底需要保持在地板内';
+    if(entries.some(([,m])=>m.travel_fraction!==undefined&&(!Number.isFinite(m.travel_fraction)||m.travel_fraction<.2||m.travel_fraction>1||m.arm&&m.travel_fraction>=1)))return '走位用时为镜头的20–100%，伸手需预留走位后的时间';
   }
   return '';
 }
@@ -58,8 +60,8 @@ export function shotRouteInput(productionId:string,frameId:string,plan:ShotRoute
   const issue=shotRouteIssue(plan,value);if(issue)throw new Error(issue);
   const {route,effective,actors,moves,quality}=resolveShotRoute(plan,value);
   return {production_id:productionId,frame_asset_id:frameId,route,
-    // Null delegates to the engine's actual recommendation, including 4 fps.
-    fps:value.fps??null,duration_ms:value.duration_ms??5000,seed:value.seed??7700,
+    // Null delegates to the engine's actual recommendation, at least 8 fps.
+    fps:value.fps??null,duration_ms:value.duration_ms??2000,seed:value.seed??7700,
     camera:value.camera??'auto',camera_strength:value.camera_strength??.08,
     ...(plan.quality_profiles?{quality}:{}),
     ...(value.voice_asset_id&&value.line_text?{voice_asset_id:value.voice_asset_id,line_text:value.line_text}:{}),

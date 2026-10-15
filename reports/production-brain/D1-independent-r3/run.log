@@ -1,0 +1,20 @@
+{
+  "scope": "D1 r3 bounded delta/Pointer audit; prior 94 tests reused, not rerun",
+  "pointer_passed": 32,
+  "pointer_total": 32,
+  "neighbor_passed": 5,
+  "neighbor_total": 5,
+  "checks": {
+    "r3_hashes_match_author": true,
+    "r2_schema_archive_matches_reviewed_input": true,
+    "r2_doc_archive_matches_reviewed_input": true,
+    "schema_exact_one_changed_leaf": true,
+    "schema_only_expected_pattern_changed": true,
+    "schema_bytes_identical_after_reverting_pattern": true,
+    "r2_all_manifest_files_unchanged": true,
+    "doc_only_revision_marker_and_pointer_addition": true,
+    "old_evidence_directory_unchanged_during_audit": true,
+    "no_model_imports": true
+  },
+  "failed": 0
+}

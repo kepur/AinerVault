@@ -1,0 +1,1289 @@
+{
+  "scope": "independent structure and document/formula audit only",
+  "python": "3.12.10 (main, May 30 2025, 05:53:56) [Clang 20.1.4 ]",
+  "jsonschema": "4.26.0",
+  "schema_meta_valid": true,
+  "structure_passed": 94,
+  "structure_total": 95,
+  "checks": {
+    "author_r2_hash_match": true,
+    "r1_archive_hash_match": true,
+    "exact_ten_error_codes": true,
+    "doc_owner_object_named": true,
+    "request_response_binding_schema_equal": true,
+    "no_model_imports": true
+  },
+  "clock_arithmetic": [
+    {
+      "tick": 120,
+      "sample": "-2205",
+      "expected": "-2205",
+      "pass": true
+    },
+    {
+      "tick": 121,
+      "sample": "-3675/2",
+      "expected": "-3675/2",
+      "pass": true
+    },
+    {
+      "tick": 126,
+      "sample": "0",
+      "expected": "0",
+      "pass": true
+    },
+    {
+      "tick": 240,
+      "sample": "41895",
+      "expected": "41895",
+      "pass": true
+    },
+    {
+      "fps": 24,
+      "timing": "twos",
+      "ticks_per_hold": "10",
+      "expected": "10",
+      "pass": true
+    }
+  ],
+  "semantic_probes_count": 11,
+  "semantic_probes_all_schema_accepted": true,
+  "failed": 1,
+  "tests": [
+    {
+      "case": "independent_request_no_audio",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "independent_response_pending_unsupported",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "independent_request_aligned_audio_structure",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "independent_audio_pending",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "independent_audio_failed",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "positive_audio_offset",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_unknown_actor",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_stale_revision",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_invalid_time_curve",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_unknown_controller",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_out_of_range",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_missing_audio_alignment",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_lock_conflict",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_control_conflict",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_unsupported_action",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "error_code_changed_past",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "json_pointer_''",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "json_pointer_'/curves/0/owner'",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "json_pointer_'/a~0b/~1escaped'",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "audio_null",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "audio_old_bare_audio_string",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': 'fixture:audio'} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_asset_ref",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_sha256",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_sample_rate",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_anchor_tick",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_offset_samples",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_missing_alignment",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_asset_ref_",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': '', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sha256_000000000000000000",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': '000000000000000000000000000000000000000000000000000000000000000', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sha256_gggggggggggggggggg",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sample_rate_0",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 0, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sample_rate_-1",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': -1, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sample_rate_44100.5",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100.5, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_sample_rate_44100",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': '44100', 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_anchor_tick_-1",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': -1, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_anchor_tick_120.5",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120.5, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_offset_samples_-0.5",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -0.5, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_bad_offset_samples_0",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': '0', 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_aligned_missing_ref",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_aligned_missing_sha256",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_bad_alignment_status",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'success', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_bad_alignment_ref",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': '', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_bad_alignment_sha256",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'BAD'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_alignment_unknown_field",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'unexpected': 'x'}}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_audio_unknown_field",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': {'asset_ref': 'fixture:independent/no-real-audio', 'sha256': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'sample_rate': 44100, 'anchor_tick': 120, 'offset_samples': -2205, 'alignment': {'status': 'aligned', 'ref': 'fixture:independent/no-real-alignment', 'sha256': 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'}, 'duration': 1}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_missing_protocol",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_missing_record_kind",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_missing_request_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_missing_errors",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent'} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_empty_errors",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': []} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_item_missing_code",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_item_missing_path",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_item_missing_message",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_bad_code",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'not_registered', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_bad_message",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': ''}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_bad_path",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': 'curves/0', 'message': 'No actual aligned audio; mouth unsupported.'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_plus_success_curves",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}], 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_error_plus_binding",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'error', 'request_id': 'request-d4-independent', 'errors': [{'code': 'missing_audio_alignment', 'path': '/audio_ref/alignment', 'message': 'No actual aligned audio; mouth unsupported.'}], 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_pending_D5_candidate",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'candidate', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_any_claim_executed",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'executed', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_pending_D5_nonpending_controller",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'real/controller', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_registered_pending_D5_controller",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'registered', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_pending_missing_unsupported_reason",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_owner_missing_kind",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_owner_missing_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_owner_missing_authorization_ref",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_owner_unknown_kind",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'world_brain', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_legacy_owner_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}], 'owner_id': 'legacy'}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_separate_owner_interval",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': 'twos', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only', 'effective_interval': [120, 600]}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_sim_hz_24",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 24, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_sim_hz_60",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 60, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_sim_hz_121",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 121, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_plan_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_plan_revision",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_beat_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_event_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_world_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_world_version",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_scene_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_scene_revision",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_take_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_actor_id",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_character_ref",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'sim_hz': 120, 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_sim_hz",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'render_fps': 24}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_missing_binding_render_fps",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'request', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120}, 'intent': 'hesitant', 'intensity': 0.45, 'target_ref': 'object-reveal', 'start_tick': 120, 'duration_ticks': 480, 'locks': [], 'audio_ref': None} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "reject_tick_based_timing_enum",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "errors": [
+        {
+          "path": "/",
+          "message": "{'protocol': 'hub.performance/v0', 'record_kind': 'response', 'response_id': 'response-d4-independent', 'request_id': 'request-d4-independent', 'binding': {'plan_id': 'd4-independent-plan', 'plan_revision': 7, 'beat_id': 'beat-reveal', 'event_id': 'event-transform', 'world_id': 'world-fixture', 'world_version': 11, 'scene_id': 'scene-fixture', 'scene_revision': 3, 'take_id': 'take-d4', 'actor_id': 'actor-1', 'character_ref': 'pending:D5/d4-character', 'sim_hz': 120, 'render_fps': 24}, 'curves': [{'channel': 'gaze', 'body_part': 'eyes', 'controller_ref': 'pending:D5/gaze/object', 'mapping_status': 'pending_D5', 'execution_status': 'unsupported', 'unsupported_reason': 'D5 registry missing; proposal only', 'unit': 'degree', 'target_ref': 'object-reveal', 'phases': {'start_tick': 120, 'anticipation_end_tick': 180, 'arrival_end_tick': 240, 'hold_end_tick': 480, 'end_tick': 600}, 'timing': '2_ticks', 'interpolation': 'linear', 'owner': {'kind': 'director', 'id': 'd4-director', 'authorization_ref': 'fixture-only'}, 'keyframes': [{'tick': 120, 'value': [0, 0]}, {'tick': 240, 'value': [20, 10]}, {'tick': 480, 'value': [20, 10]}, {'tick': 600, 'value': [0, 0]}]}], 'unsupported': [{'path': '/curves/mouth', 'reason': 'No actual audio/alignment'}]} is not valid under any of the given schemas",
+          "schema_path": [
+            "oneOf"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "author_embedded_example_0",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_1",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_2",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_3",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_4",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_5",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_6",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "author_embedded_example_7",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "case": "intentional_failure_control",
+      "expected_valid": false,
+      "actual_valid": true,
+      "pass": false,
+      "errors": []
+    }
+  ],
+  "identities": [
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+      "bytes": 27487,
+      "sha256": "c8ce4696a960294de7731d7956a7c3e373eef4b2232e909354dc30230b8bbec5"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+      "bytes": 8496,
+      "sha256": "39d1743a69685408775971bbdb6633c2c6357e90aa781c1ac21a3f4678df15ff"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/r1-performance_interface_v0.md",
+      "bytes": 5976,
+      "sha256": "e251d79c42e4152a284e9d2249d5684248fc21b2c76b7b0d21a616595df70591"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/r1-performance_interface_v0.schema.json",
+      "bytes": 22210,
+      "sha256": "2e3b6546ccb74c068e25cee8d7fb8532973ef98765ff8e21135fcbb64fd97676"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/report.md",
+      "bytes": 626,
+      "sha256": "c11ee98e6b3d876d16c58a567f2b1343a8d0d4f92034086003bf6d46e1c7f7ef"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/identities.json",
+      "bytes": 445,
+      "sha256": "fe6882f110e0fe207cc837bae2247b557df1ffb93d970d89598d67b0202163ac"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r2/structure-checks.json",
+      "bytes": 1063,
+      "sha256": "41476d16f389d18881ffa2ab8fbc9fdcf5cead9478bd6176f070b394edb26179"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerRelay/reports/V-tier1-design-bundle-20261015/grokbot-k7q2-review.md",
+      "bytes": 6856,
+      "sha256": "02bb6c29a1e9e540a97e1ce2daba075450b1f14d9138df039843c0bbe60bee3f"
+    }
+  ]
+}

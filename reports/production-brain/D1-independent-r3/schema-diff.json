@@ -1,0 +1,7 @@
+[
+  {
+    "path": "/oneOf/2/properties/errors/items/properties/path/pattern",
+    "before": "^(/|$)",
+    "after": "^(?:/(?:[^~/]|~[01])*)*$"
+  }
+]

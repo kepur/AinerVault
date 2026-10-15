@@ -1,0 +1,1017 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Performance request and candidate control curves (proposal; semantic validation required)",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "hub.performance/v0"
+        },
+        "record_kind": {
+          "const": "request"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "plan_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "plan_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "beat_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "event_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "world_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "world_version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scene_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scene_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "take_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "actor_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "character_ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sim_hz": {
+              "const": 120
+            },
+            "render_fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
+          },
+          "required": [
+            "plan_id",
+            "plan_revision",
+            "beat_id",
+            "event_id",
+            "world_id",
+            "world_version",
+            "scene_id",
+            "scene_revision",
+            "take_id",
+            "actor_id",
+            "character_ref",
+            "sim_hz",
+            "render_fps"
+          ]
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "target_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_tick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duration_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "by": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "path",
+              "by",
+              "reason"
+            ]
+          }
+        },
+        "audio_ref": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "asset_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "sample_rate": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "anchor_tick": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "offset_samples": {
+                  "type": "integer"
+                },
+                "alignment": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "aligned",
+                        "pending",
+                        "failed"
+                      ]
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "status": {
+                            "const": "aligned"
+                          }
+                        }
+                      },
+                      "then": {
+                        "required": [
+                          "ref",
+                          "sha256"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "asset_ref",
+                "sha256",
+                "sample_rate",
+                "anchor_tick",
+                "offset_samples",
+                "alignment"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "record_kind",
+        "request_id",
+        "binding",
+        "intent",
+        "intensity",
+        "target_ref",
+        "start_tick",
+        "duration_ticks",
+        "locks",
+        "audio_ref"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "hub.performance/v0"
+        },
+        "record_kind": {
+          "const": "response"
+        },
+        "response_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "plan_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "plan_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "beat_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "event_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "world_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "world_version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scene_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scene_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "take_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "actor_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "character_ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sim_hz": {
+              "const": 120
+            },
+            "render_fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
+          },
+          "required": [
+            "plan_id",
+            "plan_revision",
+            "beat_id",
+            "event_id",
+            "world_id",
+            "world_version",
+            "scene_id",
+            "scene_revision",
+            "take_id",
+            "actor_id",
+            "character_ref",
+            "sim_hz",
+            "render_fps"
+          ]
+        },
+        "curves": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "enum": [
+                  "gaze",
+                  "facial_unit",
+                  "mouth",
+                  "head_pose",
+                  "body_pose",
+                  "gesture",
+                  "secondary_motion"
+                ]
+              },
+              "body_part": {
+                "type": "string",
+                "minLength": 1
+              },
+              "controller_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mapping_status": {
+                "enum": [
+                  "pending_D5",
+                  "registered"
+                ]
+              },
+              "execution_status": {
+                "enum": [
+                  "unsupported",
+                  "candidate"
+                ]
+              },
+              "unsupported_reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "unit": {
+                "enum": [
+                  "normalized",
+                  "degree",
+                  "meter"
+                ]
+              },
+              "target_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "phases": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "start_tick": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "anticipation_end_tick": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "arrival_end_tick": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hold_end_tick": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end_tick": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "start_tick",
+                  "anticipation_end_tick",
+                  "arrival_end_tick",
+                  "hold_end_tick",
+                  "end_tick"
+                ]
+              },
+              "timing": {
+                "enum": [
+                  "ones",
+                  "twos",
+                  "threes"
+                ]
+              },
+              "interpolation": {
+                "enum": [
+                  "step",
+                  "linear",
+                  "cubic"
+                ]
+              },
+              "owner": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "user",
+                      "director",
+                      "runtime",
+                      "worldbrain",
+                      "blend"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "authorization_ref": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id",
+                  "authorization_ref"
+                ]
+              },
+              "keyframes": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "tick": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "value": {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "tick",
+                    "value"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "channel",
+              "body_part",
+              "controller_ref",
+              "mapping_status",
+              "execution_status",
+              "unit",
+              "phases",
+              "timing",
+              "interpolation",
+              "owner",
+              "keyframes"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mapping_status": {
+                      "const": "pending_D5"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "unsupported_reason"
+                  ],
+                  "properties": {
+                    "controller_ref": {
+                      "pattern": "^pending:D5/"
+                    },
+                    "execution_status": {
+                      "const": "unsupported"
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "controller_ref": {
+                      "not": {
+                        "pattern": "^pending:"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "execution_status": {
+                      "const": "unsupported"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "unsupported_reason"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "unsupported": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ]
+          }
+        }
+      },
+      "required": [
+        "protocol",
+        "record_kind",
+        "response_id",
+        "request_id",
+        "binding",
+        "curves",
+        "unsupported"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "hub.performance/v0"
+        },
+        "record_kind": {
+          "const": "error"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "errors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "unknown_actor",
+                  "stale_revision",
+                  "invalid_time_curve",
+                  "unknown_controller",
+                  "out_of_range",
+                  "missing_audio_alignment",
+                  "lock_conflict",
+                  "control_conflict",
+                  "unsupported_action",
+                  "changed_past"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^(?:/(?:[^~/]|~[01])*)*$"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "code",
+              "path",
+              "message"
+            ]
+          }
+        }
+      },
+      "required": [
+        "protocol",
+        "record_kind",
+        "request_id",
+        "errors"
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "fixture-request-suspense",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-suspense",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.65,
+      "target_ref": "fixture-elephant",
+      "start_tick": 0,
+      "duration_ticks": 600,
+      "locks": [
+        {
+          "path": "/world/actor/position",
+          "by": "fixture-user",
+          "reason": "same-world-position"
+        }
+      ],
+      "audio_ref": null
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "fixture-response-suspense",
+      "request_id": "fixture-request-suspense",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-suspense",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "facial_unit",
+          "body_part": "face",
+          "controller_ref": "pending:D5/face/hesitant",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 controller registry not available",
+          "unit": "normalized",
+          "phases": {
+            "start_tick": 0,
+            "anticipation_end_tick": 60,
+            "arrival_end_tick": 180,
+            "hold_end_tick": 420,
+            "end_tick": 600
+          },
+          "timing": "twos",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "fixture-director",
+            "authorization_ref": "fixture-only-not-run-authorization"
+          },
+          "keyframes": [
+            {
+              "tick": 0,
+              "value": 0
+            },
+            {
+              "tick": 180,
+              "value": 0.65
+            },
+            {
+              "tick": 420,
+              "value": 0.65
+            },
+            {
+              "tick": 600,
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "no actual audio/alignment"
+        },
+        {
+          "path": "/curves",
+          "reason": "D5 controller mapping pending; not executed"
+        }
+      ]
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "fixture-request-comedy",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-comedy",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "surprised",
+      "intensity": 0.9,
+      "target_ref": "fixture-elephant",
+      "start_tick": 0,
+      "duration_ticks": 600,
+      "locks": [
+        {
+          "path": "/world/actor/position",
+          "by": "fixture-user",
+          "reason": "same-world-position"
+        }
+      ],
+      "audio_ref": null
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "fixture-response-comedy",
+      "request_id": "fixture-request-comedy",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-comedy",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "facial_unit",
+          "body_part": "face",
+          "controller_ref": "pending:D5/face/surprised",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 controller registry not available",
+          "unit": "normalized",
+          "phases": {
+            "start_tick": 0,
+            "anticipation_end_tick": 180,
+            "arrival_end_tick": 240,
+            "hold_end_tick": 360,
+            "end_tick": 600
+          },
+          "timing": "ones",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "fixture-director",
+            "authorization_ref": "fixture-only-not-run-authorization"
+          },
+          "keyframes": [
+            {
+              "tick": 0,
+              "value": 0
+            },
+            {
+              "tick": 240,
+              "value": 0.9
+            },
+            {
+              "tick": 360,
+              "value": 0.9
+            },
+            {
+              "tick": 600,
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "no actual audio/alignment"
+        },
+        {
+          "path": "/curves",
+          "reason": "D5 controller mapping pending; not executed"
+        }
+      ]
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "fixture-request-dry",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-dry",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "deadpan",
+      "intensity": 0.12,
+      "target_ref": "fixture-elephant",
+      "start_tick": 0,
+      "duration_ticks": 600,
+      "locks": [
+        {
+          "path": "/world/actor/position",
+          "by": "fixture-user",
+          "reason": "same-world-position"
+        }
+      ],
+      "audio_ref": null
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "response",
+      "response_id": "fixture-response-dry",
+      "request_id": "fixture-request-dry",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-dry",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "curves": [
+        {
+          "channel": "facial_unit",
+          "body_part": "face",
+          "controller_ref": "pending:D5/face/deadpan",
+          "mapping_status": "pending_D5",
+          "execution_status": "unsupported",
+          "unsupported_reason": "D5 controller registry not available",
+          "unit": "normalized",
+          "phases": {
+            "start_tick": 0,
+            "anticipation_end_tick": 120,
+            "arrival_end_tick": 180,
+            "hold_end_tick": 540,
+            "end_tick": 600
+          },
+          "timing": "threes",
+          "interpolation": "linear",
+          "owner": {
+            "kind": "director",
+            "id": "fixture-director",
+            "authorization_ref": "fixture-only-not-run-authorization"
+          },
+          "keyframes": [
+            {
+              "tick": 0,
+              "value": 0
+            },
+            {
+              "tick": 180,
+              "value": 0.12
+            },
+            {
+              "tick": 540,
+              "value": 0.12
+            },
+            {
+              "tick": 600,
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "unsupported": [
+        {
+          "path": "/curves/mouth",
+          "reason": "no actual audio/alignment"
+        },
+        {
+          "path": "/curves",
+          "reason": "D5 controller mapping pending; not executed"
+        }
+      ]
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "request",
+      "request_id": "fixture-audio-clock",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "beat_id": "fixture-reveal",
+        "event_id": "fixture-transform",
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-suspense",
+        "actor_id": "fixture-heroine",
+        "character_ref": "pending:D5/fixture-character",
+        "sim_hz": 120,
+        "render_fps": 24
+      },
+      "intent": "hesitant",
+      "intensity": 0.65,
+      "target_ref": "fixture-elephant",
+      "start_tick": 0,
+      "duration_ticks": 600,
+      "locks": [
+        {
+          "path": "/world/actor/position",
+          "by": "fixture-user",
+          "reason": "same-world-position"
+        }
+      ],
+      "audio_ref": {
+        "asset_ref": "fixture:audio/no-real-media",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sample_rate": 48000,
+        "anchor_tick": 0,
+        "offset_samples": -2400,
+        "alignment": {
+          "status": "pending"
+        }
+      }
+    },
+    {
+      "protocol": "hub.performance/v0",
+      "record_kind": "error",
+      "request_id": "fixture-audio-clock",
+      "errors": [
+        {
+          "code": "missing_audio_alignment",
+          "path": "/audio_ref/alignment",
+          "message": "Alignment pending; mouth remains unsupported."
+        }
+      ]
+    }
+  ]
+}

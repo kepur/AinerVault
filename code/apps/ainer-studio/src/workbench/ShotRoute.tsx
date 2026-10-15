@@ -20,6 +20,7 @@ export function useShotRoutePlan(productionId:string,frameId?:string) {
 export function ShotRouteControls({plan,value,onChange,disabled=false}:{plan:ShotRoutePlan;value:ShotRouteSettings;onChange:(patch:ShotRouteSettings)=>void;disabled?:boolean}) {
   const {route,effective,fps,actors,moves,quality}=resolveShotRoute(plan,value),info=plan.routes[effective];
   const issue=shotRouteIssue(plan,value),needsCards=(r:string)=>['layer_foley','ltx25_layout'].includes(r)&&!plan.card_layout;
+  const group=plan.group_detail?.profiles[quality];
   return <section className="shot-route" aria-label="镜头方案参数"><b>镜头方案</b>
     <p className="shot-route-muted">推荐：{plan.label} · {plan.fps} 帧/秒 · {plan.quality_profiles?'快速预览档':''}参考耗时约 {plan.estimated_s} 秒</p><p>{plan.reason}</p>
     <fieldset disabled={disabled}><div className="shot-route-grid">
@@ -32,12 +33,13 @@ export function ShotRouteControls({plan,value,onChange,disabled=false}:{plan:Sho
       <label>生成帧率<select aria-label="生成帧率" value={value.fps??'default'} onChange={e=>onChange({fps:e.target.value==='default'?null:Number(e.target.value)})}>
         <option value="default">方案默认 · {route==='auto'&&effective===plan.route?plan.fps:info.fps} 帧/秒</option>{SHOT_FPS[effective].map(f=><option key={f} value={f}>{f} 帧/秒 · 原生生成</option>)}
       </select></label>
-      <label>目标时长<select aria-label="目标时长" value={value.duration_ms??5000} onChange={e=>onChange({duration_ms:Number(e.target.value)})}>{[3,5,6,8,10].map(s=><option key={s} value={s*1000}>{s} 秒</option>)}</select></label>
+      <label>目标时长<select aria-label="目标时长" value={value.duration_ms??2000} onChange={e=>onChange({duration_ms:Number(e.target.value)})}>{[1,1.5,2,2.5,3,5,6,8,10].map(s=><option key={s} value={s*1000}>{s} 秒</option>)}</select></label>
       {plan.quality_profiles&&effective!=='layer_foley'&&<label>出片清晰度<select aria-label="出片清晰度" value={quality} onChange={e=>onChange({quality:e.target.value as ShotQuality})}>{Object.entries(plan.quality_profiles).map(([id,q])=><option key={id} value={id} disabled={['compact','balanced'].includes(id)&&!plan.face_close}>{q.label} · {q.width}×{q.height}{['compact','balanced'].includes(id)&&!plan.face_close?'（只用于头像近景）':''}</option>)}</select></label>}
     </div>
     {plan.quality_profiles&&<p className="shot-route-muted">{effective==='layer_foley'?'分层方案保持原始人物与场景素材，暂不支持清晰度升档。':`${plan.quality_profiles[quality].width}×${plan.quality_profiles[quality].height} 为实际生成尺寸。清晰／高清档耗时更长；对白脸太小时，先制作说话人近景首帧。`}</p>}
+    {group&&group.risk!=='low'&&effective!=='layer_foley'&&<p className="shot-route-notice" role="status">本镜 {plan.group_detail?.person_count} 人同框；当前画幅最小人脸估算约 {group.estimated_face_width_px} 像素。整画面生成可能出现变脸、肢体粘连或远处人物消失。升清晰度只能增加像素，不能保证动作与身份正确；请保留全景交代站位，另做人物近景表现对白或关键动作，逐镜播放验收。</p>}
     <p className="shot-route-muted">当前使用 {fps} 帧/秒 · {quality==='preview'?`参考耗时约 ${route==='auto'?plan.estimated_s:info.est_s} 秒`:'清晰／高清档耗时另计'}，实际时间含排队与模型加载。{plan.dialogue_lines?`本镜 ${plan.dialogue_lines} 句对白，使用角色固定音色的 TTS 定稿台词。`:''}</p>
-    <p className="shot-route-muted">自动帧率在出片前按镜头选择：姿态对白 4 帧，走位与接触动作 8 帧，追逐或连续快速动作 12 帧；单段内保持所选帧率。帧率不会自动创造动作或空间。{plan.camera_reason||''}</p>
+    <p className="shot-route-muted">自动帧率在出片前按镜头选择：姿态对白 8 帧，走位与接触动作 8 帧，追逐或连续快速动作 12 帧；单段内保持所选帧率。帧率不会自动创造动作或空间。{plan.camera_reason||''}</p>
     {route==='auto'&&Object.keys(moves).length>0&&<p>已设置走位，自动方案使用白模控制。</p>}
     {effective==='layer_foley'&&<><div className="shot-route-actors">{plan.cast.map(({entity_id:id,name})=>{const a=actors[id];return <div className="shot-route-actor" key={id}>
       <label className="shot-route-check"><input type="checkbox" checked={!!a} onChange={e=>{const next={...actors};if(e.target.checked)next[id]={action:'',end_view:'free'};else delete next[id];onChange({actors:next});}}/>{name} · 本镜动作</label>
@@ -49,7 +51,8 @@ export function ShotRouteControls({plan,value,onChange,disabled=false}:{plan:Sho
       {plan.cast.map(({entity_id:id,name})=>{const m=moves[id]||{dx:0,arm:false};return <div className="shot-route-actor" key={id}>
         <label>{name} · 横向走位 {Math.round(m.dx*100)}%<input aria-label={name+' 白模走位'} type="range" min={-.4} max={.4} step={.02} value={m.dx} onChange={e=>onChange({moves:{...value.moves,[id]:{...m,dx:Number(e.target.value)}}})}/></label>
         <label>{name} · 远近走位 {Math.round((m.dy||0)*100)}%<input aria-label={name+' 白模远近走位'} type="range" min={-.35} max={.35} step={.01} value={m.dy||0} onChange={e=>onChange({moves:{...value.moves,[id]:{...m,dy:Number(e.target.value)}}})}/></label><p className="shot-route-muted">负数走向远处，人物随距离缩小；正数走近。脚底越出标定地板会拒绝生成。</p>
-        <label className="shot-route-check"><input aria-label={name+' 走完伸手'} type="checkbox" checked={m.arm} onChange={e=>onChange({moves:{...value.moves,[id]:{...m,arm:e.target.checked}}})}/>走完伸手</label>
+        <label>{name} · 走位用时 {Math.round((m.travel_fraction??.6)*100)}%<input aria-label={name+' 白模走位用时'} type="range" min={.2} max={m.arm?.95:1} step={.05} value={m.travel_fraction??.6} onChange={e=>onChange({moves:{...value.moves,[id]:{...m,travel_fraction:Number(e.target.value)}}})}/></label><p className="shot-route-muted">用满镜头可持续行走；减少用时会加快到位，剩余时间用于停留或伸手。</p>
+        <label className="shot-route-check"><input aria-label={name+' 走完伸手'} type="checkbox" checked={m.arm} onChange={e=>onChange({moves:{...value.moves,[id]:{...m,arm:e.target.checked,...(e.target.checked&&m.travel_fraction===1?{travel_fraction:.8}:{})}}})}/>走完伸手</label>
       </div>;})}</>}
     </fieldset>{issue&&<p className="shot-route-notice">{issue}</p>}
   </section>;

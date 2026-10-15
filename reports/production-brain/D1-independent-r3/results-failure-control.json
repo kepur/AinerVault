@@ -1,0 +1,343 @@
+{
+  "scope": "D1 r3 bounded delta/Pointer audit; prior 94 tests reused, not rerun",
+  "python": "3.12.10 (main, May 30 2025, 05:53:56) [Clang 20.1.4 ]",
+  "jsonschema": "4.26.0",
+  "schema_meta_valid": true,
+  "pointer_passed": 32,
+  "pointer_total": 33,
+  "neighbor_passed": 5,
+  "neighbor_total": 5,
+  "failed": 1,
+  "checks": {
+    "r3_hashes_match_author": true,
+    "r2_schema_archive_matches_reviewed_input": true,
+    "r2_doc_archive_matches_reviewed_input": true,
+    "schema_exact_one_changed_leaf": true,
+    "schema_only_expected_pattern_changed": true,
+    "schema_bytes_identical_after_reverting_pattern": true,
+    "r2_all_manifest_files_unchanged": true,
+    "doc_only_revision_marker_and_pointer_addition": true,
+    "old_evidence_directory_unchanged_during_audit": true,
+    "no_model_imports": true
+  },
+  "schema_diff": [
+    {
+      "path": "/oneOf/2/properties/errors/items/properties/path/pattern",
+      "before": "^(/|$)",
+      "after": "^(?:/(?:[^~/]|~[01])*)*$"
+    }
+  ],
+  "pointer_cases": [
+    {
+      "source": "r2-original-six",
+      "pointer": "",
+      "expected_valid": true,
+      "r2_actual_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "r2-original-six",
+      "pointer": "/curves/0",
+      "expected_valid": true,
+      "r2_actual_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "r2-original-six",
+      "pointer": "/a~0b/~1escaped",
+      "expected_valid": true,
+      "r2_actual_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "r2-original-six",
+      "pointer": "/bad~2escape",
+      "expected_valid": false,
+      "r2_actual_valid": true,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "r2-original-six",
+      "pointer": "/bad~",
+      "expected_valid": false,
+      "r2_actual_valid": true,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "r2-original-six",
+      "pointer": "curves/0",
+      "expected_valid": false,
+      "r2_actual_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "//",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/a/",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~0",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~1",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~01",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~10",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~00/~11",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/角色/眼睛",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/emoji/👁",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/back\\slash",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/line\nbreak",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/nul\u0000token",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~2",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/a~x/b",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~~0",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~0~",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~1~2",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/a/b~",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "/~9",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "#/a",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "a/b",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": " ",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": "~0",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": null,
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "independent-token-scanner-boundary",
+      "pointer": 0,
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "source": "intentional-expectation-failure",
+      "pointer": "",
+      "expected_valid": false,
+      "actual_valid": true,
+      "pass": false
+    }
+  ],
+  "neighbor_cases": [
+    {
+      "case": "unknown_error",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "case": "missing_path",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "case": "missing_message",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "case": "empty_errors",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    },
+    {
+      "case": "success_curves_in_error",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.schema.json",
+      "bytes": 27505,
+      "sha256": "34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/docs/v2/production_brain/performance_interface_v0.md",
+      "bytes": 8725,
+      "sha256": "73c3e88952e50f9e720ac2f80debe2915884a014f8498177e94de6c9ff039946"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r3/r2-performance_interface_v0.schema.json",
+      "bytes": 27487,
+      "sha256": "c8ce4696a960294de7731d7956a7c3e373eef4b2232e909354dc30230b8bbec5"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r3/r2-performance_interface_v0.md",
+      "bytes": 8496,
+      "sha256": "39d1743a69685408775971bbdb6633c2c6357e90aa781c1ac21a3f4678df15ff"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-r3/identities.json",
+      "bytes": 406,
+      "sha256": "e95e95c0aae3f9cc61f6122e8bc7ce69fed420c09ba4f72f4c6dfe1a529add85"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/results.json",
+      "bytes": 79948,
+      "sha256": "5a9b64161839af575527bdd67e3b6f3fa61d78982a5de028e30c885974f67a9d"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/pointer-contract-results.json",
+      "bytes": 2697,
+      "sha256": "c6a79299fa35bc4eb85ad86979c6cd9d9301b890f3ccb0d771c60fe90f55bfa6"
+    },
+    {
+      "path": "/Users/mac/AinerWorkFlow/AinerHub_IDEA/reports/production-brain/D1-independent-r2/artifact-identities.json",
+      "bytes": 5697,
+      "sha256": "aa3fc3cea75e22e7800734d2aa4cbeaa2fe568cb2d260bb40de2769177757c55"
+    }
+  ]
+}

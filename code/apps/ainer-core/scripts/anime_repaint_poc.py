@@ -28,6 +28,7 @@ ap.add_argument("--prev-warp", type=float, default=0.0,
                 help="blend weight of the previous repainted keyframe, optical-flow warped (Farneback on the 3D renders)")
 ap.add_argument("--skip-existing", action="store_true")
 ap.add_argument("--cn-scale", type=float, default=0.7)
+ap.add_argument("--prompt", default=None, help="override positive prompt (default: close-up prompt)")
 a = ap.parse_args()
 W, H = map(int, a.res.split("x"))
 os.makedirs(os.path.join(a.out, "frames"), exist_ok=True)
@@ -37,6 +38,8 @@ PROMPT = ("masterpiece, best quality, very aesthetic, anime screenshot, 2boys, b
           "sharp focus, vivid colors, detailed eyes")
 NEG = ("lowres, worst quality, low quality, blurry, hazy, washed out, faded, pastel, 3d, render, photorealistic, "
        "gradient, bad anatomy, deformed face, extra fingers, text, watermark, 1girl, female")
+if a.prompt:
+    PROMPT = a.prompt
 
 dev = "mps" if torch.backends.mps.is_available() else "cpu"
 base = snapshot_download("cagliostrolab/animagine-xl-3.1", local_files_only=True)

@@ -26,3 +26,29 @@ Flicker includes real motion (camera/characters move), so the 3D route's value i
 - Neither reaches the reference. Biggest remaining gap is character design/faces (models), and true ink line quality.
 
 Outputs: `routeA_closeup.mp4`, `routeB_closeup.mp4`, `side_by_side.mp4` (modern | A | B), `stills/{modern,routeA,routeB}_face_f{25,61,97}.png`, `stills/side_by_side_face_f61.png`, `routeA/timing.json`, `routeB/timing.json`.
+
+## Route A2 — temporally stabilised repaint + motion fluidity (close-up)
+
+Source: `routeA2_src/` = modern_anime close-up re-rendered with `--secondary` (hip/chest counter-rotation, vertical bob,
+breathing, small head turns, blinks via `Fcl_EYE_Close`), passes for every frame.
+Repaint: `anime_repaint_poc.py routeA2_src routeA2 --frames 25:97:2 --strength 0.55 --cn-scale 0.9` (12 fps keys, seed 1234).
+
+What was tried for shadow flicker (keys 25:37:2 A/B, then full run):
+| config | shadow flicker vs 3D (motion-comp.) | CCIP vs first |
+|---|---|---|
+| strength 0.62 / cn 0.8 (old Route A settings) | 1.72x | 0.88 |
+| strength 0.5 / cn 0.9 + flow-warped prev key init 0.5 | 1.81x (feedback accumulates texture) — dropped | 0.80 |
+| **strength 0.55 / cn 0.9, no warp (A2)** | 1.47x on the A/B keys | — |
+| A2 + 3D shadow lock (post) | 1.38x on A/B keys, but 1.25x vs 1.03x over the full shot — not used | — |
+
+Same keyframes over the full shot (25:97:6, shared by both runs): **old routeA 1.25x → A2 1.03x of 3D shadow flicker**
+(effectively the 3D's own shading change). Over all A2 keys (25:97:2): A2 1.37x, overall flicker 13.6 vs 3D 12.5, CCIP 0.77 vs 3D 0.80.
+Fix = lower denoise + stronger depth/lineart control; optical-flow init and post shadow-lock did not help. Luminance deflicker (ffmpeg `deflicker`) on all A2 encodes.
+Time: 55.6 s/key avg (some contention), 37 keys ≈ 34 min for 3 s. 1 min @ 12 fps keys ≈ 720 keys ≈ 8–11 h on this Mac.
+
+Timing variants (`anime_timing_variants.sh`): `routeA2_closeup_threes.mp4` (8 fps hold, nearest key on 3-grid),
+`routeA2_closeup_twos.mp4` (12 fps hold), `routeA2_closeup_rife24.mp4` (RIFE 4.25 MLX x2) = `routeA2_closeup.mp4`.
+`side_by_side_A2.mp4`: modern_anime 3D | routeA old | A2 threes / A2 twos | A2 RIFE24.
+Verdict: RIFE 24 is the most fluid for this slow walk; in-between frames show no visible morphing (stills/rife_consec_48_51.png) because the keys are already consistent. Twos is the safe anime look; threes looks choppy at this camera speed.
+Remaining: small eye-colour drift on a few keys (blue→violet), hoodie string colour varies.
+Stills: stills/a2raw_consec_49_55.png, stills/face_cmp_0061.png (3D | routeA | A2), stills/sbs_A2_t15.png.

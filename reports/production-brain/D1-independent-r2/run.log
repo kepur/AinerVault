@@ -1,0 +1,48 @@
+{
+  "scope": "independent structure and document/formula audit only",
+  "jsonschema": "4.26.0",
+  "structure_passed": 94,
+  "structure_total": 94,
+  "checks": {
+    "author_r2_hash_match": true,
+    "r1_archive_hash_match": true,
+    "exact_ten_error_codes": true,
+    "doc_owner_object_named": true,
+    "request_response_binding_schema_equal": true,
+    "no_model_imports": true
+  },
+  "clock_arithmetic": [
+    {
+      "tick": 120,
+      "sample": "-2205",
+      "expected": "-2205",
+      "pass": true
+    },
+    {
+      "tick": 121,
+      "sample": "-3675/2",
+      "expected": "-3675/2",
+      "pass": true
+    },
+    {
+      "tick": 126,
+      "sample": "0",
+      "expected": "0",
+      "pass": true
+    },
+    {
+      "tick": 240,
+      "sample": "41895",
+      "expected": "41895",
+      "pass": true
+    },
+    {
+      "fps": 24,
+      "timing": "twos",
+      "ticks_per_hold": "10",
+      "expected": "10",
+      "pass": true
+    }
+  ],
+  "failed": 0
+}

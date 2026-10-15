@@ -1,0 +1,124 @@
+{
+  "agent": "deepseek-q5t8",
+  "counterexamples": {
+    "any_executable": false,
+    "by_expected_code": {
+      "changed_past": 1,
+      "control_conflict": 1,
+      "invalid_time_curve": 8,
+      "lock_conflict": 4,
+      "missing_audio_alignment": 1,
+      "out_of_range": 6,
+      "stale_revision": 1,
+      "unknown_actor": 1,
+      "unknown_controller": 2,
+      "unsupported_action": 2
+    },
+    "passed": 27,
+    "total": 27
+  },
+  "cpu_only": true,
+  "date": "2026-10-15",
+  "evidence_files": [
+    "reports/P1-D2/report.md",
+    "reports/P1-D2/evidence.json",
+    "reports/P1-D2/schema-alignment.json",
+    "reports/P1-D2/schema-alignment.log",
+    "reports/P1-D2/schema-alignment-failure-control.json",
+    "reports/P1-D2/schema-alignment-failure-control.log",
+    "reports/P1-D2/pytest-p1d2.log",
+    "reports/P1-D2/check_schema_alignment.py",
+    "reports/P1-D2/collect_evidence.py"
+  ],
+  "inputs": {
+    "d1_doc_sha256": "73c3e88952e50f9e720ac2f80debe2915884a014f8498177e94de6c9ff039946",
+    "d1_schema_sha256": "34aba041558ecbc279ca84d2e846c76ee2334dd621433c086e9b150640b7d23c",
+    "d1_schema_unchanged": true,
+    "r1_r2_archives_unchanged": true,
+    "r2_archive_doc_sha256": "39d1743a69685408775971bbdb6633c2c6357e90aa781c1ac21a3f4678df15ff",
+    "r2_archive_schema_sha256": "c8ce4696a960294de7731d7956a7c3e373eef4b2232e909354dc30230b8bbec5"
+  },
+  "io_free_validator": true,
+  "no_dependency_installs": true,
+  "no_model_no_gpu_no_render": true,
+  "positive_controls": {
+    "registered_fixture_executable": true,
+    "three_examples_ok_not_executable": true,
+    "unbound_response_executable": false,
+    "without_executed_ranges_executable": false
+  },
+  "pytest": {
+    "command": "TMPDIR=/tmp/hub-p1-d2-vR7yCD PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_production_performance_contract.py -q",
+    "cwd": "code/apps/ainer-core",
+    "exit": 0,
+    "failed": 0,
+    "passed": 106,
+    "tmp_root": "/tmp/hub-p1-d2-vR7yCD",
+    "warning": "PytestConfigWarning: Unknown config option asyncio_mode"
+  },
+  "regression_pytest": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_production_review_contract.py tests/test_production_chain.py tests/test_performance.py -q",
+    "exit": 0,
+    "failed": 0,
+    "passed": 135
+  },
+  "schema_alignment": {
+    "canonical_rejected": 0,
+    "cases": 26,
+    "d2_semantic_stricter": 7,
+    "failure_control_caught": 12,
+    "false_green": 0,
+    "structural_deferred_to_semantic": 5
+  },
+  "scope": [
+    "code/apps/ainer-core/app/production/performance_contract.py",
+    "code/apps/ainer-core/tests/test_production_performance_contract.py",
+    "reports/P1-D2/"
+  ],
+  "source_sha256": {
+    "check_schema_alignment.py": "101fc68bca114a73d9b99c7e68640aaf076115b1fb8d4fde7e44336471f5280d",
+    "collect_evidence.py": "6ce8b3c2720ae51c3ce710980c45b674154fdea0d6a95d06645a2247c537e931",
+    "evidence.json": "47e284e251d64ff9bad8ac9ecb89f6da54fe3014ed11dd0ad169dda9450f4000",
+    "performance_contract.py": "bbb2c2ab8b18c45f65219e5abe7f7770dbd9ce3ae0c497f71e5fadfa825acf4c",
+    "test_production_performance_contract.py": "bc643c2714bf2bdd2afb5baa13f20120f88e116cc00c22cf744a525cfe995a5b"
+  },
+  "task": "hub.P1.D2",
+  "three_canonical_takes": {
+    "comedy": {
+      "executable": false,
+      "execution_status": [
+        "unsupported"
+      ],
+      "mapping_status": [
+        "pending_D5"
+      ],
+      "ok": true
+    },
+    "dry": {
+      "executable": false,
+      "execution_status": [
+        "unsupported"
+      ],
+      "mapping_status": [
+        "pending_D5"
+      ],
+      "ok": true
+    },
+    "suspense": {
+      "executable": false,
+      "execution_status": [
+        "unsupported"
+      ],
+      "mapping_status": [
+        "pending_D5"
+      ],
+      "ok": true
+    }
+  },
+  "unverified": [
+    "全量 ainer-core 测试套件（超出文件范围；部分用例需要服务/数据库）",
+    "真实音频、真实角色包 D5 控制面、渲染、E2E",
+    "序列化消费方（谁把本校验器接到 API/执行器）尚未存在",
+    "性能：单条 600 tick 曲线的校验耗时未做基准"
+  ]
+}

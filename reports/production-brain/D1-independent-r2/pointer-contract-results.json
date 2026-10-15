@@ -1,0 +1,114 @@
+{
+  "passed": 4,
+  "total": 6,
+  "cases": [
+    {
+      "pointer": "",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "pointer": "/curves/0",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "/curves/0",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "pointer": "/a~0b/~1escaped",
+      "expected_valid": true,
+      "actual_valid": true,
+      "pass": true,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "/a~0b/~1escaped",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "pointer": "/bad~2escape",
+      "expected_valid": false,
+      "actual_valid": true,
+      "pass": false,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "/bad~2escape",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "pointer": "/bad~",
+      "expected_valid": false,
+      "actual_valid": true,
+      "pass": false,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "/bad~",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    },
+    {
+      "pointer": "curves/0",
+      "expected_valid": false,
+      "actual_valid": false,
+      "pass": true,
+      "instance": {
+        "protocol": "hub.performance/v0",
+        "record_kind": "error",
+        "request_id": "independent-pointer-check",
+        "errors": [
+          {
+            "code": "invalid_time_curve",
+            "path": "curves/0",
+            "message": "Fixture only."
+          }
+        ]
+      }
+    }
+  ]
+}

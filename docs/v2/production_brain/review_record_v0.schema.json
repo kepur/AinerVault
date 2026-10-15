@@ -1,0 +1,411 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review issue / verdict / comparison / user-choice records v0 (structure only; semantic fail-closed rules in review_contract.py)",
+  "description": "依据 docs/v2/production_brain/review_standard_v0.md (hub.P1.C1)。只做结构、枚举与局部条件检查；缺证据判通过、blocker被抵消、自评晋升、时间轴混淆、旧媒体身份、锁定字段修改等语义规则由 review_contract.py 纯函数 fail-closed 校验。本 schema 不给作品打分、不含通过阈值、不声明系统可用。",
+  "oneOf": [
+    { "$ref": "#/$defs/issue" },
+    { "$ref": "#/$defs/verdict" },
+    { "$ref": "#/$defs/comparison" },
+    { "$ref": "#/$defs/choice" }
+  ],
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": { "type": "string", "minLength": 1 },
+        "plan_revision": { "type": "integer", "minimum": 0 },
+        "world_id": { "type": "string", "minLength": 1 },
+        "world_version": { "type": "integer", "minimum": 1 },
+        "scene_id": { "type": "string", "minLength": 1 },
+        "scene_revision": { "type": "integer", "minimum": 0 },
+        "take_id": { "type": "string", "minLength": 1 },
+        "shot_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["plan_id", "plan_revision", "world_id", "world_version", "scene_id", "scene_revision", "take_id"]
+    },
+    "clock_interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clock": { "enum": ["sim_tick", "video_frame", "audio_sample"] },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 1 },
+        "sim_hz": { "const": 120 },
+        "fps": { "type": "integer", "minimum": 1, "maximum": 120 },
+        "origin_tick": { "type": "integer", "minimum": 0 },
+        "sample_rate": { "type": "integer", "minimum": 1 },
+        "anchor_tick": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["clock", "start", "end"],
+      "allOf": [
+        {
+          "if": { "properties": { "clock": { "const": "sim_tick" } } },
+          "then": { "required": ["sim_hz"] }
+        },
+        {
+          "if": { "properties": { "clock": { "const": "video_frame" } } },
+          "then": { "required": ["fps", "origin_tick"] }
+        },
+        {
+          "if": { "properties": { "clock": { "const": "audio_sample" } } },
+          "then": { "required": ["sample_rate", "anchor_tick"] }
+        }
+      ]
+    },
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "minLength": 1 },
+        "locator": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
+      },
+      "required": ["ref", "summary"]
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["human", "model", "user"] },
+        "id": { "type": "string", "minLength": 1 },
+        "model_version": { "type": "string", "minLength": 1 },
+        "is_author": { "type": "boolean" },
+        "evaluated_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "id", "is_author"]
+    },
+    "input_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "asset_ref": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "required": ["asset_ref", "revision"]
+    },
+    "fix_proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": { "enum": ["world", "performance", "presentation", "style"] },
+        "path": { "type": "string", "minLength": 1 },
+        "minimal_range": { "type": "string", "minLength": 1 },
+        "world_new_version_required": { "type": "boolean" }
+      },
+      "required": ["scope", "path", "minimal_range"],
+      "allOf": [
+        {
+          "if": { "properties": { "scope": { "const": "world" } } },
+          "then": { "properties": { "world_new_version_required": { "const": true } }, "required": ["world_new_version_required"] }
+        }
+      ]
+    },
+    "lock_impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "touches_lock": { "type": "boolean" },
+        "lock_paths": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^/" }
+        }
+      },
+      "required": ["touches_lock", "lock_paths"]
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "hub.review/v0" },
+        "record_kind": { "const": "issue" },
+        "issue_id": { "type": "string", "minLength": 1 },
+        "standard_version": { "const": "v0" },
+        "binding": { "$ref": "#/$defs/binding" },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["role", "entity", "shot", "take", "audio", "other"] },
+            "id": { "type": "string", "minLength": 1 }
+          },
+          "required": ["kind", "id"]
+        },
+        "clock": { "$ref": "#/$defs/clock_interval" },
+        "dimension": { "enum": ["intent_genre", "era_world", "story_character", "cinema_edit", "art_identity", "sound_performance", "execution_experience"] },
+        "issue_type": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["blocker", "major", "minor", "note"] },
+        "verdict": { "enum": ["fail", "unverified"] },
+        "hard_constraint": { "enum": ["execution_success", "identity", "locked_fields", "registered_gates", "license", "world_fact_separation", "none"] },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence_ref" } },
+        "observed": { "type": "string", "minLength": 1 },
+        "expected": { "type": "string", "minLength": 1 },
+        "fix": { "$ref": "#/$defs/fix_proposal" },
+        "lock_impact": { "$ref": "#/$defs/lock_impact" },
+        "dependencies": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "unverified_items": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "reviewer": { "$ref": "#/$defs/reviewer" },
+        "inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/input_identity" } },
+        "tech_refs": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+@v[0-9]+$" } },
+        "followup_refs": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "required": ["protocol", "record_kind", "issue_id", "standard_version", "binding", "subject", "clock", "dimension", "severity", "verdict", "evidence", "observed", "expected", "fix", "lock_impact", "reviewer", "inputs"]
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "hub.review/v0" },
+        "record_kind": { "const": "verdict" },
+        "verdict_id": { "type": "string", "minLength": 1 },
+        "standard_version": { "const": "v0" },
+        "binding": { "$ref": "#/$defs/binding" },
+        "hard_constraints": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "enum": ["execution_success", "identity", "locked_fields", "registered_gates", "license", "world_fact_separation"] },
+              "state": { "enum": ["pass", "fail", "unverified"] },
+              "note": { "type": "string", "minLength": 1 }
+            },
+            "required": ["name", "state"]
+          }
+        },
+        "dimensions": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dimension": { "enum": ["intent_genre", "era_world", "story_character", "cinema_edit", "art_identity", "sound_performance", "execution_experience"] },
+              "status": { "enum": ["pass", "fail", "unverified"] },
+              "evidence_present": { "type": "boolean" },
+              "note": { "type": "string", "minLength": 1 }
+            },
+            "required": ["dimension", "status", "evidence_present"]
+          }
+        },
+        "overall": { "enum": ["pass", "fail", "unverified"] },
+        "supports_promotion": { "type": "boolean" },
+        "reviewer": { "$ref": "#/$defs/reviewer" },
+        "inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/input_identity" } },
+        "evaluated_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["protocol", "record_kind", "verdict_id", "standard_version", "binding", "hard_constraints", "dimensions", "overall", "reviewer", "inputs", "evaluated_at"]
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "hub.review/v0" },
+        "record_kind": { "const": "comparison" },
+        "comparison_id": { "type": "string", "minLength": 1 },
+        "standard_version": { "const": "v0" },
+        "baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "event_id": { "type": "string", "minLength": 1 },
+            "world_id": { "type": "string", "minLength": 1 },
+            "world_version": { "type": "integer", "minimum": 1 },
+            "role_ids": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          },
+          "required": ["event_id", "world_id", "world_version"]
+        },
+        "candidate_a": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "take_id": { "type": "string", "minLength": 1 },
+            "shot_id": { "type": "string", "minLength": 1 },
+            "asset_ref": { "type": "string", "minLength": 1 },
+            "revision": { "type": "string", "minLength": 1 }
+          },
+          "required": ["take_id", "asset_ref", "revision"]
+        },
+        "candidate_b": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "take_id": { "type": "string", "minLength": 1 },
+            "shot_id": { "type": "string", "minLength": 1 },
+            "asset_ref": { "type": "string", "minLength": 1 },
+            "revision": { "type": "string", "minLength": 1 }
+          },
+          "required": ["take_id", "asset_ref", "revision"]
+        },
+        "preference": { "enum": ["prefer_a", "prefer_b", "tie", "undecidable"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "genre_target": { "type": "string", "minLength": 1 },
+        "dimension": { "enum": ["intent_genre", "era_world", "story_character", "cinema_edit", "art_identity", "sound_performance", "execution_experience"] },
+        "hard_constraints_checked": { "type": "boolean" },
+        "blind": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "author_hidden": { "type": "boolean" },
+            "technique_hidden": { "type": "boolean" },
+            "model_hidden": { "type": "boolean" },
+            "self_score_hidden": { "type": "boolean" },
+            "randomized_order": { "type": "boolean" }
+          },
+          "required": ["author_hidden", "technique_hidden", "model_hidden", "self_score_hidden", "randomized_order"]
+        },
+        "supports_promotion": { "type": "boolean" },
+        "reviewer": { "$ref": "#/$defs/reviewer" },
+        "evaluated_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["protocol", "record_kind", "comparison_id", "standard_version", "baseline", "candidate_a", "candidate_b", "preference", "reason", "hard_constraints_checked", "blind", "reviewer", "evaluated_at"]
+    },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "hub.review/v0" },
+        "record_kind": { "const": "choice" },
+        "choice_id": { "type": "string", "minLength": 1 },
+        "standard_version": { "const": "v0" },
+        "requirement_ref": { "type": "string", "minLength": 1 },
+        "candidates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "take_id": { "type": "string", "minLength": 1 },
+              "asset_ref": { "type": "string", "minLength": 1 },
+              "revision": { "type": "string", "minLength": 1 },
+              "diff": { "type": "string", "minLength": 1 }
+            },
+            "required": ["take_id", "asset_ref", "revision"]
+          }
+        },
+        "selected_take_id": { "type": "string", "minLength": 1 },
+        "user_verbatim": { "type": "string", "minLength": 1 },
+        "shown_order": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } },
+        "cost": { "type": "string", "minLength": 1 },
+        "chosen_at": { "type": "string", "minLength": 1 },
+        "hard_constraints_preserved": { "const": true },
+        "grants_license_or_budget": { "const": false },
+        "reviewer": { "$ref": "#/$defs/reviewer" }
+      },
+      "required": ["protocol", "record_kind", "choice_id", "standard_version", "requirement_ref", "candidates", "selected_take_id", "user_verbatim", "shown_order", "chosen_at", "hard_constraints_preserved", "grants_license_or_budget", "reviewer"]
+    }
+  },
+  "examples": [
+    {
+      "protocol": "hub.review/v0",
+      "record_kind": "issue",
+      "issue_id": "fixture-issue-gaze",
+      "standard_version": "v0",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-suspense",
+        "shot_id": "fixture-shot-5"
+      },
+      "subject": { "kind": "role", "id": "fixture-heroine" },
+      "clock": { "clock": "sim_tick", "sim_hz": 120, "start": 180, "end": 240 },
+      "dimension": "story_character",
+      "issue_type": "reaction_missing",
+      "severity": "major",
+      "verdict": "fail",
+      "hard_constraint": "none",
+      "evidence": [
+        { "ref": "fixture:shot5/clip", "digest": "fixture-digest-shot5", "locator": "sim_tick[180,240)", "summary": "揭示后主角无可见反应，完整片段已看" }
+      ],
+      "observed": "揭示后 60 tick 内主角保持原表情，无注视与反应镜头",
+      "expected": "揭示后应有注视钉住变形物并给出反应（按当时要求）",
+      "fix": { "scope": "performance", "path": "/performance/fixture-heroine/reaction", "minimal_range": "sim_tick[180,240) 单表演take内加反应" },
+      "lock_impact": { "touches_lock": false, "lock_paths": [] },
+      "reviewer": { "kind": "human", "id": "fixture-reviewer", "is_author": false, "evaluated_at": "2026-10-15" },
+      "inputs": [{ "asset_ref": "fixture:shot5/clip", "revision": "r3" }]
+    },
+    {
+      "protocol": "hub.review/v0",
+      "record_kind": "verdict",
+      "verdict_id": "fixture-verdict-suspense",
+      "standard_version": "v0",
+      "binding": {
+        "plan_id": "fixture-bag-elephant",
+        "plan_revision": 0,
+        "world_id": "fixture-world",
+        "world_version": 1,
+        "scene_id": "fixture-scene",
+        "scene_revision": 0,
+        "take_id": "fixture-suspense"
+      },
+      "hard_constraints": [
+        { "name": "execution_success", "state": "pass" },
+        { "name": "identity", "state": "pass" },
+        { "name": "locked_fields", "state": "pass" },
+        { "name": "registered_gates", "state": "pass" },
+        { "name": "license", "state": "pass" },
+        { "name": "world_fact_separation", "state": "pass" }
+      ],
+      "dimensions": [
+        { "dimension": "intent_genre", "status": "unverified", "evidence_present": false, "note": "悬疑是否可感需完整片段，当前只有单帧" },
+        { "dimension": "era_world", "status": "pass", "evidence_present": true },
+        { "dimension": "story_character", "status": "fail", "evidence_present": true },
+        { "dimension": "cinema_edit", "status": "pass", "evidence_present": true },
+        { "dimension": "art_identity", "status": "pass", "evidence_present": true },
+        { "dimension": "sound_performance", "status": "unverified", "evidence_present": false, "note": "静音输入不得给声音通过" },
+        { "dimension": "execution_experience", "status": "pass", "evidence_present": true }
+      ],
+      "overall": "unverified",
+      "reviewer": { "kind": "human", "id": "fixture-reviewer", "is_author": false },
+      "inputs": [{ "asset_ref": "fixture:suspense/take", "revision": "r3" }],
+      "evaluated_at": "2026-10-15"
+    },
+    {
+      "protocol": "hub.review/v0",
+      "record_kind": "comparison",
+      "comparison_id": "fixture-cmp-suspense-comedy",
+      "standard_version": "v0",
+      "baseline": { "event_id": "fixture-transform", "world_id": "fixture-world", "world_version": 1, "role_ids": ["fixture-heroine"] },
+      "candidate_a": { "take_id": "fixture-suspense", "asset_ref": "fixture:suspense/take", "revision": "r3" },
+      "candidate_b": { "take_id": "fixture-comedy", "asset_ref": "fixture:comedy/take", "revision": "r3" },
+      "preference": "tie",
+      "reason": "悬疑的信息差与喜剧的预期落空各成立一次，按当前题材目标无法分高下",
+      "genre_target": "suspense",
+      "dimension": "intent_genre",
+      "hard_constraints_checked": true,
+      "blind": { "author_hidden": true, "technique_hidden": true, "model_hidden": true, "self_score_hidden": true, "randomized_order": true },
+      "supports_promotion": false,
+      "reviewer": { "kind": "human", "id": "fixture-judge", "is_author": false },
+      "evaluated_at": "2026-10-15"
+    },
+    {
+      "protocol": "hub.review/v0",
+      "record_kind": "choice",
+      "choice_id": "fixture-choice-1",
+      "standard_version": "v0",
+      "requirement_ref": "fixture-req-reveal",
+      "candidates": [
+        { "take_id": "fixture-suspense", "asset_ref": "fixture:suspense/take", "revision": "r3", "diff": "慢转头+眉部紧张" },
+        { "take_id": "fixture-comedy", "asset_ref": "fixture:comedy/take", "revision": "r3", "diff": "快速double-take+手势" }
+      ],
+      "selected_take_id": "fixture-comedy",
+      "user_verbatim": "要第二个，反应更干脆",
+      "shown_order": ["fixture-comedy", "fixture-suspense"],
+      "cost": "fixture-cost-2-renders",
+      "chosen_at": "2026-10-15",
+      "hard_constraints_preserved": true,
+      "grants_license_or_budget": false,
+      "reviewer": { "kind": "user", "id": "fixture-user", "is_author": false }
+    }
+  ]
+}

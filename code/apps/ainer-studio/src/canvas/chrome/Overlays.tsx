@@ -5,7 +5,7 @@
  * 它会让 position:fixed 的后代改以它为包含块 —— 菜单会被关在卡片里、被圆角裁掉。
  * 挂到 .cv-root 下既逃开这个坑，又还在 tokens.css 的变量作用域里。
  */
-import { QuickFilm } from "./QuickFilm";
+import { NewCanvasModal } from "./NewCanvasModal";
 import { ScreenplayConfigModal } from "./ScreenplayConfigModal";
 import {
   lazy, Suspense, useEffect, useLayoutEffect, useRef, useState,
@@ -288,7 +288,9 @@ export function Overlays() {
     <SharedStageWorkspace key={`${s.boardId}:${o.id ?? ""}`} boardId={s.boardId} initialStageId={o.id} onClose={close} />
   </Suspense>;
 
-  if (o.kind === "quick") return <QuickFilm onClose={close} />;
+  // 「照片＋一句话」不再走固定流水线（产物串成一条线、中间步骤改不了 —— 用户明确否掉的做法），
+  // 一律产出一整张可改可重跑的画布
+  if (o.kind === "quick") return <NewCanvasModal initialTab="idea" onClose={close} />;
   if (o.kind === "screenplay_config") return <ScreenplayConfigModal nodeId={o.nodeId} presetId={o.presetId} onClose={close} />;
 
   if (o.kind === "media") {

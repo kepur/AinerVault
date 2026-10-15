@@ -4,6 +4,8 @@ import type { CNode, CNodeData, ImageRole, MediaRef } from "../model";
 import { isProductionRef } from "../model";
 import { useNodeResolved } from "../store";
 import { GenPending, NodeShell, mediaSrc, useLazyStore } from "./NodeShell";
+import { readCtx } from "../../ctx";
+import { useLocalNames } from "../../production/useLocalNames";
 
 /**
  * 三种版式：
@@ -76,7 +78,20 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
   const voice = r.kind === "entity_view" && data.ref.kind === "entity_view" && data.ref.view !== "sheet" ? r.voice : null;
 
   const canCycle = !data.comic && (data.ref.kind === "free" || data.ref.kind === "asset") && role !== "sheet" && role !== "prop_sheet";
-  const currentTag = ROLE_BADGE_META[role] || (canCycle ? { label: "🏷️ 标记", next: "character" as ImageRole, title: "点击标记类型（角色/道具/场景/服饰）" } : null);
+  // 角标只在能点（给自由图打标）时挂：派生的定妆照、漫剧素材，标题已经写明是什么，
+  // 再挂一个不能点的「👤 角色」只会把人名挤成省略号 —— 用户最想看的恰恰是名字
+  const currentTag = canCycle ? ROLE_BADGE_META[role] || { label: "🏷️ 标记", next: "character" as ImageRole, title: "点击标记类型（角色/道具/场景/服饰）" } : null;
+
+  // 英文版剧本里叫 Thomas Ashford，角色库里存的是原著名「谢文东」：标题直接写人名（译名优先），原名放卡片底部
+  const ctx = readCtx();
+  const names = useLocalNames(ctx.novel, ctx.locale);
+  const person = r.kind === "entity_view" ? names.get(r.member.entity_id) : undefined;
+  const who = r.kind === "entity_view" ? person?.target || r.member.name : null;
+  const kindLabel = data.ref.kind === "entity_view" ? (data.ref.view === "sheet" ? "多角度定妆照" : "定妆照") : "";
+  const shown = who ? { ...data, title: role === "character" ? who : `${kindLabel} · ${who}` } : data;
+  const caption = who && r.kind === "entity_view"
+    ? `${role === "character" ? kindLabel : ""}${person && person.target !== r.member.name ? `${role === "character" ? " · " : ""}原名 ${r.member.name}` : ""}`
+    : "";
 
   const onCycleRole = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -93,7 +108,7 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
     <NodeShell
       id={id}
       kind="image"
-      data={data}
+      data={shown}
       selected={selected}
       width={WIDTH[layout]}
       badges={(
@@ -116,6 +131,7 @@ function ImageNode({ id, data, selected }: NodeProps<CNode>) {
           {epoch && <span className="cv-badge" title="角色时期（本章用的是这一期的造型）">{epoch}</span>}
         </>
       )}
+      footer={caption ? <div className="cv-pic__cap" title={caption}>{caption}</div> : undefined}
       onOpen={src && !pending ? () => getStore()?.openOverlay({ kind: "media", url: src, video: false }) : undefined}
     >
       {pending ? (

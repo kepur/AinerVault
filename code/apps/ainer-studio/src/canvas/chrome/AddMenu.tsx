@@ -118,8 +118,8 @@ export function AddMenu() {
     },
     { id: "box", label: "3D 白模", icon: <Icon name="cube" />, badge: "NEW", hint: "空白 / 模板 / 已有项目", more: true, onPick: () => setPage("box") },
     {
-      id: "quick", label: "快速成片", icon: <Icon name="sparkle" />, badge: "NEW", hint: "照片＋一句话",
-      title: "一张人物照片＋一句想法（服装照、场景图可选）→ 定妆照 → 分镜图 → 2–4 镜短片，全部本机",
+      id: "quick", label: "想法生成画布", icon: <Icon name="sparkle" />, badge: "NEW", hint: "照片＋一句话",
+      title: "一张人物照片＋一句想法 → 新建一整张画布：定妆照、场景、分镜图、视频都是节点，每步都能改了重出（全部本机）",
       onPick: () => latest.current.openOverlay({ kind: "quick" }),
     },
     { id: "gen_video", label: "视频生成", icon: <Icon name="video" />, onPick: () => add("video", { ref: freeRef(), title: "视频生成", role: "generated" }) },
