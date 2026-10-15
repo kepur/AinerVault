@@ -1,6 +1,7 @@
 # 10 · 制作脑在 AinerHub 的落位与改造路线
 
-- 状态：设计草案 v0 · 2026-10-15 · 起草：Claude（Relay 任务 hub.P1.A1）· 待 Codex 平级审议，**其中第 3 节需要用户决定**
+- 状态：设计草案 v0 · 2026-10-15 · 起草：Claude（Relay 任务 hub.P1.A1）· 待 Codex 平级审议
+- **第 3 节已由用户决定（D-012，同日）：选甲**——一个逻辑世界系统，按状态类型统一权威，代码不搬。正式记录见 AWZ `RESEARCH_LOG.md` D-012 和 `docs/adr/ADR-0011-three-systems.md` 修订一；统一变更协议任务是 awz.P3.E3。
 - 依据：用户决定 D-011（`~/AinerWorkFlow/AnimeWorldZero/docs/adr/ADR-0011-three-systems.md`）——顶层三个系统：制作脑（影视创作与控制）、世界系统（AnimeWorld）、世界脑（AinerZero）；制作脑代码归 AinerHub。总目标见 `~/AinerWorkFlow/AnimeWorldZero/docs/NORTH_STAR.md`。
 - 本次只读代码和文档，新增了本文件这一个文件，没有改任何已有文件，没有重启服务，没有运行测试或生成。下文的“已有”指源码和文档里有，**不等于已独立验收**。
 
